@@ -41,6 +41,16 @@ namespace winrt::Microsoft::Terminal::Settings::Model
 
             return parentDirectoryForSettingsFile;
         }();
+
+        static std::filesystem::path baseSettingsPathEnv = []() {
+            return std::filesystem::path{ wil::TryGetEnvironmentVariableW<std::wstring>(L"WT_BASE_SETTINGS_PATH") };
+        }();
+
+        if (!baseSettingsPathEnv.empty())
+        {
+            return baseSettingsPathEnv;
+        }
+
         return baseSettingsPath;
     }
 
