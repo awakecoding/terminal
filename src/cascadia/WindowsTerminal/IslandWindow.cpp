@@ -46,6 +46,19 @@ HWND IslandWindow::GetInteropHandle() const
     return _interopWindowHandle;
 }
 
+HWND IslandWindow::GetParentHandle() const
+{
+    char buffer[32];
+    HWND hWndParent = nullptr;
+
+    if (::GetEnvironmentVariableA("WT_PARENT_WINDOW_HANDLE", buffer, sizeof(buffer)) > 0)
+    {
+        hWndParent = (HWND) _strtoui64(buffer, NULL, 0);
+    }
+
+    return hWndParent;
+}
+
 // Method Description:
 // - Create the actual window that we'll use for the application.
 // Arguments:
@@ -82,7 +95,7 @@ void IslandWindow::MakeWindow() noexcept
                                 CW_USEDEFAULT,
                                 CW_USEDEFAULT,
                                 CW_USEDEFAULT,
-                                nullptr,
+                                GetParentHandle(),
                                 nullptr,
                                 wc.hInstance,
                                 this));
