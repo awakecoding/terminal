@@ -77,4 +77,11 @@
       <ForcedIncludeFiles>$(SolutionDir)\bin\$(Configuration)\inc\TilFeatureStaging.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
   </ItemDefinitionGroup>
+
+  <PropertyGroup><BuildDependsOn>AppendVersionRc;$(BuildDependsOn)</BuildDependsOn></PropertyGroup>
+  <Target Name="AppendVersionRc" Condition="Exists('$(ProjectDir)\version.rc')">
+    <ItemGroup>
+      <ResourceCompile Condition="'@(ResourceCompile)'==''" Include="version.rc" />
+    </ItemGroup>
+  </Target>
 </Project>
