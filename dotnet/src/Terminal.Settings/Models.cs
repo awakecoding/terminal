@@ -344,6 +344,55 @@ public sealed class ProfileSettings
     [JsonIgnore]
     internal JsonObject? SourceDocument { get; set; }
 
+    public ProfileSettings WithOverrides(NewTerminalArgs args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        var result = (ProfileSettings)MemberwiseClone();
+        if (!string.IsNullOrWhiteSpace(args.Commandline))
+        {
+            result.Commandline = args.AppendCommandLine
+                ? $"{Commandline} {args.Commandline}"
+                : args.Commandline;
+        }
+
+        if (!string.IsNullOrWhiteSpace(args.StartingDirectory))
+        {
+            result.StartingDirectory = args.StartingDirectory;
+        }
+
+        if (!string.IsNullOrWhiteSpace(args.TabTitle))
+        {
+            result.TabTitle = args.TabTitle;
+        }
+
+        if (args.TabColor is not null)
+        {
+            result.TabColor = args.TabColor;
+        }
+
+        if (!string.IsNullOrWhiteSpace(args.ColorScheme))
+        {
+            result.ColorScheme = args.ColorScheme;
+        }
+
+        if (args.SuppressApplicationTitle is { } suppressApplicationTitle)
+        {
+            result.SuppressApplicationTitle = suppressApplicationTitle;
+        }
+
+        if (args.Elevate is { } elevate)
+        {
+            result.Elevate = elevate;
+        }
+
+        if (args.ReloadEnvironmentVariables is { } reloadEnvironmentVariables)
+        {
+            result.ReloadEnvironmentVariables = reloadEnvironmentVariables;
+        }
+
+        return result;
+    }
+
     public static ProfileSettings CreatePowerShell() => new()
     {
         Guid = "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}",

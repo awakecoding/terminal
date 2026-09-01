@@ -137,6 +137,31 @@ public sealed class ActionMapTests
     }
 
     [Fact]
+    public void NewTerminalArgumentsOverrideAClonedProfile()
+    {
+        var profile = ProfileSettings.CreateCmd();
+        var result = profile.WithOverrides(new NewTerminalArgs(
+            Commandline: "/k echo ready",
+            StartingDirectory: @"C:\work",
+            TabTitle: "Build",
+            TabColor: "#112233",
+            AppendCommandLine: true,
+            SuppressApplicationTitle: true,
+            ColorScheme: "One Half Dark",
+            ReloadEnvironmentVariables: false));
+
+        Assert.NotSame(profile, result);
+        Assert.Equal($"{profile.Commandline} /k echo ready", result.Commandline);
+        Assert.Equal(@"C:\work", result.StartingDirectory);
+        Assert.Equal("Build", result.TabTitle);
+        Assert.Equal("#112233", result.TabColor);
+        Assert.Equal("One Half Dark", result.ColorScheme);
+        Assert.True(result.SuppressApplicationTitle);
+        Assert.False(result.ReloadEnvironmentVariables);
+        Assert.NotEqual(result.Commandline, profile.Commandline);
+    }
+
+    [Fact]
     public void EmbeddedActionsAndUserDefaultBindingsResolve()
     {
         var settings = SettingsService.CreateDefault();

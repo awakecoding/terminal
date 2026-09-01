@@ -98,7 +98,9 @@ public partial class MainWindow : Window
         var pane = new TerminalPane(profile, control);
         control.TitleChanged += (_, title) =>
         {
-            pane.Title = string.IsNullOrWhiteSpace(title) ? profile.Name : title;
+            pane.Title = profile.SuppressApplicationTitle || string.IsNullOrWhiteSpace(title)
+                ? (string.IsNullOrWhiteSpace(profile.TabTitle) ? profile.Name : profile.TabTitle)
+                : title;
             var tab = FindTab(pane);
             if (tab is null)
             {
@@ -641,22 +643,23 @@ public partial class MainWindow : Window
             return _settings.GetDefaultProfile();
         }
 
-        if (terminal.ProfileIndex is { } index && index >= 0 && index < _settings.Profiles.Count)
-        {
-            return _settings.Profiles[index];
-        }
-
         if (!string.IsNullOrWhiteSpace(terminal.Profile))
         {
-            return _settings.Profiles.FirstOrDefault(profile =>
+            var profile = _settings.Profiles.FirstOrDefault(profile =>
                        profile.Name.Equals(terminal.Profile, StringComparison.OrdinalIgnoreCase) ||
                        profile.Guid?.ToString().Equals(
                            terminal.Profile.Trim('{', '}'),
                            StringComparison.OrdinalIgnoreCase) == true)
                    ?? _settings.GetDefaultProfile();
+            return profile.WithOverrides(terminal);
         }
 
-        return _settings.GetDefaultProfile();
+        var selected = terminal.ProfileIndex is { } selectedIndex &&
+                       selectedIndex >= 0 &&
+                       selectedIndex < _settings.Profiles.Count
+            ? _settings.Profiles[selectedIndex]
+            : _settings.GetDefaultProfile();
+        return selected.WithOverrides(terminal);
     }
 
     private ProfileSettings ResolveSplitProfile(SplitPaneArgs? args) =>
@@ -1028,7 +1031,7 @@ internal sealed class TerminalPane(ProfileSettings profile, TermControl control)
 {
     public ProfileSettings Profile { get; } = profile;
     public TermControl Control { get; } = control;
-    public string Title { get; set; } = profile.Name;
+    public string Title { get; set; } = string.IsNullOrWhiteSpace(profile.TabTitle) ? profile.Name : profile.TabTitle;
 }
 
 internal sealed class TerminalTab(TerminalPane initialPane)
