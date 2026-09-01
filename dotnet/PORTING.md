@@ -48,7 +48,7 @@ Leave these in the C++ tree. Do not port them as part of this app:
 Deferred until after P1 unless a user scenario requires them:
 
 - Azure Cloud Shell
-- Sixel / DRCS / VT macros
+- DRCS / VT macros / VT52
 - Tab tear-off across processes
 - `Open Terminal here` Explorer COM server (AOT-hostile)
 - MSIX identity, jumplists, default-terminal handoff
@@ -186,8 +186,8 @@ subset. Remaining work is grouped so tests can gate each bucket.
 | E. Unicode | UTF-8, wcwidth, emoji ZWJ (best-effort), reflow on resize | P0 reflow/wide/combining complete; grapheme shaping remains |
 | F. Shell integration | OSC 7, OSC 133 marks, OSC 8 hyperlinks | OSC 7/8 complete; OSC 133 remains P1 |
 | G. Input | Application keypad, win32-input-mode, Kitty protocol | P1 |
-| H. Images | Sixel, OSC 1337, ConEmu | P2 |
-| I. Rare VT | Rectangular ops, DECDLD, macros, DECRQSS, VT52 | P2 |
+| H. Images | Sixel, OSC 1337, ConEmu | Core Sixel and OSC 1337 metadata complete; renderer and ConEmu remain |
+| I. Rare VT | Rectangular ops, DECDLD, macros, DECRQSS, VT52 | DECRQSS complete; remaining features deferred |
 
 The .NET buffer now uses bounded circular scrollback, keeps independent
 main/alternate state (cursor, margins, attributes, tab stops), reflows logical
@@ -201,12 +201,12 @@ Buffer work beyond the current parity slice:
 - Double-width / double-height rows
 - Full grapheme-cluster and emoji ZWJ shaping
 - Search over the buffer (`src/buffer/out/search.cpp`)
-- Image slices (sixel) as a later overlay
+- Stable scrollback/reflow ownership for the Core Sixel/OSC 1337 overlay metadata
 
-Parser/core gaps intentionally left for later buckets include DCS payload
-dispatch (including sixel and DECRQSS), OSC 52/133/1337, selective and rectangular
-erase/attribute operations, downloadable character sets, VT52 mode, and the
-extended keyboard protocols.
+Parser/core gaps intentionally left for later buckets include selective and
+rectangular erase/attribute operations, downloadable character sets, VT macros,
+VT52 mode, ConEmu images, and the extended keyboard protocols. Bounded DCS
+payload dispatch, Sixel, DECRQSS/XTGETTCAP, and OSC 52/133/1337 are complete.
 
 Port tests from `src/terminal/parser/ut_parser` and
 `src/cascadia/UnitTests_TerminalCore` as xUnit facts. That is the correctness
@@ -378,7 +378,7 @@ without hand edits; neovim and lazygit look correct.
 
 ### P2 — Completeness
 
-1. Sixel and image slices
+1. Sixel Core decoding and overlay metadata complete; renderer image slices remain
 2. Azure Cloud Shell
 3. Extension fragment discovery/merge complete; extension UI remains
 4. Quake, tray, global summon

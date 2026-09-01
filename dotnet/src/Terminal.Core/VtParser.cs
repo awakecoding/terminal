@@ -6,6 +6,8 @@ public sealed class VtParser
 {
     private const int MaxParameters = 32;
     private const int MaxStringBytes = 1024 * 1024;
+    private const int MaxDcsPayloadBytes = TerminalImageLimits.MaximumDcsPayloadBytes;
+    private const int MaxDcsIntermediates = 2;
 
     private enum State
     {
@@ -16,6 +18,12 @@ public sealed class VtParser
         CsiParam,
         CsiIntermediate,
         CsiIgnore,
+        DcsEntry,
+        DcsParam,
+        DcsIntermediate,
+        DcsPassthrough,
+        DcsEscape,
+        DcsIgnore,
         OscString,
         OscEscape,
         StringIgnore,
@@ -25,11 +33,16 @@ public sealed class VtParser
     private readonly IVtDispatch _dispatch;
     private readonly int[] _parameters = new int[MaxParameters];
     private readonly List<byte> _osc = [];
+    private readonly List<byte> _dcs = [];
+    private readonly byte[] _dcsIntermediates = new byte[MaxDcsIntermediates];
     private State _state;
     private int _parameterCount;
     private int _currentParameter = -1;
     private byte _intermediate;
     private byte _privateMarker;
+    private byte _dcsFinal;
+    private int _dcsIntermediateCount;
+    private bool _dcsEscapeCanDispatch;
     private int _utf8Needed;
     private int _utf8Accumulator;
     private int _utf8Minimum;
@@ -52,11 +65,19 @@ public sealed class VtParser
         _state = State.Ground;
         ClearSequence();
         _osc.Clear();
+        ClearDcs();
         ResetUtf8();
     }
 
     private void ProcessByte(byte value)
     {
+        if (_state is State.DcsEntry or State.DcsParam or State.DcsIntermediate or
+            State.DcsPassthrough or State.DcsEscape or State.DcsIgnore)
+        {
+            ProcessDcs(value);
+            return;
+        }
+
         if (_state == State.OscString)
         {
             ProcessOsc(value);
@@ -208,7 +229,13 @@ public sealed class VtParser
             return;
         }
 
-        if (value is 0x90 or 0x98 or 0x9E or 0x9F)
+        if (value == 0x90)
+        {
+            EnterDcs();
+            return;
+        }
+
+        if (value is 0x98 or 0x9E or 0x9F)
         {
             _state = State.StringIgnore;
             return;
@@ -243,6 +270,8 @@ public sealed class VtParser
                 EnterOsc();
                 break;
             case (byte)'P':
+                EnterDcs();
+                break;
             case (byte)'X':
             case (byte)'^':
             case (byte)'_':
@@ -350,7 +379,13 @@ public sealed class VtParser
 
     private void ProcessOsc(byte value)
     {
-        if (value is 0x07 or 0x9C)
+        if (value is 0x18 or 0x1A)
+        {
+            _osc.Clear();
+            _state = State.Ground;
+            _dispatch.ExecuteC0(value);
+        }
+        else if (value is 0x07 or 0x9C)
         {
             FinishOsc();
         }
@@ -412,6 +447,244 @@ public sealed class VtParser
     {
         _osc.Clear();
         _state = State.OscString;
+    }
+
+    private void EnterDcs()
+    {
+        ClearSequence();
+        ClearDcs();
+        _state = State.DcsEntry;
+    }
+
+    private void ProcessDcs(byte value)
+    {
+        if (value is 0x18 or 0x1A)
+        {
+            CancelDcs();
+            _dispatch.ExecuteC0(value);
+            return;
+        }
+
+        if (value == 0x9C)
+        {
+            TerminateDcs(_state == State.DcsPassthrough);
+            return;
+        }
+
+        if (_state == State.DcsEscape)
+        {
+            if (value == (byte)'\\')
+            {
+                TerminateDcs(_dcsEscapeCanDispatch);
+            }
+            else
+            {
+                CancelDcs();
+                _state = State.Escape;
+                ProcessByte(value);
+            }
+
+            return;
+        }
+
+        if (value == 0x1B)
+        {
+            _dcsEscapeCanDispatch = _state == State.DcsPassthrough;
+            _state = State.DcsEscape;
+            return;
+        }
+
+        if (value < 0x20)
+        {
+            _dispatch.ExecuteC0(value);
+            return;
+        }
+
+        if (value == 0x7F)
+        {
+            return;
+        }
+
+        switch (_state)
+        {
+            case State.DcsEntry:
+                ProcessDcsEntry(value);
+                break;
+            case State.DcsParam:
+                ProcessDcsParam(value);
+                break;
+            case State.DcsIntermediate:
+                ProcessDcsIntermediate(value);
+                break;
+            case State.DcsPassthrough:
+                AppendDcs(value);
+                break;
+            case State.DcsIgnore:
+                break;
+        }
+    }
+
+    private void ProcessDcsEntry(byte value)
+    {
+        if (value is >= 0x3C and <= 0x3F)
+        {
+            _privateMarker = value;
+            _state = State.DcsParam;
+        }
+        else if (value is >= (byte)'0' and <= (byte)'9' or (byte)';')
+        {
+            _state = State.DcsParam;
+            ProcessDcsParam(value);
+        }
+        else if (value == (byte)':')
+        {
+            _state = State.DcsIgnore;
+        }
+        else if (value is >= 0x20 and <= 0x2F)
+        {
+            AppendDcsIntermediate(value);
+        }
+        else if (IsFinal(value))
+        {
+            StartDcsPassthrough(value);
+        }
+        else
+        {
+            _state = State.DcsIgnore;
+        }
+    }
+
+    private void ProcessDcsParam(byte value)
+    {
+        if (value is >= (byte)'0' and <= (byte)'9')
+        {
+            _currentParameter = _currentParameter < 0 ? 0 : _currentParameter;
+            _currentParameter = Math.Min((_currentParameter * 10) + (value - '0'), 65535);
+        }
+        else if (value == (byte)';')
+        {
+            PushDcsParameter();
+        }
+        else if (value == (byte)':' || value is >= 0x3C and <= 0x3F)
+        {
+            _state = State.DcsIgnore;
+        }
+        else if (value is >= 0x20 and <= 0x2F)
+        {
+            PushDcsParameterIfNeeded();
+            if (_state != State.DcsIgnore)
+            {
+                AppendDcsIntermediate(value);
+            }
+        }
+        else if (IsFinal(value))
+        {
+            PushDcsParameterIfNeeded();
+            if (_state != State.DcsIgnore)
+            {
+                StartDcsPassthrough(value);
+            }
+        }
+        else
+        {
+            _state = State.DcsIgnore;
+        }
+    }
+
+    private void ProcessDcsIntermediate(byte value)
+    {
+        if (value is >= 0x20 and <= 0x2F)
+        {
+            AppendDcsIntermediate(value);
+        }
+        else if (IsFinal(value))
+        {
+            StartDcsPassthrough(value);
+        }
+        else
+        {
+            _state = State.DcsIgnore;
+        }
+    }
+
+    private void AppendDcsIntermediate(byte value)
+    {
+        if (_dcsIntermediateCount == _dcsIntermediates.Length)
+        {
+            _state = State.DcsIgnore;
+            return;
+        }
+
+        _dcsIntermediates[_dcsIntermediateCount++] = value;
+        _state = State.DcsIntermediate;
+    }
+
+    private void StartDcsPassthrough(byte final)
+    {
+        _dcsFinal = final;
+        _state = State.DcsPassthrough;
+    }
+
+    private void AppendDcs(byte value)
+    {
+        if (_dcs.Count == MaxDcsPayloadBytes)
+        {
+            _dcs.Clear();
+            _state = State.DcsIgnore;
+            return;
+        }
+
+        _dcs.Add(value);
+    }
+
+    private void TerminateDcs(bool dispatch)
+    {
+        if (dispatch)
+        {
+            _dispatch.DcsDispatch(
+                (char)_dcsFinal,
+                _parameters.AsSpan(0, _parameterCount),
+                _dcsIntermediates.AsSpan(0, _dcsIntermediateCount),
+                _privateMarker,
+                System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_dcs));
+        }
+
+        CancelDcs();
+    }
+
+    private void CancelDcs()
+    {
+        ClearDcs();
+        ClearSequence();
+        _state = State.Ground;
+    }
+
+    private void ClearDcs()
+    {
+        _dcs.Clear();
+        _dcsFinal = 0;
+        _dcsIntermediateCount = 0;
+        _dcsEscapeCanDispatch = false;
+    }
+
+    private void PushDcsParameter()
+    {
+        if (_parameterCount >= _parameters.Length)
+        {
+            _state = State.DcsIgnore;
+            return;
+        }
+
+        _parameters[_parameterCount++] = _currentParameter;
+        _currentParameter = -1;
+    }
+
+    private void PushDcsParameterIfNeeded()
+    {
+        if (_currentParameter >= 0 || _parameterCount > 0)
+        {
+            PushDcsParameter();
+        }
     }
 
     private void PushParameter()

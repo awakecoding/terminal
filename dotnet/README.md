@@ -68,12 +68,16 @@ VT sequences needed for modern shells, editors, and TUIs: bounded circular
 scrollback with resize reflow, wide/combining cells, main/alternate buffers,
 editing and cursor commands, DEC/ANSI modes and reports, SGR including truecolor,
 OSC color resources/titles/working directories/hyperlinks, and incremental UTF-8.
+Advanced Core protocols add bounded DCS parsing, Sixel indexed/RGBA images,
+DECRQSS/XTGETTCAP reports, and OSC 1337 inline-image metadata.
 `TextBuffer.CreateSnapshot` and `TerminalEngine.CreateSnapshot` provide detached,
 read-only cell snapshots for render and test consumers; the existing live
 `TextBuffer.GetRow` API remains available to `Terminal.Control`.
 
 The full phased plan for a complete port is in [PORTING.md](PORTING.md).
 Architecture decisions are recorded in [doc/decisions](doc/decisions).
+The image-overlay renderer contract and protocol limits are documented in
+[doc/advanced-vt-protocols.md](doc/advanced-vt-protocols.md).
 
 ## Compatibility inventory
 
