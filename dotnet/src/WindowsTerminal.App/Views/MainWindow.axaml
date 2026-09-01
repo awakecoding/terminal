@@ -19,9 +19,11 @@
             Background="#2B2B2B"
             PointerPressed="TitleBar_OnPointerPressed">
       <Grid ColumnDefinitions="Auto,*,Auto" Margin="8,0,140,0">
-        <Button Grid.Column="0"
+        <Button x:Name="MenuButton"
+                Grid.Column="0"
                 Classes="icon"
                 Click="Menu_OnClick"
+                AutomationProperties.Name="Menu"
                 ToolTip.Tip="Menu">
           <TextBlock Text="☰" FontSize="16" />
         </Button>
