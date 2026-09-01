@@ -62,12 +62,20 @@ public readonly record struct TerminalCellRange(
     int EndColumn,
     uint Color);
 
+public sealed record TerminalCompositionOverlay(
+    int Row,
+    int Column,
+    string Text,
+    int? CursorOffset = null);
+
 public sealed record TerminalRenderOverlays(
     IReadOnlyList<TerminalCellRange> Selection,
     IReadOnlyList<TerminalCellRange> Search,
     IReadOnlyList<TerminalCellRange> Hyperlink)
 {
     public static TerminalRenderOverlays Empty { get; } = new([], [], []);
+
+    public TerminalCompositionOverlay? Composition { get; init; }
 }
 
 public sealed record TerminalRenderOptions

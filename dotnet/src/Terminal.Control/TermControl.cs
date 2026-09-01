@@ -1,7 +1,12 @@
+using System.Diagnostics;
 using System.Runtime.Versioning;
+using System.Text;
 using Avalonia;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.TextInput;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Threading;
@@ -41,18 +46,35 @@ public sealed class TermControl : Avalonia.Controls.Control
     private double _cellHeight = 16;
     private bool _cursorOn = true;
     private bool _selecting;
-    private int _selX1, _selY1, _selX2, _selY2;
-    private bool _hasSelection;
+    private TerminalSelection? _selection;
+    private TerminalSelectionPoint _markCaret;
+    private bool _isMarkMode;
+    private TerminalCompositionOverlay? _composition;
+    private readonly TerminalTextInputMethodClient _textInputMethodClient;
+    private Point? _touchPoint;
+    private string _accessibleName = "Terminal";
+    private int _pressedMouseButton = -1;
+    private long _selectionCoordinateVersion;
+    private bool _selectionAlternateBuffer;
     private bool _dirty = true;
     private bool _rendererDisposed;
 
     public TermControl()
     {
         Engine = new TerminalEngine();
+        _textInputMethodClient = new TerminalTextInputMethodClient(this);
         _search = new TerminalSearchSession(Engine);
-        _search.Changed += (_, _) => UpdateSearchHighlights();
+        _search.Changed += (_, _) =>
+        {
+            UpdateSearchHighlights();
+            ScrollMarksChanged?.Invoke(this, EventArgs.Empty);
+            AccessibilityChanged?.Invoke(this, EventArgs.Empty);
+        };
         Focusable = true;
         ClipToBounds = true;
+        TextInputMethodClientRequested += OnTextInputMethodClientRequested;
+        GotFocus += (_, _) => SendFocusChanged(focused: true);
+        LostFocus += (_, _) => SendFocusChanged(focused: false);
 
         _blinkTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(530) };
         _blinkTimer.Tick += (_, _) =>
@@ -67,12 +89,22 @@ public sealed class TermControl : Avalonia.Controls.Control
         Engine.Invalidated += (_, _) =>
         {
             _dirty = true;
+            if (_selection is not null &&
+                (_selectionCoordinateVersion != Engine.Buffer.CoordinateVersion ||
+                 _selectionAlternateBuffer != Engine.AlternateBufferActive))
+            {
+                SetSelection(null);
+            }
+
+            _textInputMethodClient.NotifyCursorChanged();
+            AccessibilityTextChanged?.Invoke(this, EventArgs.Empty);
+            ScrollMarksChanged?.Invoke(this, EventArgs.Empty);
             Dispatcher.UIThread.Post(InvalidateVisual, DispatcherPriority.Render);
         };
         Engine.TitleChanged += (_, title) => TitleChanged?.Invoke(this, title);
         Engine.ResponseReady += (_, data) => _connection?.Write(data);
         Engine.ClipboardWriteRequested += (_, text) =>
-            Dispatcher.UIThread.Post(() => _ = SetClipboardFromTerminalAsync(text));
+            Dispatcher.UIThread.Post(() => SetClipboardFromTerminalObservedAsync(text));
         Engine.NotificationRequested += (_, notification) =>
             Dispatcher.UIThread.Post(() => NotificationRequested?.Invoke(this, notification));
     }
@@ -81,7 +113,25 @@ public sealed class TermControl : Avalonia.Controls.Control
     public TerminalSearchSession Search => _search;
     public ProfileSettings? Profile { get; private set; }
     public bool IsRunning => _connection?.IsRunning == true;
-    public bool HasSelection => _hasSelection;
+    public bool HasSelection => _selection is not null;
+    public TerminalSelection? Selection => _selection;
+    public bool IsMarkMode => _isMarkMode;
+    public string AccessibleName
+    {
+        get => _accessibleName;
+        set
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(value);
+            if (string.Equals(_accessibleName, value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _accessibleName = value;
+            AccessibilityChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+    public TerminalInteractionOptions InteractionOptions { get; set; } = new();
     public double FontSize => _fontSize;
     public TerminalConnectionState ConnectionState =>
         _connection?.State ?? TerminalConnectionState.NotConnected;
@@ -97,6 +147,14 @@ public sealed class TermControl : Avalonia.Controls.Control
     public event EventHandler<TerminalExitInfo>? SessionExited;
     public event EventHandler? CloseRequested;
     public event EventHandler<TerminalNotification>? NotificationRequested;
+    public event EventHandler? SelectionChanged;
+    public event EventHandler? AccessibilityChanged;
+    internal event EventHandler? AccessibilityTextChanged;
+    public event EventHandler? ScrollMarksChanged;
+    public event EventHandler<TerminalPasteWarningEventArgs>? PasteWarning;
+    public event EventHandler<TerminalHyperlinkEventArgs>? HyperlinkOpenRequested;
+    public event EventHandler<TerminalHyperlinkEventArgs>? HyperlinkContextRequested;
+    public event EventHandler<TerminalInteractionErrorEventArgs>? InteractionError;
 
     public async Task StartAsync(ProfileSettings profile, int columns, int rows)
     {
@@ -171,46 +229,118 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     public async Task CopyAsync(bool singleLine = false)
     {
-        if (!_hasSelection)
-        {
-            return;
-        }
-
-        var text = Engine.CopySelection(_selX1, _selY1, _selX2, _selY2);
-        if (string.IsNullOrEmpty(text))
-        {
-            return;
-        }
-
-        if (singleLine)
-        {
-            text = text.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ');
-        }
-
-        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-        if (clipboard is not null)
-        {
-            await clipboard.SetTextAsync(text).ConfigureAwait(true);
-        }
+        var options = InteractionOptions.Copy with { SingleLine = singleLine };
+        await CopyAsync(options).ConfigureAwait(true);
     }
 
-    public async Task PasteAsync()
+    public async Task<TerminalClipboardPayload?> CopyAsync(TerminalCopyOptions options)
     {
-        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-        var text = clipboard is null ? null : await clipboard.GetTextAsync().ConfigureAwait(true);
-        if (string.IsNullOrEmpty(text) || _connection is null)
+        ArgumentNullException.ThrowIfNull(options);
+        var payload = BuildCopyPayload(options);
+        if (payload is null)
         {
-            return;
+            return null;
         }
 
-        text = text.Replace("\r\n", "\r").Replace('\n', '\r');
-        _connection.Write(Engine.WrapPaste(text));
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+        {
+            return payload;
+        }
+
+        var data = CreateClipboardDataObject(payload);
+        await clipboard.SetDataObjectAsync(data).ConfigureAwait(true);
+        await clipboard.FlushAsync().ConfigureAwait(true);
+        return payload;
+    }
+
+    public TerminalClipboardPayload? BuildCopyPayload(TerminalCopyOptions? options = null)
+    {
+        if (_selection is null)
+        {
+            return null;
+        }
+
+        options ??= InteractionOptions.Copy;
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        var selected = TerminalInteractionModel.GetSelectedText(
+            snapshot,
+            _selection,
+            options.TrimBlockSelection);
+        return string.IsNullOrEmpty(selected)
+            ? null
+            : TerminalInteractionModel.BuildClipboardPayload(selected, options);
+    }
+
+    internal static DataObject CreateClipboardDataObject(TerminalClipboardPayload payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        var data = new DataObject();
+        data.Set(DataFormats.Text, payload.Text);
+        if (payload.Html is not null)
+        {
+            data.Set("HTML Format", Encoding.UTF8.GetBytes(payload.Html));
+        }
+
+        if (payload.Rtf is not null)
+        {
+            data.Set("Rich Text Format", Encoding.ASCII.GetBytes(payload.Rtf));
+        }
+
+        return data;
+    }
+
+    public async Task<TerminalPasteResult> PasteAsync()
+    {
+        return await PasteAsync(InteractionOptions.Paste).ConfigureAwait(true);
+    }
+
+    public async Task<TerminalPasteResult> PasteAsync(TerminalPasteOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        var text = clipboard is null ? null : await clipboard.GetTextAsync().ConfigureAwait(true);
+        return PasteText(text, options);
+    }
+
+    public TerminalPasteResult PasteText(string? text, TerminalPasteOptions? options = null)
+    {
+        var request = TerminalInteractionModel.PreparePaste(
+            text,
+            options ?? InteractionOptions.Paste,
+            Engine.BracketedPaste);
+        if (request.Text.Length == 0 && !request.BracketedPaste)
+        {
+            return TerminalPasteResult.Empty;
+        }
+
+        if (request.RequiresConfirmation)
+        {
+            var args = new TerminalPasteWarningEventArgs(request);
+            if (PasteWarning is not null)
+            {
+                PasteWarning.Invoke(this, args);
+                if (!args.Allow)
+                {
+                    return TerminalPasteResult.Cancelled;
+                }
+            }
+        }
+
+        if (_connection is null)
+        {
+            return TerminalPasteResult.NoConnection;
+        }
+
+        _connection.Write(Engine.WrapPaste(request.Text));
+        Engine.Buffer.ScrollOffset = 0;
+        return TerminalPasteResult.Written;
     }
 
     public void ClearBuffer()
     {
         Engine.Feed("\u001b[3J\u001b[2J\u001b[H");
-        _hasSelection = false;
+        SetSelection(null);
         InvalidateVisual();
     }
 
@@ -223,18 +353,137 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     public void SelectAll()
     {
-        _selX1 = 0;
-        _selY1 = 0;
-        _selX2 = Engine.Columns - 1;
-        _selY2 = Engine.Rows - 1;
-        _hasSelection = true;
-        InvalidateVisual();
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        SetSelection(new TerminalSelection(
+            new TerminalSelectionPoint(0, 0),
+            new TerminalSelectionPoint(snapshot.Columns - 1, snapshot.Lines.Count - 1)));
     }
 
-    public void ClearSelection()
+    public void ClearSelection() => SetSelection(null);
+
+    public void BeginSelection(
+        int viewportColumn,
+        int viewportRow,
+        TerminalSelectionMode mode = TerminalSelectionMode.Linear)
     {
-        _hasSelection = false;
-        InvalidateVisual();
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        var point = ViewportToBuffer(snapshot, viewportColumn, viewportRow);
+        SetSelection(TerminalInteractionModel.SelectAt(
+            snapshot,
+            point,
+            mode,
+            InteractionOptions.WordDelimiters));
+        _selecting = true;
+    }
+
+    public void UpdateSelection(int viewportColumn, int viewportRow)
+    {
+        if (_selection is null)
+        {
+            return;
+        }
+
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        var point = ViewportToBuffer(snapshot, viewportColumn, viewportRow);
+        SetSelection(_selection.ActiveEndpoint == TerminalSelectionEndpoint.Active
+            ? _selection with { Active = point }
+            : _selection with { Anchor = point });
+    }
+
+    public void EndSelection()
+    {
+        _selecting = false;
+        if (InteractionOptions.CopyOnSelect && _selection is not null)
+        {
+            ObserveInteractionAsync("copy on select", CopyAsync(InteractionOptions.Copy));
+        }
+    }
+
+    public void SelectWordAt(int viewportColumn, int viewportRow) =>
+        BeginAndEndSelection(viewportColumn, viewportRow, TerminalSelectionMode.Word);
+
+    public void SelectLineAt(int viewportColumn, int viewportRow) =>
+        BeginAndEndSelection(viewportColumn, viewportRow, TerminalSelectionMode.Line);
+
+    public void SelectCommandAt(int viewportColumn, int viewportRow) =>
+        BeginAndEndSelection(viewportColumn, viewportRow, TerminalSelectionMode.Command);
+
+    public void SelectOutputAt(int viewportColumn, int viewportRow) =>
+        BeginAndEndSelection(viewportColumn, viewportRow, TerminalSelectionMode.Output);
+
+    public void ExpandSelectionToWord()
+    {
+        if (_selection is null)
+        {
+            return;
+        }
+
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        SetSelection(TerminalInteractionModel.ExpandToWord(
+            snapshot,
+            _selection,
+            InteractionOptions.WordDelimiters));
+    }
+
+    public void EnterMarkMode()
+    {
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        _markCaret = new TerminalSelectionPoint(
+            snapshot.CursorX,
+            snapshot.HistoryCount + snapshot.CursorY);
+        _isMarkMode = true;
+        SetSelection(new TerminalSelection(_markCaret, _markCaret));
+    }
+
+    public void ExitMarkMode(bool clearSelection = false)
+    {
+        _isMarkMode = false;
+        if (clearSelection)
+        {
+            SetSelection(null);
+        }
+        else
+        {
+            AccessibilityChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public void SwitchSelectionEndpoint()
+    {
+        if (_selection is null)
+        {
+            return;
+        }
+
+        var endpoint = _selection.ActiveEndpoint == TerminalSelectionEndpoint.Active
+            ? TerminalSelectionEndpoint.Anchor
+            : TerminalSelectionEndpoint.Active;
+        _markCaret = endpoint == TerminalSelectionEndpoint.Active
+            ? _selection.Active
+            : _selection.Anchor;
+        SetSelection(_selection with { ActiveEndpoint = endpoint });
+    }
+
+    public void MoveMarkCaret(int columns, int rows, bool extend = true)
+    {
+        if (!_isMarkMode)
+        {
+            EnterMarkMode();
+        }
+
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        _markCaret = TerminalInteractionModel.Clamp(
+            snapshot,
+            new TerminalSelectionPoint(_markCaret.Column + columns, _markCaret.Line + rows));
+        if (!extend || _selection is null)
+        {
+            SetSelection(new TerminalSelection(_markCaret, _markCaret));
+            return;
+        }
+
+        SetSelection(_selection.ActiveEndpoint == TerminalSelectionEndpoint.Active
+            ? _selection with { Active = _markCaret }
+            : _selection with { Anchor = _markCaret });
     }
 
     public void AdjustFontSize(double delta)
@@ -318,14 +567,12 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
 
         var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
-        var viewportTop = snapshot.HistoryCount - Engine.Buffer.ScrollOffset;
-        _selX1 = current.Start.Column;
-        _selY1 = current.Start.Line - viewportTop;
-        _selX2 = Math.Max(current.Start.Column, current.End.Column - 1);
-        _selY2 = current.End.Line - viewportTop;
-        _hasSelection = true;
+        SetSelection(new TerminalSelection(
+            new TerminalSelectionPoint(current.Start.Column, current.Start.Line),
+            new TerminalSelectionPoint(
+                Math.Max(current.Start.Column, current.End.Column - 1),
+                current.End.Line)));
         UpdateSearchHighlights();
-        InvalidateVisual();
         return true;
     }
 
@@ -337,7 +584,9 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
 
         Engine.Reset();
-        _hasSelection = false;
+        SetSelection(null);
+        _isMarkMode = false;
+        _composition = null;
         _cursorOn = true;
         InvalidateVisual();
     }
@@ -395,20 +644,14 @@ public sealed class TermControl : Avalonia.Controls.Control
         _renderer.Resize(new RenderViewport(frame.Columns, frame.Rows, scale));
         MeasureGlyph();
 
-        var selection = _hasSelection
-            ? TerminalOverlayPlanner.CreateSelection(
-                _selX1,
-                _selY1,
-                _selX2,
-                _selY2,
-                frame.Columns,
-                frame.Rows,
-                frame.SelectionColor)
-            : [];
+        var selection = CreateSelectionOverlays(frame);
         var overlays = new TerminalRenderOverlays(
             selection,
             _searchHighlights,
-            _hoveredHyperlink);
+            _hoveredHyperlink)
+        {
+            Composition = Engine.Buffer.ScrollOffset == 0 ? _composition : null,
+        };
         _lastDirtyRows = TerminalFrameDiffer.GetDirtyRows(_lastFrame, frame);
         _lastFrame = frame;
         context.Custom(new TerminalSkiaDrawOperation(
@@ -429,8 +672,17 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     internal IReadOnlyList<int> LastDirtyRows => _lastDirtyRows;
 
+    protected override AutomationPeer OnCreateAutomationPeer() => new TermControlAutomationPeer(this);
+
     protected override void OnKeyDown(KeyEventArgs e)
     {
+        if (HandleMarkModeKey(e))
+        {
+            e.Handled = true;
+            base.OnKeyDown(e);
+            return;
+        }
+
         var vt = KeyMapper.ToVt(e.Key, e.KeyModifiers, e.PhysicalKey, e.KeySymbol, Engine.ApplicationCursorKeys);
         if (vt is not null)
         {
@@ -458,15 +710,73 @@ public sealed class TermControl : Avalonia.Controls.Control
     {
         Focus();
         var point = e.GetCurrentPoint(this);
+        var (x, y) = HitTest(point.Position);
+        if (e.Pointer.Type == PointerType.Touch)
+        {
+            _touchPoint = point.Position;
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            base.OnPointerPressed(e);
+            return;
+        }
+
+        if (Engine.MouseTracking)
+        {
+            _pressedMouseButton = PointerButton(point);
+            WriteMouseInput(button: _pressedMouseButton, x, y, released: false, e.KeyModifiers);
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            base.OnPointerPressed(e);
+            return;
+        }
+
+        var hyperlink = HitTestHyperlink(x, y);
+        if (point.Properties.IsRightButtonPressed && hyperlink is not null)
+        {
+            HyperlinkContextRequested?.Invoke(this, new TerminalHyperlinkEventArgs(hyperlink));
+            e.Handled = true;
+            base.OnPointerPressed(e);
+            return;
+        }
+
+        if (point.Properties.IsLeftButtonPressed &&
+            (e.KeyModifiers & KeyModifiers.Control) != 0 &&
+            hyperlink is not null)
+        {
+            ObserveInteractionAsync("open hyperlink", OpenHyperlinkAsync(hyperlink));
+            e.Handled = true;
+            base.OnPointerPressed(e);
+            return;
+        }
+
+        if (point.Properties.IsLeftButtonPressed &&
+            (e.KeyModifiers & KeyModifiers.Alt) != 0 &&
+            Profile?.RepositionCursorWithMouse == true)
+        {
+            var sequence = TerminalInteractionModel.BuildCursorRepositionSequence(
+                Engine.CursorX,
+                Engine.CursorY,
+                x,
+                y,
+                Engine.ApplicationCursorKeys);
+            _connection?.Write(sequence);
+            e.Handled = true;
+            base.OnPointerPressed(e);
+            return;
+        }
+
         if (point.Properties.IsLeftButtonPressed)
         {
-            var (x, y) = HitTest(point.Position);
-            _selecting = true;
-            _hasSelection = true;
-            _selX1 = _selX2 = x;
-            _selY1 = _selY2 = y;
+            var mode = e.ClickCount switch
+            {
+                >= 3 => TerminalSelectionMode.Line,
+                2 => TerminalSelectionMode.Word,
+                _ when (e.KeyModifiers & KeyModifiers.Alt) != 0 => TerminalSelectionMode.Block,
+                _ => TerminalSelectionMode.Linear,
+            };
+            BeginSelection(x, y, mode);
             e.Pointer.Capture(this);
-            InvalidateVisual();
+            e.Handled = true;
         }
 
         base.OnPointerPressed(e);
@@ -475,12 +785,40 @@ public sealed class TermControl : Avalonia.Controls.Control
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         UpdateHoveredHyperlink(e.GetPosition(this));
+        if (e.Pointer.Type != PointerType.Touch &&
+            Engine.MouseTracking &&
+            (Engine.MouseTrackingMode == TerminalMouseTrackingMode.AllMotion ||
+             (Engine.MouseTrackingMode == TerminalMouseTrackingMode.ButtonEvent &&
+              _pressedMouseButton >= 0)))
+        {
+            var (mouseX, mouseY) = HitTest(e.GetPosition(this));
+            var button = (_pressedMouseButton >= 0 ? _pressedMouseButton : 3) | 32;
+            WriteMouseInput(button, mouseX, mouseY, released: false, e.KeyModifiers);
+            e.Handled = true;
+            base.OnPointerMoved(e);
+            return;
+        }
+
+        if (_touchPoint is { } previous)
+        {
+            var current = e.GetPosition(this);
+            var rows = (int)Math.Truncate((previous.Y - current.Y) / Math.Max(1, _cellHeight));
+            if (rows != 0)
+            {
+                ScrollBy(rows);
+                _touchPoint = current;
+            }
+
+            e.Handled = true;
+            base.OnPointerMoved(e);
+            return;
+        }
+
         if (_selecting)
         {
             var (x, y) = HitTest(e.GetPosition(this));
-            _selX2 = x;
-            _selY2 = y;
-            InvalidateVisual();
+            UpdateSelection(x, y);
+            e.Handled = true;
         }
 
         base.OnPointerMoved(e);
@@ -499,19 +837,45 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
-        _selecting = false;
-        e.Pointer.Capture(null);
-        if (_selX1 == _selX2 && _selY1 == _selY2)
+        if (Engine.MouseTracking && _pressedMouseButton >= 0)
         {
-            _hasSelection = false;
-            InvalidateVisual();
+            var point = e.GetCurrentPoint(this);
+            var (x, y) = HitTest(point.Position);
+            WriteMouseInput(
+                button: PointerButton(e.InitialPressMouseButton),
+                x,
+                y,
+                released: true,
+                e.KeyModifiers);
+            _pressedMouseButton = -1;
         }
 
+        _touchPoint = null;
+        EndSelection();
+        e.Pointer.Capture(null);
         base.OnPointerReleased(e);
     }
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
+        if ((e.KeyModifiers & KeyModifiers.Control) != 0 && InteractionOptions.ScrollToZoom)
+        {
+            AdjustFontSize(e.Delta.Y > 0 ? 1 : -1);
+            e.Handled = true;
+            base.OnPointerWheelChanged(e);
+            return;
+        }
+
+        if (Engine.MouseTracking)
+        {
+            var (x, y) = HitTest(e.GetPosition(this));
+            var button = e.Delta.Y > 0 ? 64 : 65;
+            WriteMouseInput(button, x, y, released: false, e.KeyModifiers);
+            e.Handled = true;
+            base.OnPointerWheelChanged(e);
+            return;
+        }
+
         var delta = (int)Math.Round(e.Delta.Y * 3);
         var max = Engine.Buffer.HistoryCount;
         Engine.Buffer.ScrollOffset = Math.Clamp(Engine.Buffer.ScrollOffset + delta, 0, max);
@@ -613,13 +977,176 @@ public sealed class TermControl : Avalonia.Controls.Control
         InvalidateVisual();
     }
 
+    public IReadOnlyList<TerminalScrollMark> GetScrollMarks()
+    {
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        return TerminalInteractionModel.GetScrollMarks(
+            snapshot,
+            _search.Matches,
+            _search.CurrentIndex);
+    }
+
+    public TerminalHyperlinkContext? HitTestHyperlink(int viewportColumn, int viewportRow)
+    {
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        return TerminalInteractionModel.HitTestHyperlink(
+            snapshot,
+            ViewportToBuffer(snapshot, viewportColumn, viewportRow),
+            InteractionOptions.SafeUriSchemes);
+    }
+
+    public async Task<bool> OpenHyperlinkAsync(TerminalHyperlinkContext hyperlink)
+    {
+        ArgumentNullException.ThrowIfNull(hyperlink);
+        var args = new TerminalHyperlinkEventArgs(hyperlink);
+        HyperlinkOpenRequested?.Invoke(this, args);
+        if (args.Handled)
+        {
+            return true;
+        }
+
+        if (!hyperlink.CanOpen)
+        {
+            throw new InvalidOperationException($"The hyperlink scheme is not allowed: {hyperlink.Uri}");
+        }
+
+        var startInfo = new ProcessStartInfo(hyperlink.Uri)
+        {
+            UseShellExecute = true,
+        };
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException($"Unable to open hyperlink: {hyperlink.Uri}");
+        await Task.CompletedTask.ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task CopyHyperlinkAsync(TerminalHyperlinkContext hyperlink)
+    {
+        ArgumentNullException.ThrowIfNull(hyperlink);
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
+            ?? throw new InvalidOperationException("No clipboard is available for this control.");
+        await clipboard.SetTextAsync(hyperlink.Uri).ConfigureAwait(true);
+        await clipboard.FlushAsync().ConfigureAwait(true);
+    }
+
+    internal ImeContext GetImeContext()
+    {
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        var lineIndex = Math.Clamp(snapshot.HistoryCount + snapshot.CursorY, 0, snapshot.Lines.Count - 1);
+        var cells = snapshot.Lines[lineIndex].Cells;
+        var output = new StringBuilder();
+        var cursorTextOffset = 0;
+        for (var column = 0; column < cells.Count; column++)
+        {
+            if (column == snapshot.CursorX)
+            {
+                cursorTextOffset = output.Length;
+            }
+
+            if (!cells[column].IsWideContinuation)
+            {
+                output.Append(cells[column].Text);
+            }
+        }
+
+        if (snapshot.CursorX >= cells.Count)
+        {
+            cursorTextOffset = output.Length;
+        }
+
+        var text = output.ToString();
+        var retainedLength = Math.Max(text.TrimEnd().Length, cursorTextOffset);
+        return new ImeContext(text[..retainedLength], Math.Min(cursorTextOffset, retainedLength));
+    }
+
+    internal Rect GetImeCursorRectangle()
+    {
+        const double padding = 8;
+        return new Rect(
+            padding + (Engine.CursorX * _cellWidth),
+            padding + (Engine.CursorY * _cellHeight),
+            _cellWidth,
+            _cellHeight);
+    }
+
+    internal void SetImeSelectionOffset(int offset)
+    {
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        var lineIndex = Math.Clamp(snapshot.HistoryCount + snapshot.CursorY, 0, snapshot.Lines.Count - 1);
+        var cells = snapshot.Lines[lineIndex].Cells;
+        var textOffset = 0;
+        var targetColumn = cells.Count - 1;
+        for (var column = 0; column < cells.Count; column++)
+        {
+            if (cells[column].IsWideContinuation)
+            {
+                continue;
+            }
+
+            if (textOffset >= offset)
+            {
+                targetColumn = column;
+                break;
+            }
+
+            textOffset += cells[column].Text.Length;
+            targetColumn = column + 1 < cells.Count && cells[column + 1].IsWideContinuation
+                ? column + 2
+                : column + 1;
+        }
+
+        targetColumn = Math.Clamp(targetColumn, 0, cells.Count - 1);
+        var delta = targetColumn - Engine.CursorX;
+        if (delta == 0)
+        {
+            return;
+        }
+
+        _connection?.Write(TerminalInteractionModel.BuildCursorRepositionSequence(
+            Engine.CursorX,
+            Engine.CursorY,
+            Engine.CursorX + delta,
+            Engine.CursorY,
+            Engine.ApplicationCursorKeys));
+    }
+
+    internal void SetImeComposition(string text, int? cursorOffset)
+    {
+        _composition = string.IsNullOrEmpty(text)
+            ? null
+            : new TerminalCompositionOverlay(
+                Engine.CursorY,
+                Engine.CursorX,
+                text,
+                cursorOffset);
+        InvalidateVisual();
+        AccessibilityChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async void SetClipboardFromTerminalObservedAsync(string text)
+    {
+        try
+        {
+            await SetClipboardFromTerminalAsync(text).ConfigureAwait(true);
+        }
+        catch (Exception exception)
+        {
+            InteractionError?.Invoke(
+                this,
+                new TerminalInteractionErrorEventArgs("OSC 52 clipboard write", exception));
+        }
+    }
+
     private async Task SetClipboardFromTerminalAsync(string text)
     {
         var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-        if (clipboard is not null)
+        if (clipboard is null)
         {
-            await clipboard.SetTextAsync(text).ConfigureAwait(true);
+            throw new InvalidOperationException("OSC 52 requested a clipboard write, but no clipboard is available.");
         }
+
+        await clipboard.SetTextAsync(text).ConfigureAwait(true);
+        await clipboard.FlushAsync().ConfigureAwait(true);
     }
 
     private void ConfigureRenderer(ProfileSettings profile)
@@ -668,6 +1195,208 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
     }
 
+    private IReadOnlyList<TerminalCellRange> CreateSelectionOverlays(TerminalRenderFrame frame)
+    {
+        if (_selection is null)
+        {
+            return [];
+        }
+
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        var range = TerminalInteractionModel.Normalize(snapshot, _selection);
+        var viewportTop = snapshot.HistoryCount - snapshot.ScrollOffset;
+        var startRow = range.Start.Line - viewportTop;
+        var endRow = range.End.Line - viewportTop;
+        if (range.Mode != TerminalSelectionMode.Block)
+        {
+            if (endRow < 0 || startRow >= frame.Rows)
+            {
+                return [];
+            }
+
+            var startColumn = startRow < 0 ? 0 : range.Start.Column;
+            var endColumn = endRow >= frame.Rows ? frame.Columns - 1 : range.End.Column;
+            return TerminalOverlayPlanner.CreateSelection(
+                startColumn,
+                Math.Max(0, startRow),
+                endColumn,
+                Math.Min(frame.Rows - 1, endRow),
+                frame.Columns,
+                frame.Rows,
+                frame.SelectionColor);
+        }
+
+        var visibleStart = Math.Max(0, startRow);
+        var visibleEnd = Math.Min(frame.Rows - 1, endRow);
+        if (visibleStart > visibleEnd)
+        {
+            return [];
+        }
+
+        return Enumerable.Range(visibleStart, visibleEnd - visibleStart + 1)
+            .Select(row => new TerminalCellRange(
+                row,
+                range.Start.Column,
+                range.End.Column,
+                frame.SelectionColor))
+            .ToArray();
+    }
+
+    private void SetSelection(TerminalSelection? selection)
+    {
+        if (_selection == selection)
+        {
+            return;
+        }
+
+        _selection = selection;
+        _selectionCoordinateVersion = Engine.Buffer.CoordinateVersion;
+        _selectionAlternateBuffer = Engine.AlternateBufferActive;
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+        AccessibilityChanged?.Invoke(this, EventArgs.Empty);
+        InvalidateVisual();
+    }
+
+    private void BeginAndEndSelection(
+        int viewportColumn,
+        int viewportRow,
+        TerminalSelectionMode mode)
+    {
+        BeginSelection(viewportColumn, viewportRow, mode);
+        EndSelection();
+    }
+
+    private static TerminalSelectionPoint ViewportToBuffer(
+        TextBufferSnapshot snapshot,
+        int viewportColumn,
+        int viewportRow)
+    {
+        var top = snapshot.HistoryCount - snapshot.ScrollOffset;
+        return TerminalInteractionModel.Clamp(
+            snapshot,
+            new TerminalSelectionPoint(viewportColumn, top + viewportRow));
+    }
+
+    private bool HandleMarkModeKey(KeyEventArgs e)
+    {
+        if (!_isMarkMode)
+        {
+            return false;
+        }
+
+        var extend = (e.KeyModifiers & KeyModifiers.Shift) != 0 || _selection is not null;
+        switch (e.Key)
+        {
+            case Key.Left:
+                MoveMarkCaret(-1, 0, extend);
+                return true;
+            case Key.Right:
+                MoveMarkCaret(1, 0, extend);
+                return true;
+            case Key.Up:
+                MoveMarkCaret(0, -1, extend);
+                return true;
+            case Key.Down:
+                MoveMarkCaret(0, 1, extend);
+                return true;
+            case Key.Home:
+                MoveMarkCaret(-Engine.Columns, 0, extend);
+                return true;
+            case Key.End:
+                MoveMarkCaret(Engine.Columns, 0, extend);
+                return true;
+            case Key.PageUp:
+                MoveMarkCaret(0, -Engine.Rows, extend);
+                return true;
+            case Key.PageDown:
+                MoveMarkCaret(0, Engine.Rows, extend);
+                return true;
+            case Key.Space:
+                SwitchSelectionEndpoint();
+                return true;
+            case Key.A when (e.KeyModifiers & KeyModifiers.Control) != 0:
+                SelectAll();
+                return true;
+            case Key.W when (e.KeyModifiers & KeyModifiers.Control) != 0:
+                ExpandSelectionToWord();
+                return true;
+            case Key.Enter:
+                ExitMarkMode();
+                return true;
+            case Key.Escape:
+                ExitMarkMode(clearSelection: true);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void SendFocusChanged(bool focused)
+    {
+        if (Engine.FocusTracking)
+        {
+            _connection?.Write(focused ? "\u001b[I" : "\u001b[O");
+        }
+    }
+
+    private void WriteMouseInput(
+        int button,
+        int x,
+        int y,
+        bool released,
+        KeyModifiers modifiers)
+    {
+        _connection?.Write(TerminalInteractionModel.BuildMouseSequence(
+            button,
+            x,
+            y,
+            released,
+            Engine.SgrMouse,
+            modifiers));
+    }
+
+    private static int PointerButton(PointerPoint point)
+    {
+        if (point.Properties.IsRightButtonPressed)
+        {
+            return 2;
+        }
+
+        if (point.Properties.IsMiddleButtonPressed)
+        {
+            return 1;
+        }
+
+        return 0;
+    }
+
+    private static int PointerButton(MouseButton button) =>
+        button switch
+        {
+            MouseButton.Middle => 1,
+            MouseButton.Right => 2,
+            _ => 0,
+        };
+
+    private void OnTextInputMethodClientRequested(
+        object? sender,
+        TextInputMethodClientRequestedEventArgs e)
+    {
+        e.Client = _textInputMethodClient;
+    }
+
+    private async void ObserveInteractionAsync(string operation, Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(true);
+        }
+        catch (Exception exception)
+        {
+            InteractionError?.Invoke(this, new TerminalInteractionErrorEventArgs(operation, exception));
+        }
+    }
+
     internal static TerminalCursorStyle ParseCursorStyle(string? value) =>
         value is not null && value.Equals("underscore", StringComparison.OrdinalIgnoreCase)
             ? TerminalCursorStyle.Underscore
@@ -695,4 +1424,6 @@ public sealed class TermControl : Avalonia.Controls.Control
             CloseOnExitMode.Always => TerminalCloseOnExitPolicy.Always,
             _ => TerminalCloseOnExitPolicy.Automatic,
         };
+
+    internal readonly record struct ImeContext(string Text, int CursorTextOffset);
 }

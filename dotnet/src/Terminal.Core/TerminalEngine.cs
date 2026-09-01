@@ -22,6 +22,14 @@ public sealed record TerminalSnapshot(
 
 public sealed record TerminalNotification(string? Title, string Body);
 
+public enum TerminalMouseTrackingMode
+{
+    None,
+    Button,
+    ButtonEvent,
+    AllMotion,
+}
+
 public sealed class TerminalEngine : IVtDispatch
 {
     private readonly VtParser _parser;
@@ -71,6 +79,7 @@ public sealed class TerminalEngine : IVtDispatch
     public bool ApplicationCursorKeys { get; private set; }
     public bool BracketedPaste { get; private set; }
     public bool MouseTracking { get; private set; }
+    public TerminalMouseTrackingMode MouseTrackingMode { get; private set; }
     public bool SgrMouse { get; private set; }
     public bool FocusTracking { get; private set; }
     public bool AutoWrap { get; private set; }
@@ -120,6 +129,7 @@ public sealed class TerminalEngine : IVtDispatch
         ApplicationCursorKeys = false;
         BracketedPaste = false;
         MouseTracking = false;
+        MouseTrackingMode = TerminalMouseTrackingMode.None;
         SgrMouse = false;
         FocusTracking = false;
         AutoWrap = true;
@@ -1001,7 +1011,22 @@ public sealed class TerminalEngine : IVtDispatch
                 case 1000:
                 case 1002:
                 case 1003:
-                    MouseTracking = enable;
+                    var requestedMouseMode = mode switch
+                    {
+                        1002 => TerminalMouseTrackingMode.ButtonEvent,
+                        1003 => TerminalMouseTrackingMode.AllMotion,
+                        _ => TerminalMouseTrackingMode.Button,
+                    };
+                    if (enable)
+                    {
+                        MouseTrackingMode = requestedMouseMode;
+                    }
+                    else if (MouseTrackingMode == requestedMouseMode)
+                    {
+                        MouseTrackingMode = TerminalMouseTrackingMode.None;
+                    }
+
+                    MouseTracking = MouseTrackingMode != TerminalMouseTrackingMode.None;
                     break;
                 case 1004:
                     FocusTracking = enable;
@@ -1256,7 +1281,9 @@ public sealed class TerminalEngine : IVtDispatch
             12 => CursorBlinking ? 1 : 2,
             25 => CursorVisible ? 1 : 2,
             47 or 1047 or 1049 => AlternateBufferActive ? 1 : 2,
-            1000 or 1002 or 1003 => MouseTracking ? 1 : 2,
+            1000 => MouseTrackingMode == TerminalMouseTrackingMode.Button ? 1 : 2,
+            1002 => MouseTrackingMode == TerminalMouseTrackingMode.ButtonEvent ? 1 : 2,
+            1003 => MouseTrackingMode == TerminalMouseTrackingMode.AllMotion ? 1 : 2,
             1004 => FocusTracking ? 1 : 2,
             1006 => SgrMouse ? 1 : 2,
             2004 => BracketedPaste ? 1 : 2,

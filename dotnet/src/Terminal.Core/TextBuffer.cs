@@ -71,6 +71,7 @@ public sealed class TextBuffer
     public bool WrapPending { get; set; }
     public int TotalLines => _lines.Count;
     public int HistoryCount => ViewportStart;
+    public long CoordinateVersion { get; private set; }
     public CellAttributes CurrentAttributes { get; set; } = CellAttributes.Default;
     public string? CurrentHyperlinkUri { get; set; }
     public int SavedCursorX { get; set; }
@@ -94,6 +95,7 @@ public sealed class TextBuffer
 
         Columns = columns;
         Rows = rows;
+        CoordinateVersion++;
         _tabStops = ResizeTabStops(_tabStops, columns);
         ScrollTop = 0;
         ScrollBottom = rows - 1;
@@ -471,6 +473,11 @@ public sealed class TextBuffer
         {
             if (ScrollTop == 0 && ScrollBottom == Rows - 1 && HasHistory)
             {
+                if (_lines.Count == Rows + _historySize)
+                {
+                    CoordinateVersion++;
+                }
+
                 _lines.AddLast(NewBlankLine(CurrentAttributes));
                 ScrollOffset = 0;
             }
@@ -658,6 +665,11 @@ public sealed class TextBuffer
 
     private void TrimHistory()
     {
+        if (_lines.Count > Rows)
+        {
+            CoordinateVersion++;
+        }
+
         while (_lines.Count > Rows)
         {
             _lines.RemoveFirst();

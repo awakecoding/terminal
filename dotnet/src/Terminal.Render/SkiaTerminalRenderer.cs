@@ -132,12 +132,62 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
             DrawRanges(canvas, overlays.Selection, padding);
             DrawRanges(canvas, overlays.Search, padding);
             DrawRanges(canvas, overlays.Hyperlink, padding);
+            DrawComposition(canvas, overlays.Composition, padding);
 
             if (drawCursor && frame.CursorVisible)
             {
                 DrawCursor(canvas, frame, padding);
             }
         }
+    }
+
+    private void DrawComposition(
+        SKCanvas canvas,
+        TerminalCompositionOverlay? composition,
+        float padding)
+    {
+        if (composition is null || string.IsNullOrEmpty(composition.Text))
+        {
+            return;
+        }
+
+        var left = padding + (composition.Column * (float)CellSize.Width);
+        var top = padding + (composition.Row * (float)CellSize.Height);
+        _paint.Color = SKColors.White;
+        _paint.TextSize = _settings.FontSize * (float)Math.Max(0.1, _viewport.Scale);
+        _paint.Typeface = _fonts.Resolve(composition.Text.AsSpan(), CellFlags.None);
+        canvas.DrawText(composition.Text, left, top + _baseline, _paint);
+
+        _strokePaint.Color = SKColors.White;
+        _strokePaint.StrokeWidth = Math.Max(1, (float)_viewport.Scale);
+        var width = Math.Max(
+            (float)CellSize.Width,
+            DisplayWidth(composition.Text) * (float)CellSize.Width);
+        canvas.DrawLine(left, top + (float)CellSize.Height - 1, left + width, top + (float)CellSize.Height - 1, _strokePaint);
+
+        if (composition.CursorOffset is { } cursor)
+        {
+            var cursorLeft = left + (DisplayWidth(composition.Text, cursor) * (float)CellSize.Width);
+            canvas.DrawLine(cursorLeft, top, cursorLeft, top + (float)CellSize.Height, _strokePaint);
+        }
+    }
+
+    private static int DisplayWidth(string text, int utf16Limit = int.MaxValue)
+    {
+        var width = 0;
+        var consumed = 0;
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (consumed + rune.Utf16SequenceLength > utf16Limit)
+            {
+                break;
+            }
+
+            width += Math.Max(0, WcWidth.Width(rune));
+            consumed += rune.Utf16SequenceLength;
+        }
+
+        return width;
     }
 
     public void Dispose()
