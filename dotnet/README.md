@@ -45,7 +45,7 @@ Set `WT_DOTNET_SETTINGS_PATH` to load a specific Windows Terminal settings file.
 ```
 Terminal.Core         VT parser + text buffer + terminal engine
 Terminal.Render       Renderer-neutral contracts; Skia atlas lands in P1
-Terminal.Connection   ConPTY (LibraryImport, NativeAOT-safe)
+Terminal.Connection   ConPTY (safe handles, cancellation, NativeAOT)
 Terminal.Settings     Layered Windows Terminal-compatible JSON settings
 Terminal.Control      Avalonia TermControl renderer
 WindowsTerminal.App   Tabs, title bar, panes, actions, window behavior

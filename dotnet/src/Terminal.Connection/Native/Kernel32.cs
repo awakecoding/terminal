@@ -9,8 +9,10 @@ internal static partial class Kernel32
 {
     internal const uint ExtendedStartupinfoPresent = 0x00080000;
     internal const uint CreateUnicodeEnvironment = 0x00000400;
+    internal const int StartfUseStdHandles = 0x00000100;
     internal const nuint ProcThreadAttributePseudoConsole = 0x00020016;
     internal const uint Infinite = 0xFFFFFFFF;
+    internal const uint WaitFailed = 0xFFFFFFFF;
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Coord
@@ -70,7 +72,7 @@ internal static partial class Kernel32
     internal static partial int CreatePseudoConsole(Coord size, SafeFileHandle hInput, SafeFileHandle hOutput, uint dwFlags, out nint phPC);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
-    internal static partial int ResizePseudoConsole(nint hPC, Coord size);
+    internal static partial int ResizePseudoConsole(SafePseudoConsoleHandle hPC, Coord size);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     internal static partial void ClosePseudoConsole(nint hPC);
@@ -117,13 +119,13 @@ internal static partial class Kernel32
     internal static partial bool CloseHandle(nint hObject);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
-    internal static partial uint WaitForSingleObject(nint hHandle, uint dwMilliseconds);
+    internal static partial uint WaitForSingleObject(SafeKernelObjectHandle hHandle, uint dwMilliseconds);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool GetExitCodeProcess(nint hProcess, out uint lpExitCode);
+    internal static partial bool GetExitCodeProcess(SafeKernelObjectHandle hProcess, out uint lpExitCode);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool TerminateProcess(nint hProcess, uint uExitCode);
+    internal static partial bool TerminateProcess(SafeKernelObjectHandle hProcess, uint uExitCode);
 }
