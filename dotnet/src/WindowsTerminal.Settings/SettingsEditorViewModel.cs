@@ -8,9 +8,12 @@ public sealed record SettingsDiagnosticViewModel(string Severity, string Code, s
 public sealed class SettingsNavigationItem
 {
     public required SettingsPage Page { get; init; }
+    public required string Icon { get; init; }
     public required string Title { get; init; }
     public required string Keywords { get; init; }
     public required object ViewModel { get; init; }
+
+    public override string ToString() => Title;
 }
 
 public sealed class SettingsEditorViewModel : ObservableObject
@@ -228,7 +231,30 @@ public sealed class SettingsEditorViewModel : ObservableObject
         string title,
         string keywords,
         object viewModel) =>
-        new() { Page = page, Title = title, Keywords = keywords, ViewModel = viewModel };
+        new()
+        {
+            Page = page,
+            Icon = page switch
+            {
+                SettingsPage.Startup => "\uE7B5",
+                SettingsPage.Interaction => "\uE8D4",
+                SettingsPage.Appearance => "\uE790",
+                SettingsPage.Profiles => "\uE77B",
+                SettingsPage.ProfileAppearance => "\uE790",
+                SettingsPage.ProfileTerminal => "\uE756",
+                SettingsPage.ProfileAdvanced => "\uE90F",
+                SettingsPage.ColorSchemes => "\uE2B1",
+                SettingsPage.Actions => "\uE765",
+                SettingsPage.NewTabMenu => "\uE8FD",
+                SettingsPage.Rendering => "\uE7F8",
+                SettingsPage.Compatibility => "\uE713",
+                SettingsPage.Extensions => "\uE71B",
+                _ => "\uE946",
+            },
+            Title = title,
+            Keywords = keywords,
+            ViewModel = viewModel,
+        };
 
     private void FilterNavigation()
     {

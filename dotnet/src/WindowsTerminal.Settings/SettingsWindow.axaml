@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:WindowsTerminal.Settings"
+        xmlns:controls="using:WindowsTerminal.Settings.Controls"
         x:Class="WindowsTerminal.Settings.SettingsWindow"
         x:DataType="vm:SettingsEditorViewModel"
         x:CompileBindings="True"
@@ -8,8 +9,11 @@
         Width="1120"
         Height="760"
         MinWidth="820"
-        MinHeight="560">
+        MinHeight="560"
+        Classes="settings-window"
+        TransparencyLevelHint="Mica,AcrylicBlur,None">
   <Window.Styles>
+    <StyleInclude Source="avares://WindowsTerminal.Settings/SettingsTheme.axaml" />
     <Style Selector="TextBlock.pageTitle">
       <Setter Property="FontSize" Value="26" />
       <Setter Property="FontWeight" Value="SemiBold" />
@@ -27,11 +31,11 @@
     </Style>
     <Style Selector="TextBox.field">
       <Setter Property="Margin" Value="0,4" />
-      <Setter Property="MinWidth" Value="260" />
+      <Setter Property="MinWidth" Value="200" />
     </Style>
     <Style Selector="ComboBox.field">
       <Setter Property="Margin" Value="0,4" />
-      <Setter Property="MinWidth" Value="260" />
+      <Setter Property="MinWidth" Value="200" />
     </Style>
     <Style Selector="CheckBox.field">
       <Setter Property="Margin" Value="0,6" />
@@ -51,28 +55,73 @@
       <StackPanel>
         <TextBlock Classes="pageTitle" Text="{Binding Title}" />
         <TextBlock Classes="pageDescription" Text="{Binding Description}" />
-        <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
-          <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Default profile (name or GUID)" />
-          <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding DefaultProfile}" />
-          <TextBlock Grid.Row="1" Classes="fieldLabel" Text="Initial columns" />
-          <TextBox Grid.Row="1" Grid.Column="1" Classes="field" Text="{Binding InitialColumns}" />
-          <TextBlock Grid.Row="2" Classes="fieldLabel" Text="Initial rows" />
-          <TextBox Grid.Row="2" Grid.Column="1" Classes="field" Text="{Binding InitialRows}" />
-          <TextBlock Grid.Row="3" Classes="fieldLabel" Text="Initial position" />
-          <TextBox Grid.Row="3" Grid.Column="1" Classes="field" Text="{Binding InitialPosition}" />
-          <TextBlock Grid.Row="4" Classes="fieldLabel" Text="Launch mode" />
-          <ComboBox Grid.Row="4" Grid.Column="1" Classes="field"
-                    ItemsSource="{Binding LaunchModes}" SelectedItem="{Binding LaunchMode}" />
-          <TextBlock Grid.Row="5" Classes="fieldLabel" Text="First window preference" />
-          <TextBox Grid.Row="5" Grid.Column="1" Classes="field" Text="{Binding FirstWindowPreference}" />
-          <TextBlock Grid.Row="6" Classes="fieldLabel" Text="Windowing behavior" />
-          <TextBox Grid.Row="6" Grid.Column="1" Classes="field" Text="{Binding WindowingBehavior}" />
-          <TextBlock Grid.Row="7" Classes="fieldLabel" Text="Startup actions" />
-          <TextBox Grid.Row="7" Grid.Column="1" Classes="field" Text="{Binding StartupActions}" />
-          <CheckBox Grid.Row="8" Grid.Column="1" Classes="field" Content="Center on launch" IsChecked="{Binding CenterOnLaunch}" />
-          <CheckBox Grid.Row="9" Grid.Column="1" Classes="field" Content="Always on top" IsChecked="{Binding AlwaysOnTop}" />
-          <CheckBox Grid.Row="10" Grid.Column="1" Classes="field" Content="Auto-hide window" IsChecked="{Binding AutoHideWindow}" />
-        </Grid>
+        <controls:SettingsRow Header="Default profile"
+                              Description="The profile opened when Windows Terminal starts.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding DefaultProfile}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <TextBlock Classes="sectionTitle" Text="Launch parameters" />
+        <controls:SettingsRow Header="Initial columns"
+                              Description="The width of a newly created terminal window.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding InitialColumns}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Initial rows"
+                              Description="The height of a newly created terminal window.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding InitialRows}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Initial position"
+                              Description="Optional X,Y desktop coordinates for the first window.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding InitialPosition}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Launch mode"
+                              Description="Choose the initial window state.">
+          <controls:SettingsRow.Value>
+            <ComboBox Classes="field" ItemsSource="{Binding LaunchModes}" SelectedItem="{Binding LaunchMode}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="First window preference"
+                              Description="Controls how the first terminal window is selected.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding FirstWindowPreference}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Windowing behavior"
+                              Description="Controls whether commands reuse or create windows.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding WindowingBehavior}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Startup actions"
+                              Description="Commands executed when the terminal starts.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding StartupActions}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Center on launch"
+                              Description="Center newly created windows on the selected display.">
+          <controls:SettingsRow.Value>
+            <ToggleSwitch OnContent="On" OffContent="Off" IsChecked="{Binding CenterOnLaunch}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Always on top"
+                              Description="Keep terminal windows above other windows.">
+          <controls:SettingsRow.Value>
+            <ToggleSwitch OnContent="On" OffContent="Off" IsChecked="{Binding AlwaysOnTop}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Automatically hide window"
+                              Description="Hide the window when it loses focus.">
+          <controls:SettingsRow.Value>
+            <ToggleSwitch OnContent="On" OffContent="Off" IsChecked="{Binding AutoHideWindow}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
       </StackPanel>
     </DataTemplate>
 
@@ -89,12 +138,14 @@
         <CheckBox Classes="field" Content="Scroll wheel changes opacity" IsChecked="{Binding ScrollToChangeOpacity}" />
         <CheckBox Classes="field" Content="Detect URLs" IsChecked="{Binding DetectUrls}" />
         <CheckBox Classes="field" Content="Warn about large paste" IsChecked="{Binding WarnAboutLargePaste}" />
-        <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto">
+        <Border Classes="settings-card">
+          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto">
           <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Multi-line paste warning" />
           <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding WarnAboutMultiLinePaste}" />
           <TextBlock Grid.Row="1" Classes="fieldLabel" Text="Word delimiters" />
           <TextBox Grid.Row="1" Grid.Column="1" Classes="field" Text="{Binding WordDelimiters}" />
-        </Grid>
+          </Grid>
+        </Border>
       </StackPanel>
     </DataTemplate>
 
@@ -102,7 +153,8 @@
       <StackPanel>
         <TextBlock Classes="pageTitle" Text="{Binding Title}" />
         <TextBlock Classes="pageDescription" Text="{Binding Description}" />
-        <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto">
+        <Border Classes="settings-card">
+          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto">
           <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Dark theme" />
           <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding DarkTheme}" />
           <TextBlock Grid.Row="1" Classes="fieldLabel" Text="Light theme" />
@@ -112,7 +164,8 @@
                     ItemsSource="{Binding TabWidthModes}" SelectedItem="{Binding TabWidthMode}" />
           <TextBlock Grid.Row="3" Classes="fieldLabel" Text="New tab position" />
           <TextBox Grid.Row="3" Grid.Column="1" Classes="field" Text="{Binding NewTabPosition}" />
-        </Grid>
+          </Grid>
+        </Border>
         <WrapPanel Margin="0,8,0,16">
           <CheckBox Classes="field" Width="220" Content="Always show tabs" IsChecked="{Binding AlwaysShowTabs}" />
           <CheckBox Classes="field" Width="220" Content="Tabs in title bar" IsChecked="{Binding ShowTabsInTitlebar}" />
@@ -124,45 +177,96 @@
         <Separator Margin="0,4,0,16" />
         <TextBlock FontSize="18" FontWeight="SemiBold" Text="Theme details" />
         <ComboBox Classes="field" ItemsSource="{Binding Themes}" SelectedItem="{Binding SelectedTheme}" />
-        <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto">
+        <Border Classes="settings-card">
+          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto">
           <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Window application theme" />
           <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding SelectedTheme.WindowApplicationTheme}" />
           <TextBlock Grid.Row="1" Classes="fieldLabel" Text="Tab icon style" />
           <TextBox Grid.Row="1" Grid.Column="1" Classes="field" Text="{Binding SelectedTheme.TabIconStyle}" />
           <CheckBox Grid.Row="2" Grid.Column="1" Classes="field" Content="Use Mica" IsChecked="{Binding SelectedTheme.UseMica}" />
           <CheckBox Grid.Row="3" Grid.Column="1" Classes="field" Content="Rainbow frame" IsChecked="{Binding SelectedTheme.RainbowFrame}" />
-        </Grid>
+          </Grid>
+        </Border>
       </StackPanel>
     </DataTemplate>
 
     <DataTemplate DataType="{x:Type vm:ProfilesSettingsViewModel}" x:DataType="vm:ProfilesSettingsViewModel">
       <StackPanel>
-        <TextBlock Classes="pageTitle" Text="{Binding Title}" />
+        <TextBlock Classes="pageTitle" Text="{Binding SelectedProfile.Name}" />
         <TextBlock Classes="pageDescription" Text="{Binding Description}" />
-        <ComboBox Classes="field" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" />
-        <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
-          <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Name" />
-          <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.Name}" />
-          <TextBlock Grid.Row="1" Classes="fieldLabel" Text="GUID" />
-          <TextBox Grid.Row="1" Grid.Column="1" Classes="field" IsReadOnly="True" Text="{Binding SelectedProfile.Guid}" />
-          <TextBlock Grid.Row="2" Classes="fieldLabel" Text="Source" />
-          <TextBox Grid.Row="2" Grid.Column="1" Classes="field" IsReadOnly="True" Text="{Binding SelectedProfile.Source}" />
-          <TextBlock Grid.Row="3" Classes="fieldLabel" Text="Command line" />
-          <TextBox Grid.Row="3" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.Commandline}" />
-          <TextBlock Grid.Row="4" Classes="fieldLabel" Text="Starting directory" />
-          <TextBox Grid.Row="4" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.StartingDirectory}" />
-          <TextBlock Grid.Row="5" Classes="fieldLabel" Text="Icon" />
-          <TextBox Grid.Row="5" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.Icon}" />
-          <TextBlock Grid.Row="6" Classes="fieldLabel" Text="Tab title" />
-          <TextBox Grid.Row="6" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.TabTitle}" />
-          <TextBlock Grid.Row="7" Classes="fieldLabel" Text="Tab color" />
-          <TextBox Grid.Row="7" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.TabColor}" />
-        </Grid>
-        <WrapPanel>
-          <CheckBox Classes="field" Width="220" Content="Hidden" IsChecked="{Binding SelectedProfile.Hidden}" />
-          <CheckBox Classes="field" Width="220" Content="Elevate" IsChecked="{Binding SelectedProfile.Elevate}" />
-          <CheckBox Classes="field" Width="280" Content="Suppress application title" IsChecked="{Binding SelectedProfile.SuppressApplicationTitle}" />
-        </WrapPanel>
+        <controls:SettingsRow Header="Profile"
+                              Description="Choose the profile to edit.">
+          <controls:SettingsRow.Value>
+            <ComboBox Classes="field" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Name"
+                              Description="The name of the profile that appears in the dropdown.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding SelectedProfile.Name}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Command line"
+                              Description="Executable used when this profile starts.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding SelectedProfile.Commandline}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Starting directory"
+                              Description="The directory this profile starts in when loaded.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding SelectedProfile.StartingDirectory}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Icon"
+                              Description="Emoji or image location used for this profile.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding SelectedProfile.Icon}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Tab title"
+                              Description="Overrides the profile name shown in the tab.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding SelectedProfile.TabTitle}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Tab color"
+                              Description="Optional color used for the profile tab.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" Text="{Binding SelectedProfile.TabColor}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Run this profile as Administrator"
+                              Description="Open this profile in an elevated terminal window.">
+          <controls:SettingsRow.Value>
+            <ToggleSwitch OnContent="On" OffContent="Off" IsChecked="{Binding SelectedProfile.Elevate}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Hide profile from dropdown"
+                              Description="Keep this profile in settings without showing it in the new-tab menu.">
+          <controls:SettingsRow.Value>
+            <ToggleSwitch OnContent="On" OffContent="Off" IsChecked="{Binding SelectedProfile.Hidden}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <TextBlock Classes="sectionTitle" Text="Profile details" />
+        <controls:SettingsRow Header="GUID"
+                              Description="Stable identity used to reference this profile.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" IsReadOnly="True" Text="{Binding SelectedProfile.Guid}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Source"
+                              Description="Dynamic profile generator or settings layer that owns this profile.">
+          <controls:SettingsRow.Value>
+            <TextBox Classes="field" IsReadOnly="True" Text="{Binding SelectedProfile.Source}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <controls:SettingsRow Header="Suppress application title"
+                              Description="Keep the configured tab title instead of the shell-provided title.">
+          <controls:SettingsRow.Value>
+            <ToggleSwitch OnContent="On" OffContent="Off" IsChecked="{Binding SelectedProfile.SuppressApplicationTitle}" />
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
       </StackPanel>
     </DataTemplate>
 
@@ -171,7 +275,8 @@
         <TextBlock Classes="pageTitle" Text="{Binding Title}" />
         <TextBlock Classes="pageDescription" Text="{Binding Description}" />
         <ComboBox Classes="field" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" />
-        <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+        <Border Classes="settings-card">
+          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
           <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Font face" />
           <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.FontFace}" />
           <TextBlock Grid.Row="1" Classes="fieldLabel" Text="Font size" />
@@ -196,7 +301,8 @@
           <TextBox Grid.Row="10" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.BackgroundImage}" />
           <TextBlock Grid.Row="11" Classes="fieldLabel" Text="Background image opacity" />
           <TextBox Grid.Row="11" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.BackgroundImageOpacity}" />
-        </Grid>
+          </Grid>
+        </Border>
         <WrapPanel>
           <CheckBox Classes="field" Width="220" Content="Use acrylic" IsChecked="{Binding SelectedProfile.UseAcrylic}" />
           <CheckBox Classes="field" Width="260" Content="Retro terminal effect" IsChecked="{Binding SelectedProfile.RetroTerminalEffect}" />
@@ -209,7 +315,8 @@
         <TextBlock Classes="pageTitle" Text="{Binding Title}" />
         <TextBlock Classes="pageDescription" Text="{Binding Description}" />
         <ComboBox Classes="field" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" />
-        <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+        <Border Classes="settings-card">
+          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
           <TextBlock Grid.Row="0" Classes="fieldLabel" Text="History size" />
           <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.HistorySize}" />
           <TextBlock Grid.Row="1" Classes="fieldLabel" Text="Padding" />
@@ -223,7 +330,8 @@
                     ItemsSource="{Binding CloseOnExitModes}" SelectedItem="{Binding SelectedProfile.CloseOnExit}" />
           <TextBlock Grid.Row="5" Classes="fieldLabel" Text="Scrollbar state" />
           <TextBox Grid.Row="5" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.ScrollbarState}" />
-        </Grid>
+          </Grid>
+        </Border>
         <WrapPanel>
           <CheckBox Classes="field" Width="220" Content="Snap on input" IsChecked="{Binding SelectedProfile.SnapOnInput}" />
           <CheckBox Classes="field" Width="220" Content="AltGr aliasing" IsChecked="{Binding SelectedProfile.AltGrAliasing}" />
@@ -246,12 +354,14 @@
           <CheckBox Classes="field" Width="240" Content="Allow OSC 52 clipboard" IsChecked="{Binding SelectedProfile.AllowVtClipboardWrite}" />
           <CheckBox Classes="field" Width="240" Content="Allow OSC notifications" IsChecked="{Binding SelectedProfile.AllowOscNotifications}" />
         </WrapPanel>
-        <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto">
+        <Border Classes="settings-card">
+          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto">
           <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Drag/drop delimiter" />
           <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.DragDropDelimiter}" />
           <TextBlock Grid.Row="1" Classes="fieldLabel" Text="Path translation style" />
           <TextBox Grid.Row="1" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.PathTranslationStyle}" />
-        </Grid>
+          </Grid>
+        </Border>
         <TextBlock Margin="0,16,0,6" FontSize="18" FontWeight="SemiBold" Text="Environment JSON" />
         <TextBlock Opacity="0.7" Text="Values must be strings or null. JSON is validated before Apply." />
         <TextBox Classes="jsonEditor" Text="{Binding SelectedProfile.EnvironmentJson}" />
@@ -263,8 +373,9 @@
         <TextBlock Classes="pageTitle" Text="{Binding Title}" />
         <TextBlock Classes="pageDescription" Text="{Binding Description}" />
         <ComboBox Classes="field" ItemsSource="{Binding Schemes}" SelectedItem="{Binding SelectedScheme}" />
-        <Grid ColumnDefinitions="180,*,180,*"
-              RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+        <Border Classes="settings-card">
+          <Grid ColumnDefinitions="160,*,160,*"
+                RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
           <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Name" />
           <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding SelectedScheme.Name}" />
           <TextBlock Grid.Row="0" Grid.Column="2" Classes="fieldLabel" Text="Foreground" />
@@ -307,7 +418,8 @@
           <TextBox Grid.Row="10" Grid.Column="1" Classes="field" Text="{Binding SelectedScheme.White}" />
           <TextBlock Grid.Row="10" Grid.Column="2" Classes="fieldLabel" Text="Bright white" />
           <TextBox Grid.Row="10" Grid.Column="3" Classes="field" Text="{Binding SelectedScheme.BrightWhite}" />
-        </Grid>
+          </Grid>
+        </Border>
       </StackPanel>
     </DataTemplate>
 
@@ -356,13 +468,15 @@
       <StackPanel>
         <TextBlock Classes="pageTitle" Text="{Binding Title}" />
         <TextBlock Classes="pageDescription" Text="{Binding Description}" />
-        <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto">
+        <Border Classes="settings-card">
+          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto">
           <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Graphics API" />
           <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding GraphicsApi}" />
           <CheckBox Grid.Row="1" Grid.Column="1" Classes="field" Content="Disable partial invalidation" IsChecked="{Binding DisablePartialInvalidation}" />
           <CheckBox Grid.Row="2" Grid.Column="1" Classes="field" Content="Software rendering" IsChecked="{Binding SoftwareRendering}" />
           <CheckBox Grid.Row="3" Grid.Column="1" Classes="field" Content="Use background image for window" IsChecked="{Binding UseBackgroundImageForWindow}" />
-        </Grid>
+          </Grid>
+        </Border>
       </StackPanel>
     </DataTemplate>
 
@@ -370,7 +484,8 @@
       <StackPanel>
         <TextBlock Classes="pageTitle" Text="{Binding Title}" />
         <TextBlock Classes="pageDescription" Text="{Binding Description}" />
-        <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+        <Border Classes="settings-card">
+          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
           <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Text measurement" />
           <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding TextMeasurement}" />
           <TextBlock Grid.Row="1" Classes="fieldLabel" Text="Ambiguous character width" />
@@ -380,7 +495,8 @@
           <CheckBox Grid.Row="3" Grid.Column="1" Classes="field" Content="Allow headless operation" IsChecked="{Binding AllowHeadless}" />
           <CheckBox Grid.Row="4" Grid.Column="1" Classes="field" Content="Enable unfocused acrylic" IsChecked="{Binding EnableUnfocusedAcrylic}" />
           <CheckBox Grid.Row="5" Grid.Column="1" Classes="field" Content="Show input service warning" IsChecked="{Binding InputServiceWarning}" />
-        </Grid>
+          </Grid>
+        </Border>
       </StackPanel>
     </DataTemplate>
 
@@ -388,7 +504,8 @@
       <StackPanel>
         <TextBlock Classes="pageTitle" Text="{Binding Title}" />
         <TextBlock Classes="pageDescription" Text="{Binding Description}" />
-        <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto">
+        <Border Classes="settings-card">
+          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto">
           <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Language" />
           <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding Language}" />
           <TextBlock Grid.Row="1" Classes="fieldLabel" Text="Web search query URL" />
@@ -397,7 +514,8 @@
           <TextBox Grid.Row="2" Grid.Column="1" Classes="field" AcceptsReturn="True" MinHeight="90" Text="{Binding DisabledProfileSources}" />
           <TextBlock Grid.Row="3" Classes="fieldLabel" Text="Safe URI schemes (one per line)" />
           <TextBox Grid.Row="3" Grid.Column="1" Classes="field" AcceptsReturn="True" MinHeight="90" Text="{Binding SafeUriSchemes}" />
-        </Grid>
+          </Grid>
+        </Border>
         <WrapPanel>
           <CheckBox Classes="field" Width="220" Content="Debug features" IsChecked="{Binding DebugFeaturesEnabled}" />
           <CheckBox Classes="field" Width="280" Content="Always show notification icon" IsChecked="{Binding AlwaysShowNotificationIcon}" />
@@ -411,30 +529,40 @@
   </Window.DataTemplates>
 
   <DockPanel>
-    <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="#40808080" Padding="16,10">
+    <Border DockPanel.Dock="Bottom" Classes="settings-footer" Padding="16,10">
       <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
         <StackPanel>
           <TextBlock Text="{Binding StatusMessage}" />
           <TextBlock FontSize="11" Opacity="0.65" Text="{Binding SettingsPath}" />
         </StackPanel>
-        <Button Grid.Column="1" Content="Reset defaults" Command="{Binding ResetCommand}" />
-        <Button Grid.Column="2" Content="Revert" Command="{Binding RevertCommand}" />
-        <Button Grid.Column="3" Content="Apply" Command="{Binding ApplyCommand}" />
+        <Button Grid.Column="1" Classes="settings-secondary" Content="Reset defaults" Command="{Binding ResetCommand}" />
+        <Button Grid.Column="2" Classes="settings-secondary" Content="Discard changes" Command="{Binding RevertCommand}" />
+        <Button Grid.Column="3" Classes="accent" Content="Save" Command="{Binding ApplyCommand}" />
       </Grid>
     </Border>
 
     <Grid ColumnDefinitions="250,*">
-      <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="#40808080" Padding="12">
+      <Border Grid.Column="0" Classes="settings-navigation" Padding="12">
         <DockPanel>
           <TextBox DockPanel.Dock="Top"
                    Margin="0,0,0,10"
                    Watermark="Search settings"
                    Text="{Binding SearchText}" />
-          <ListBox ItemsSource="{Binding VisibleNavigationItems}"
+          <ListBox Classes="settings-navigation-list"
+                   ItemsSource="{Binding VisibleNavigationItems}"
                    SelectedItem="{Binding SelectedNavigationItem}">
             <ListBox.ItemTemplate>
               <DataTemplate x:DataType="vm:SettingsNavigationItem">
-                <TextBlock Margin="8,7" Text="{Binding Title}" />
+                <Grid ColumnDefinitions="24,*" ColumnSpacing="8">
+                  <TextBlock Text="{Binding Icon}"
+                             FontFamily="Segoe Fluent Icons"
+                             FontSize="16"
+                             HorizontalAlignment="Center"
+                             VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1"
+                             Text="{Binding Title}"
+                             VerticalAlignment="Center" />
+                </Grid>
               </DataTemplate>
             </ListBox.ItemTemplate>
           </ListBox>
@@ -442,23 +570,28 @@
       </Border>
 
       <DockPanel Grid.Column="1">
-        <Expander DockPanel.Dock="Top" Margin="20,12,20,0">
-          <Expander.Header>
-            <TextBlock Text="{Binding Diagnostics.Count, StringFormat='Diagnostics ({0})'}" />
-          </Expander.Header>
-          <ItemsControl ItemsSource="{Binding Diagnostics}" MaxHeight="150">
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="vm:SettingsDiagnosticViewModel">
-                <Grid ColumnDefinitions="80,150,*" Margin="0,3">
-                  <TextBlock Text="{Binding Severity}" />
-                  <TextBlock Grid.Column="1" Text="{Binding Code}" />
-                  <TextBlock Grid.Column="2" TextWrapping="Wrap" Text="{Binding Message}" />
-                </Grid>
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
-        </Expander>
-        <ScrollViewer Padding="24,16" HorizontalScrollBarVisibility="Disabled">
+        <Border DockPanel.Dock="Top"
+                Classes="settings-diagnostics"
+                Margin="40,12,40,0"
+                HorizontalAlignment="Left">
+          <Expander>
+            <Expander.Header>
+              <TextBlock Text="{Binding Diagnostics.Count, StringFormat='Diagnostics ({0})'}" />
+            </Expander.Header>
+            <ItemsControl ItemsSource="{Binding Diagnostics}" MaxHeight="150">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:SettingsDiagnosticViewModel">
+                  <Grid ColumnDefinitions="80,150,*" Margin="0,3">
+                    <TextBlock Text="{Binding Severity}" />
+                    <TextBlock Grid.Column="1" Text="{Binding Code}" />
+                    <TextBlock Grid.Column="2" TextWrapping="Wrap" Text="{Binding Message}" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Expander>
+        </Border>
+        <ScrollViewer Padding="40,16" HorizontalScrollBarVisibility="Auto">
           <ContentControl Content="{Binding CurrentPage}" />
         </ScrollViewer>
       </DockPanel>

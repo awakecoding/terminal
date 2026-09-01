@@ -1,4 +1,5 @@
 using Avalonia.Automation;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using WindowsTerminal.Views;
@@ -23,8 +24,13 @@ public sealed class UiTestCollection
     {
         var window = new MainWindow();
         var menu = window.FindControl<Avalonia.Controls.Button>("MenuButton");
+        var about = window.FindControl<Avalonia.Controls.Border>("AboutOverlay");
 
         Assert.NotNull(menu);
         Assert.Equal("New tab menu", AutomationProperties.GetName(menu));
+        Assert.NotNull(about);
+        Assert.Equal(
+            AutomationControlType.Window,
+            AutomationProperties.GetControlTypeOverride(about));
     }
 }

@@ -49,5 +49,18 @@
     <Style Selector="Button.icon:pointerover">
       <Setter Property="Background" Value="#3A3A3A" />
     </Style>
+    <Style Selector="ContextMenu">
+      <Setter Property="Background" Value="#FF2C2C2C" />
+      <Setter Property="BorderBrush" Value="#26FFFFFF" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Padding" Value="0,4" />
+      <Setter Property="CornerRadius" Value="8" />
+    </Style>
+    <Style Selector="MenuItem">
+      <Setter Property="MinHeight" Value="32" />
+      <Setter Property="Margin" Value="4,0" />
+      <Setter Property="Padding" Value="8,4" />
+      <Setter Property="CornerRadius" Value="4" />
+    </Style>
   </Application.Styles>
 </Application>

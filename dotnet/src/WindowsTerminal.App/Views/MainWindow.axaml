@@ -87,6 +87,70 @@
                    DoubleTapped="CommandPaletteList_OnDoubleTapped" />
         </Grid>
       </Border>
+      <Border x:Name="AboutOverlay"
+              IsVisible="False"
+              Background="#99000000"
+              HorizontalAlignment="Stretch"
+              VerticalAlignment="Stretch">
+        <Border Width="320"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Padding="24"
+                CornerRadius="8"
+                Background="#FF2C2C2C"
+                BorderBrush="#26FFFFFF"
+                BorderThickness="1"
+                BoxShadow="0 8 32 0 #59000000">
+          <StackPanel Spacing="12">
+            <TextBlock Text="About" FontSize="20" FontWeight="SemiBold" />
+            <TextBlock Text="Windows Terminal (.NET)&#x0a;Built with .NET 10 NativeAOT, Avalonia, Skia, and HarfBuzz."
+                       TextWrapping="Wrap" />
+            <TextBlock x:Name="AboutVersion" />
+            <Button Content="Source code"
+                    Tag="https://github.com/awakecoding/terminal"
+                    HorizontalAlignment="Left"
+                    Padding="0"
+                    BorderThickness="0"
+                    Background="Transparent"
+                    Foreground="#A6D4FF"
+                    Click="AboutLink_OnClick" />
+            <Button Content="Documentation"
+                    Tag="https://github.com/awakecoding/terminal/tree/main/doc"
+                    HorizontalAlignment="Left"
+                    Padding="0"
+                    BorderThickness="0"
+                    Background="Transparent"
+                    Foreground="#A6D4FF"
+                    Click="AboutLink_OnClick" />
+            <Button Content="Release notes"
+                    Tag="https://github.com/awakecoding/terminal/releases"
+                    HorizontalAlignment="Left"
+                    Padding="0"
+                    BorderThickness="0"
+                    Background="Transparent"
+                    Foreground="#A6D4FF"
+                    Click="AboutLink_OnClick" />
+            <Button Content="Third-party notices"
+                    Tag="https://github.com/awakecoding/terminal/blob/main/NOTICE.md"
+                    HorizontalAlignment="Left"
+                    Padding="0"
+                    BorderThickness="0"
+                    Background="Transparent"
+                    Foreground="#A6D4FF"
+                    Click="AboutLink_OnClick" />
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="8" Margin="0,12,0,0">
+              <Button x:Name="AboutFeedbackButton"
+                      Content="Send feedback"
+                      Click="AboutFeedback_OnClick" />
+              <Button x:Name="AboutOkButton"
+                      Grid.Column="1"
+                      Classes="accent"
+                      Content="OK"
+                      Click="AboutClose_OnClick" />
+            </Grid>
+          </StackPanel>
+        </Border>
+      </Border>
       <Border x:Name="NotificationToast"
               IsVisible="False"
               MaxWidth="420"

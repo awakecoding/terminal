@@ -109,6 +109,8 @@ Azure authentication, service protocol, diagnostics, and host composition are
 documented in [doc/azure-cloud-shell.md](doc/azure-cloud-shell.md).
 Build, migration, signing, and release gates are documented in
 [doc/release.md](doc/release.md).
+The UniGetUI/Avalonia 12 theme analysis and adopted WinUI settings patterns are
+documented in [doc/unigetui-theme-adoption.md](doc/unigetui-theme-adoption.md).
 
 ## Compatibility inventory
 

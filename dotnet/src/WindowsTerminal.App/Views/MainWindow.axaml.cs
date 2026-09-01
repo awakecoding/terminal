@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Automation;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Primitives;
@@ -44,6 +45,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     private bool _layoutPersisted;
     private ActionDispatchResult? _lastDispatchResult;
     private ProfileSettings? _initialProfile;
+    private IInputElement? _aboutPreviousFocus;
     private readonly TerminalWindowActivation? _initialActivation;
     private readonly Action<TerminalWindowActivation>? _newWindowRequested;
     private readonly Action<TabTearOffRequest>? _tabTearOffRequested;
@@ -71,6 +73,8 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         _tabTearOffRequested = tabTearOffRequested;
         _commandLineParser = commandLineParser;
         InitializeComponent();
+        AutomationProperties.SetName(AboutOverlay, "About Windows Terminal dialog");
+        AutomationProperties.SetControlTypeOverride(AboutOverlay, AutomationControlType.Window);
         _notificationTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _notificationTimer.Tick += (_, _) =>
         {
@@ -258,7 +262,8 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private List<MenuItem> BuildNewTabMenu()
     {
-        var items = NewTabMenuResolver.Resolve(_settings)
+        var resolvedItems = NewTabMenuResolver.Resolve(_settings);
+        var items = resolvedItems
             .Select(CreateMenuItem)
             .ToList();
         if (items.Count > 0)
@@ -269,20 +274,86 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         {
             Header = "Split pane",
             Command = new RelayCommand(() => _ = SplitActivePaneAsync(PaneSplitOrientation.Vertical)),
+            Icon = FluentMenuIcon("\uE7C2"),
         };
         AutomationProperties.SetName(splitPane, "Split pane");
         AutomationProperties.SetAutomationId(splitPane, "SplitPaneMenuItem");
         items.Add(splitPane);
+        items.Add(new MenuItem { Header = "-" });
         var settings = new MenuItem
         {
             Header = "Settings",
             Command = new RelayCommand(() => OpenSettings()),
+            Icon = FluentMenuIcon("\uE713"),
+            InputGesture = EffectiveDefaultGesture(
+                "ctrl+comma",
+                ShortcutAction.OpenSettings,
+                new KeyGesture(Key.OemComma, KeyModifiers.Control)),
         };
         AutomationProperties.SetName(settings, "Settings");
         AutomationProperties.SetAutomationId(settings, "SettingsMenuItem");
         items.Add(settings);
+        items.Add(new MenuItem
+        {
+            Header = "Command palette",
+            Command = new RelayCommand(() => ShowCommandPalette()),
+            Icon = FluentMenuIcon("\uE945"),
+            InputGesture = EffectiveDefaultGesture(
+                "ctrl+shift+p",
+                ShortcutAction.ToggleCommandPalette,
+                new KeyGesture(Key.P, KeyModifiers.Control | KeyModifiers.Shift)),
+        });
+        items.Add(new MenuItem
+        {
+            Header = "About",
+            Command = new RelayCommand(ShowAbout),
+            Icon = FluentMenuIcon("\uE897"),
+        });
         return items;
     }
+
+    private KeyGesture? EffectiveDefaultGesture(
+        string chord,
+        ShortcutAction expectedAction,
+        KeyGesture gesture) =>
+        _settings.ActionMap.ResolveAction(chord)?.Action == expectedAction ? gesture : null;
+
+    private KeyGesture? ProfileMenuGesture(ProfileSettings profile)
+    {
+        for (var number = 1; number <= 9; number++)
+        {
+            var action = _settings.ActionMap.ResolveAction($"ctrl+shift+{number}");
+            if (action?.Action != ShortcutAction.NewTab ||
+                action.Args is not NewTabArgs newTab)
+            {
+                continue;
+            }
+
+            var target = ResolveProfile(newTab.ContentArgs);
+            var matches = !string.IsNullOrWhiteSpace(profile.Guid) &&
+                          !string.IsNullOrWhiteSpace(target.Guid)
+                ? profile.Guid.Equals(target.Guid, StringComparison.OrdinalIgnoreCase)
+                : profile.Name.Equals(target.Name, StringComparison.OrdinalIgnoreCase);
+            if (matches)
+            {
+                return new KeyGesture(
+                    (Key)((int)Key.D0 + number),
+                    KeyModifiers.Control | KeyModifiers.Shift);
+            }
+        }
+
+        return null;
+    }
+
+    private static TextBlock FluentMenuIcon(string glyph) =>
+        new()
+        {
+            Text = glyph,
+            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            FontSize = 16,
+            Width = 20,
+            TextAlignment = TextAlignment.Center,
+        };
 
     private MenuItem CreateMenuItem(ResolvedNewTabMenuItem item)
     {
@@ -304,6 +375,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         else if (item.Profile is not null)
         {
             menu.Icon = CreateTabIcon(ProfileVisualDefaults.Icon(item.Profile));
+            menu.InputGesture = ProfileMenuGesture(item.Profile);
             menu.Command = new RelayCommand(() => _ = CreateTabAsync(item.Profile));
         }
         else if (item.ActionId is { } actionId &&
@@ -2023,6 +2095,16 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private async void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
+        if (AboutOverlay.IsVisible)
+        {
+            if (e.Key == Key.Escape)
+            {
+                CloseAbout();
+                e.Handled = true;
+            }
+            return;
+        }
+
         if ((FindBar.IsVisible && FindBox.IsKeyboardFocusWithin) ||
             (CommandPalette.IsVisible && CommandPaletteQuery.IsKeyboardFocusWithin) ||
             e.Handled)
@@ -2526,44 +2608,44 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private void ShowAbout()
     {
-        var close = new Button
+        _aboutPreviousFocus = FocusManager?.GetFocusedElement();
+        AboutVersion.Text =
+            $"Version: {typeof(MainWindow).Assembly.GetName().Version?.ToString() ?? "Development build"}";
+        TitleBar.IsEnabled = false;
+        TerminalHost.IsEnabled = false;
+        FindBar.IsEnabled = false;
+        CommandPalette.IsEnabled = false;
+        AboutOverlay.IsVisible = true;
+        AboutOkButton.Focus();
+    }
+
+    private void CloseAbout()
+    {
+        AboutOverlay.IsVisible = false;
+        TitleBar.IsEnabled = true;
+        TerminalHost.IsEnabled = true;
+        FindBar.IsEnabled = true;
+        CommandPalette.IsEnabled = true;
+        var previousFocus = _aboutPreviousFocus;
+        _aboutPreviousFocus = null;
+        if (previousFocus?.Focus() != true &&
+            !MenuButton.Focus())
         {
-            Content = "Close",
-            HorizontalAlignment = HorizontalAlignment.Right,
-        };
-        var about = new Window
+            ActiveControl?.Focus();
+        }
+    }
+
+    private void AboutClose_OnClick(object? sender, RoutedEventArgs e) => CloseAbout();
+
+    private void AboutFeedback_OnClick(object? sender, RoutedEventArgs e) =>
+        OpenWithShell("https://github.com/awakecoding/terminal/issues");
+
+    private void AboutLink_OnClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string uri })
         {
-            Title = "About Windows Terminal",
-            Width = 460,
-            SizeToContent = SizeToContent.Height,
-            CanResize = false,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(20),
-                Spacing = 12,
-                Children =
-                {
-                    new TextBlock
-                    {
-                        Text = "Windows Terminal (.NET)",
-                        FontSize = 20,
-                        FontWeight = FontWeight.SemiBold,
-                    },
-                    new TextBlock
-                    {
-                        Text = "Built with .NET 10 NativeAOT, Avalonia, Skia, and HarfBuzz.",
-                        TextWrapping = TextWrapping.Wrap,
-                    },
-                    new TextBlock
-                    {
-                        Text = typeof(MainWindow).Assembly.GetName().Version?.ToString() ?? "Development build",
-                    },
-                    close,
-                },
-            },
-        };
-        close.Click += (_, _) => about.Close();
-        about.ShowDialog(this);
+            OpenWithShell(uri);
+        }
     }
 
     private ValueTask ShowAzureDeviceCodeAsync(
@@ -2898,6 +2980,18 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         {
             panel.Children.Remove(control);
         }
+    }
+
+    protected override void OnClosing(WindowClosingEventArgs e)
+    {
+        if (AboutOverlay.IsVisible)
+        {
+            e.Cancel = true;
+            CloseAbout();
+            return;
+        }
+
+        base.OnClosing(e);
     }
 
     protected override async void OnClosed(EventArgs e)

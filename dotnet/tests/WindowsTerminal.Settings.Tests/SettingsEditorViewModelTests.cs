@@ -1,6 +1,9 @@
 using System.Text.Json.Nodes;
+using Avalonia.Automation;
+using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Microsoft.Terminal.Settings;
+using WindowsTerminal.Settings.Controls;
 using Xunit;
 
 namespace WindowsTerminal.Settings.Tests;
@@ -224,6 +227,23 @@ public sealed class SettingsEditorViewModelTests
         var window = new SettingsWindow(viewModel);
 
         Assert.Same(viewModel, window.DataContext);
+    }
+
+    [AvaloniaFact]
+    public void SettingsRowKeepsLabelsAndRightSideValue()
+    {
+        var value = new TextBox();
+        var row = new SettingsRow
+        {
+            Header = "Command line",
+            Description = "Executable used when this profile starts.",
+            Value = value,
+        };
+
+        Assert.Equal("Command line", AutomationProperties.GetName(row));
+        Assert.Equal("Command line", AutomationProperties.GetName(value));
+        Assert.NotNull(AutomationProperties.GetLabeledBy(value));
+        Assert.Same(value, row.Value);
     }
 
     private static SettingsEditorViewModel CreateEditor(

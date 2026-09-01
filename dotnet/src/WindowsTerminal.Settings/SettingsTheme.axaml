@@ -1,0 +1,183 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Styles.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="SettingsPageBackground" Color="#F3F3F3" />
+          <SolidColorBrush x:Key="SettingsNavigationBackground" Color="#F3F3F3" />
+          <SolidColorBrush x:Key="SettingsCardBackground" Color="#B3FFFFFF" />
+          <SolidColorBrush x:Key="SettingsCardHoverBackground" Color="#F6F6F6" />
+          <SolidColorBrush x:Key="SettingsCardBorderBrush" Color="#15000000" />
+          <SolidColorBrush x:Key="SettingsSubtleFill" Color="#09000000" />
+          <SolidColorBrush x:Key="SettingsControlFill" Color="#B3FFFFFF" />
+          <SolidColorBrush x:Key="SettingsTextSecondary" Color="#9E000000" />
+          <SolidColorBrush x:Key="SettingsFooterBackground" Color="#CCF9F9F9" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="SettingsPageBackground" Color="#202020" />
+          <SolidColorBrush x:Key="SettingsNavigationBackground" Color="#202020" />
+          <SolidColorBrush x:Key="SettingsCardBackground" Color="#0DFFFFFF" />
+          <SolidColorBrush x:Key="SettingsCardHoverBackground" Color="#15FFFFFF" />
+          <SolidColorBrush x:Key="SettingsCardBorderBrush" Color="#26FFFFFF" />
+          <SolidColorBrush x:Key="SettingsSubtleFill" Color="#0FFFFFFF" />
+          <SolidColorBrush x:Key="SettingsControlFill" Color="#0FFFFFFF" />
+          <SolidColorBrush x:Key="SettingsTextSecondary" Color="#C5FFFFFF" />
+          <SolidColorBrush x:Key="SettingsFooterBackground" Color="#CC2C2C2C" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <Style Selector="Window.settings-window">
+    <Setter Property="Background" Value="{DynamicResource SettingsPageBackground}" />
+  </Style>
+
+  <Style Selector="Border.settings-navigation">
+    <Setter Property="Background" Value="{DynamicResource SettingsNavigationBackground}" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
+  <Style Selector="ListBox.settings-navigation-list">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
+  <Style Selector="ListBox.settings-navigation-list ListBoxItem">
+    <Setter Property="Margin" Value="0,2" />
+    <Setter Property="Padding" Value="12,9" />
+    <Setter Property="MinHeight" Value="40" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Grid>
+          <ContentPresenter Name="ContentHost"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="{TemplateBinding CornerRadius}"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}"
+                            Padding="{TemplateBinding Padding}"
+                            HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                            VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+          <Border Name="SelectionPill"
+                  Width="3"
+                  Height="16"
+                  Margin="4,0,0,0"
+                  CornerRadius="1.5"
+                  Background="{DynamicResource SystemControlHighlightAccentBrush}"
+                  HorizontalAlignment="Left"
+                  VerticalAlignment="Center"
+                  Opacity="0" />
+        </Grid>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+
+  <Style Selector="ListBox.settings-navigation-list ListBoxItem:pointerover /template/ ContentPresenter#ContentHost">
+    <Setter Property="Background" Value="{DynamicResource SettingsSubtleFill}" />
+  </Style>
+
+  <Style Selector="ListBox.settings-navigation-list ListBoxItem:selected /template/ ContentPresenter#ContentHost">
+    <Setter Property="Background" Value="{DynamicResource SettingsSubtleFill}" />
+  </Style>
+
+  <Style Selector="ListBox.settings-navigation-list ListBoxItem:selected /template/ Border#SelectionPill">
+    <Setter Property="Opacity" Value="1" />
+  </Style>
+
+  <Style Selector="ListBox.settings-navigation-list ListBoxItem:focus-visible /template/ ContentPresenter#ContentHost">
+    <Setter Property="BorderBrush" Value="{DynamicResource SystemControlHighlightAccentBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+
+  <Style Selector="Border.settings-card">
+    <Setter Property="Background" Value="{DynamicResource SettingsCardBackground}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource SettingsCardBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="16,12" />
+    <Setter Property="Margin" Value="0,0,0,8" />
+    <Setter Property="BoxShadow" Value="0 1 2 0 #18000000" />
+  </Style>
+
+  <Style Selector="Border.settings-row">
+    <Setter Property="Background" Value="{DynamicResource SettingsCardBackground}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource SettingsCardBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Margin" Value="0,0,0,6" />
+  </Style>
+
+  <Style Selector="Border.settings-row:pointerover">
+    <Setter Property="Background" Value="{DynamicResource SettingsCardHoverBackground}" />
+  </Style>
+
+  <Style Selector="Border.settings-diagnostics">
+    <Setter Property="Background" Value="{DynamicResource SettingsCardBackground}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource SettingsCardBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="12" />
+  </Style>
+
+  <Style Selector="Border.settings-footer">
+    <Setter Property="Background" Value="{DynamicResource SettingsFooterBackground}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource SettingsCardBorderBrush}" />
+    <Setter Property="BorderThickness" Value="0,1,0,0" />
+  </Style>
+
+  <Style Selector="TextBlock.pageTitle">
+    <Setter Property="FontSize" Value="24" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <Style Selector="TextBlock.pageDescription">
+    <Setter Property="Foreground" Value="{DynamicResource SettingsTextSecondary}" />
+  </Style>
+
+  <Style Selector="TextBlock.sectionTitle">
+    <Setter Property="FontSize" Value="14" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Margin" Value="4,24,4,8" />
+  </Style>
+
+  <Style Selector="TextBox.field">
+    <Setter Property="MinHeight" Value="32" />
+    <Setter Property="MaxWidth" Value="460" />
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="Background" Value="{DynamicResource SettingsControlFill}" />
+  </Style>
+
+  <Style Selector="ComboBox.field">
+    <Setter Property="MinHeight" Value="32" />
+    <Setter Property="MaxWidth" Value="460" />
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="Background" Value="{DynamicResource SettingsControlFill}" />
+  </Style>
+
+  <Style Selector="CheckBox.field">
+    <Setter Property="MinHeight" Value="48" />
+    <Setter Property="Padding" Value="14,10" />
+    <Setter Property="Background" Value="{DynamicResource SettingsCardBackground}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource SettingsCardBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+  </Style>
+
+  <Style Selector="CheckBox.field:pointerover">
+    <Setter Property="Background" Value="{DynamicResource SettingsCardHoverBackground}" />
+  </Style>
+
+  <Style Selector="Border.settings-card CheckBox.field">
+    <Setter Property="MinHeight" Value="32" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+
+  <Style Selector="Button.settings-secondary">
+    <Setter Property="MinHeight" Value="32" />
+    <Setter Property="Padding" Value="14,6" />
+  </Style>
+</Styles>
