@@ -29,6 +29,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     private readonly object _outputLock = new();
     private readonly List<byte> _pendingOutput = [];
     private readonly SkiaTerminalRenderer _renderer = new();
+    private readonly TerminalSearchSession _search;
     private IRestartableTerminalConnection? _connection;
     private double _fontSize = 12;
     private double _defaultFontSize = 12;
@@ -48,6 +49,8 @@ public sealed class TermControl : Avalonia.Controls.Control
     public TermControl()
     {
         Engine = new TerminalEngine();
+        _search = new TerminalSearchSession(Engine);
+        _search.Changed += (_, _) => UpdateSearchHighlights();
         Focusable = true;
         ClipToBounds = true;
 
@@ -68,9 +71,14 @@ public sealed class TermControl : Avalonia.Controls.Control
         };
         Engine.TitleChanged += (_, title) => TitleChanged?.Invoke(this, title);
         Engine.ResponseReady += (_, data) => _connection?.Write(data);
+        Engine.ClipboardWriteRequested += (_, text) =>
+            Dispatcher.UIThread.Post(() => _ = SetClipboardFromTerminalAsync(text));
+        Engine.NotificationRequested += (_, notification) =>
+            Dispatcher.UIThread.Post(() => NotificationRequested?.Invoke(this, notification));
     }
 
     public TerminalEngine Engine { get; }
+    public TerminalSearchSession Search => _search;
     public ProfileSettings? Profile { get; private set; }
     public bool IsRunning => _connection?.IsRunning == true;
     public bool HasSelection => _hasSelection;
@@ -88,6 +96,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     public event EventHandler<int>? ProcessExited;
     public event EventHandler<TerminalExitInfo>? SessionExited;
     public event EventHandler? CloseRequested;
+    public event EventHandler<TerminalNotification>? NotificationRequested;
 
     public async Task StartAsync(ProfileSettings profile, int columns, int rows)
     {
@@ -96,6 +105,9 @@ public sealed class TermControl : Avalonia.Controls.Control
         _fontSize = _defaultFontSize;
         ConfigureRenderer(profile);
         Engine.Scheme = profile.ResolveScheme();
+        Engine.ConfigureOptionalFeatures(
+            profile.AllowVtClipboardWrite,
+            profile.AllowOscNotifications);
         Engine.Resize(columns, rows);
         MeasureGlyph();
 
@@ -153,6 +165,7 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
 
         _renderer.Dispose();
+        _search.Dispose();
         _rendererDisposed = true;
     }
 
@@ -283,37 +296,37 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     public bool Find(string query, bool previous = false)
     {
-        if (string.IsNullOrEmpty(query))
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            _search.Clear();
+            _searchHighlights = [];
+            return false;
+        }
+
+        if (!string.Equals(_search.Query, query, StringComparison.Ordinal))
+        {
+            _search.Update(query);
+        }
+        else if (!_search.MoveNext(reverse: previous))
         {
             return false;
         }
 
-        var snapshot = Engine.Buffer.CreateSnapshot();
-        var indexes = previous
-            ? Enumerable.Range(0, snapshot.Lines.Count).Reverse()
-            : Enumerable.Range(0, snapshot.Lines.Count);
-        foreach (var rowIndex in indexes)
+        if (_search.Current is not { } current)
         {
-            var text = string.Concat(snapshot.Lines[rowIndex].Cells.Select(static cell =>
-                cell.IsWideContinuation ? string.Empty : cell.Text));
-            var column = previous
-                ? text.LastIndexOf(query, StringComparison.CurrentCultureIgnoreCase)
-                : text.IndexOf(query, StringComparison.CurrentCultureIgnoreCase);
-            if (column < 0)
-            {
-                continue;
-            }
-
-            _selX1 = Math.Min(column, Engine.Columns - 1);
-            _selY1 = rowIndex;
-            _selX2 = Math.Min(column + query.Length - 1, Engine.Columns - 1);
-            _selY2 = rowIndex;
-            _hasSelection = true;
-            InvalidateVisual();
-            return true;
+            return false;
         }
 
-        return false;
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        var viewportTop = snapshot.HistoryCount - Engine.Buffer.ScrollOffset;
+        _selX1 = current.Start.Column;
+        _selY1 = current.Start.Line - viewportTop;
+        _selX2 = Math.Max(current.Start.Column, current.End.Column - 1);
+        _selY2 = current.End.Line - viewportTop;
+        _hasSelection = true;
+        UpdateSearchHighlights();
+        InvalidateVisual();
+        return true;
     }
 
     public void ResetTerminal()
@@ -566,6 +579,47 @@ public sealed class TermControl : Avalonia.Controls.Control
     {
         _cellWidth = _renderer.CellSize.Width;
         _cellHeight = _renderer.CellSize.Height;
+    }
+
+    private void UpdateSearchHighlights()
+    {
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        var viewportTop = snapshot.HistoryCount - Engine.Buffer.ScrollOffset;
+        var ranges = new List<TerminalCellRange>();
+        foreach (var match in _search.Matches)
+        {
+            for (var line = match.Start.Line; line <= match.End.Line; line++)
+            {
+                var visibleRow = line - viewportTop;
+                if (visibleRow < 0 || visibleRow >= snapshot.Rows)
+                {
+                    continue;
+                }
+
+                var start = line == match.Start.Line ? match.Start.Column : 0;
+                var endExclusive = line == match.End.Line ? match.End.Column : snapshot.Columns;
+                if (endExclusive > start)
+                {
+                    ranges.Add(new TerminalCellRange(
+                        visibleRow,
+                        start,
+                        endExclusive - 1,
+                        0x604080FF));
+                }
+            }
+        }
+
+        _searchHighlights = ranges;
+        InvalidateVisual();
+    }
+
+    private async Task SetClipboardFromTerminalAsync(string text)
+    {
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is not null)
+        {
+            await clipboard.SetTextAsync(text).ConfigureAwait(true);
+        }
     }
 
     private void ConfigureRenderer(ProfileSettings profile)
