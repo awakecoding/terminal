@@ -116,14 +116,17 @@ public sealed class SettingsLoaderTests
 
         var settings = SettingsLoader.Load(Defaults, user);
         var profile = Assert.Single(settings.Profiles);
-        var scheme = Assert.Single(settings.Schemes);
+        var scheme = settings.Schemes.Single(item => item.Name == "Campbell (modified)");
 
         Assert.Equal("PowerShell", profile.Name);
         Assert.Equal("pwsh.exe", profile.Commandline);
         Assert.Equal(@"C:\src", profile.StartingDirectory);
         Assert.Equal(15, profile.FontSize);
+        Assert.Equal("Campbell (modified)", profile.DarkColorScheme);
+        Assert.Equal("Campbell (modified)", profile.LightColorScheme);
         Assert.Equal("#010203", scheme.Background);
         Assert.Equal("#CCCCCC", scheme.Foreground);
+        Assert.Contains(settings.Diagnostics, diagnostic => diagnostic.Code == "ColorSchemeRenamed");
     }
 
     [Fact]

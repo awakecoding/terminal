@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -15,6 +16,9 @@ public sealed record SettingsLayer(string Source, string Json, SettingsLayerKind
 
 public static class SettingsLoader
 {
+    private const string OriginKey = "$terminalOrigin";
+    private const string SourceKey = "$terminalSource";
+
     private static readonly JsonDocumentOptions DocumentOptions = new()
     {
         AllowTrailingCommas = true,
@@ -49,6 +53,7 @@ public static class SettingsLoader
         var diagnostics = new List<SettingsDiagnostic>();
         var pendingFragmentUpdates = new List<JsonObject>();
         var defaults = ParseObject(defaultsJson, "defaults.json", required: true, diagnostics)!;
+        MigrateLegacyAliases(defaults);
         var merged = (JsonObject)defaults.DeepClone();
 
         if (fragments is not null)
@@ -58,6 +63,7 @@ public static class SettingsLoader
                 var fragmentObject = ParseObject(fragment.Json, fragment.Source, required: false, diagnostics);
                 if (fragmentObject is not null)
                 {
+                    MigrateLegacyAliases(fragmentObject);
                     if (fragment.Kind == SettingsLayerKind.Fragment)
                     {
                         PrepareFragment(fragmentObject, FragmentProvider(fragment.Source));
@@ -76,12 +82,16 @@ public static class SettingsLoader
             userDocument = ParseObject(userJson, userSource, required: false, diagnostics);
             if (userDocument is not null)
             {
+                MigrateLegacyAliases(userDocument);
+                TagNamedEntries(userDocument["schemes"] as JsonArray, SettingsOrigin.User, userSource);
+                TagNamedEntries(userDocument["themes"] as JsonArray, SettingsOrigin.User, userSource);
+                HandleUserSchemeCollisions(merged, userDocument, diagnostics);
                 MergeRoot(merged, userDocument);
             }
         }
 
         ApplyFragmentUpdates(merged, pendingFragmentUpdates);
-        var settings = Resolve(merged, userDocument);
+        var settings = Resolve(merged, userDocument, inheritedProfileIds);
         settings.InheritedProfileIds = inheritedProfileIds;
         settings.UserDocument = userDocument is null ? null : (JsonObject)userDocument.DeepClone();
         settings.Diagnostics.AddRange(diagnostics);
@@ -115,43 +125,87 @@ public static class SettingsLoader
         var baseline = settings.ResolvedSnapshot ?? new JsonObject();
         ApplyResolvedChanges(document, baseline, current, settings.InheritedProfileIds);
 
-        return document.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine;
+        return document.ToJsonString(new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        }) + Environment.NewLine;
     }
 
-    private static AppSettings Resolve(JsonObject root, JsonObject? userDocument)
+    private static AppSettings Resolve(
+        JsonObject root,
+        JsonObject? userDocument,
+        IReadOnlySet<string> inheritedProfileIds)
     {
+        var copyFormats = CopyFormats(root);
         var settings = new AppSettings
         {
+            Language = String(root, "language"),
+            InputServiceWarning = Bool(root, "warning.inputService", true),
+            FirstWindowPreference = String(root, "firstWindowPreference") ?? "defaultProfile",
+            DebugFeaturesEnabled = Bool(root, "debugFeatures"),
+            WindowingBehavior = String(root, "windowingBehavior") ?? "useNew",
+            AlwaysShowNotificationIcon = Bool(root, "alwaysShowNotificationIcon"),
+            DisabledProfileSources = StringList(root["disabledProfileSources"]),
+            AllowHeadless = Bool(root, "compatibility.allowHeadless"),
+            EnableColorSelection = Bool(root, "experimental.enableColorSelection"),
             DefaultProfile = String(root, "defaultProfile"),
-            InitialCols = Int(root, "initialCols", 120, minimum: 1),
+            InitialCols = Int(root, "initialCols", 80, minimum: 1),
             InitialRows = Int(root, "initialRows", 30, minimum: 1),
+            InitialPosition = String(root, "initialPosition"),
+            CenterOnLaunch = Bool(root, "centerOnLaunch"),
             LaunchMode = LaunchModeValue(root, "launchMode"),
             AlwaysOnTop = Bool(root, "alwaysOnTop"),
+            AutoHideWindow = Bool(root, "autoHideWindow"),
             AlwaysShowTabs = Bool(root, "alwaysShowTabs", true),
             ShowTabsInTitlebar = Bool(root, "showTabsInTitlebar", true),
             ShowTerminalTitleInTitlebar = Bool(root, "showTerminalTitleInTitlebar", true),
             ShowTabsFullscreen = Bool(root, "showTabsFullscreen"),
             CopyOnSelect = Bool(root, "copyOnSelect"),
-            CopyFormatting = CopyFormatting(root),
+            CopyFormatting = copyFormats != CopyFormat.None,
+            CopyFormatFormats = copyFormats,
             TrimBlockSelection = Bool(root, "trimBlockSelection", true),
             TrimPaste = Bool(root, "trimPaste", true),
             FocusFollowMouse = Bool(root, "focusFollowMouse"),
+            ScrollToZoom = Bool(root, "experimental.scrollToZoom", true),
+            ScrollToChangeOpacity = Bool(root, "experimental.scrollToChangeOpacity", true),
+            GraphicsApi = String(root, "rendering.graphicsAPI") ?? "automatic",
+            DisablePartialInvalidation = Bool(root, "rendering.disablePartialInvalidation"),
+            SoftwareRendering = Bool(root, "rendering.software"),
+            TextMeasurement = String(root, "compatibility.textMeasurement") ?? "graphemes",
+            AmbiguousWidth = String(root, "compatibility.ambiguousWidth") ?? "narrow",
+            DefaultInputScope = String(root, "defaultInputScope") ?? "default",
+            UseBackgroundImageForWindow = Bool(root, "experimental.useBackgroundImageForWindow"),
+            DetectUrls = Bool(root, "experimental.detectURLs", true),
+            NewTabPosition = String(root, "newTabPosition") ?? "afterLastTab",
             SnapToGridOnResize = Bool(root, "snapToGridOnResize", true),
             DisableAnimations = Bool(root, "disableAnimations"),
             MinimizeToNotificationArea = Bool(root, "minimizeToNotificationArea"),
-            AlwaysShowNotificationIcon = Bool(root, "alwaysShowNotificationIcon"),
             ShowAdminShield = Bool(root, "showAdminShield", true),
-            Theme = String(root, "theme") ?? "dark",
+            Theme = ThemePairValue(root["theme"]),
             StartupActions = String(root, "startupActions") ?? string.Empty,
             WordDelimiters = String(root, "wordDelimiters") ?? " /\\()\"'-.,:;<>~!@#$%^&*|+=[]{}~?\u2502",
             TabWidthMode = TabWidthModeValue(root, "tabWidthMode"),
             ConfirmOnClose = ConfirmOnCloseValue(root, "warning.confirmOnClose"),
+            UseAcrylicInTabRow = Bool(root, "useAcrylicInTabRow"),
+            WarnAboutLargePaste = Bool(root, "warning.largePaste", true),
+            WarnAboutMultiLinePaste = String(root, "warning.multiLinePaste") ?? "automatic",
+            TabSwitcherMode = String(root, "tabSwitcherMode") ?? "inOrder",
+            SafeUriSchemes = StringList(root["safeUriSchemes"]),
+            EnableShellCompletionMenu = Bool(root, "experimental.enableShellCompletionMenu"),
+            EnableUnfocusedAcrylic = Bool(root, "compatibility.enableUnfocusedAcrylic", true),
+            NewTabMenu = ResolveNewTabMenu(root["newTabMenu"]),
+            SearchWebDefaultQueryUrl = String(root, "searchWebDefaultQueryUrl")
+                ?? "https://www.bing.com/search?q=%22%s%22",
+            Actions = CloneArray(root["actions"]),
+            Keybindings = CloneArray(root["keybindings"]),
         };
 
         var profilesNode = NormalizeProfiles(root["profiles"]);
         var userProfilesNode = NormalizeProfiles(userDocument?["profiles"]);
         var defaultsNode = profilesNode["defaults"] as JsonObject ?? new JsonObject();
         settings.ProfileDefaults = ResolveProfile(defaultsNode, generateGuid: false);
+        settings.ProfileDefaults.Origin = SettingsOrigin.ProfilesDefaults;
         var inheritableDefaults = (JsonObject)defaultsNode.DeepClone();
         inheritableDefaults.Remove("guid");
         inheritableDefaults.Remove("name");
@@ -169,7 +223,7 @@ public static class SettingsLoader
         if (profilesNode["list"] is JsonArray profiles)
         {
             var profileIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var profileNode in profiles.OfType<JsonObject>())
+            foreach (var profileNode in OrderProfiles(profiles, userProfilesNode["list"] as JsonArray))
             {
                 var effective = (JsonObject)inheritableDefaults.DeepClone();
                 MergeObject(effective, profileNode);
@@ -185,6 +239,11 @@ public static class SettingsLoader
                 }
 
                 var profile = ResolveProfile(effective);
+                var profileId = EffectiveProfileGuid(profileNode);
+                profile.Origin = profileId is not null && inheritedProfileIds.Contains(profileId)
+                    ? Origin(profileNode, SettingsOrigin.Inbox)
+                    : SettingsOrigin.User;
+                profile.SourcePath = String(profileNode, SourceKey);
                 if (profile.Guid is not null && !profileIds.Add(profile.Guid))
                 {
                     settings.Diagnostics.Add(new SettingsDiagnostic(
@@ -194,7 +253,7 @@ public static class SettingsLoader
                     continue;
                 }
 
-                profile.SourceDocument = (JsonObject)profileNode.DeepClone();
+                profile.SourceDocument = CleanSourceDocument(profileNode);
                 settings.Profiles.Add(profile);
             }
         }
@@ -221,6 +280,7 @@ public static class SettingsLoader
     private static ProfileSettings ResolveProfile(JsonObject profile, bool generateGuid = true)
     {
         var font = profile["font"] as JsonObject;
+        var unfocused = profile["unfocusedAppearance"] as JsonObject;
         var name = String(profile, "name") ?? "Unnamed profile";
         var source = String(profile, "source");
         var guid = CanonicalGuid(String(profile, "guid"));
@@ -238,10 +298,12 @@ public static class SettingsLoader
             Commandline = String(profile, "commandline") ?? @"%SystemRoot%\System32\cmd.exe",
             StartingDirectory = String(profile, "startingDirectory") ?? "%USERPROFILE%",
             Icon = String(profile, "icon"),
-            ColorScheme = ColorSchemeName(profile),
-            FontFace = String(font, "face") ?? String(profile, "fontFace") ?? "Cascadia Mono",
-            FontSize = Double(font, "size", Double(profile, "fontSize", 12), minimum: 1),
-            FontWeight = FontWeight(font),
+            ConnectionType = CanonicalGuid(String(profile, "connectionType")),
+            DarkColorScheme = ColorSchemeNames(profile).DarkName ?? "Campbell",
+            LightColorScheme = ColorSchemeNames(profile).LightName
+                ?? ColorSchemeNames(profile).DarkName
+                ?? "Campbell",
+            Font = ResolveFont(profile, font),
             HistorySize = Int(profile, "historySize", 9001, minimum: 0),
             Padding = Padding(profile),
             CursorShape = String(profile, "cursorShape") ?? "bar",
@@ -259,15 +321,36 @@ public static class SettingsLoader
             BackgroundImage = String(profile, "backgroundImage"),
             BackgroundImageOpacity = Double(profile, "backgroundImageOpacity", 1, minimum: 0, maximum: 1),
             BackgroundImageStretchMode = String(profile, "backgroundImageStretchMode") ?? "uniformToFill",
+            BackgroundImageAlignment = String(profile, "backgroundImageAlignment") ?? "center",
+            RetroTerminalEffect = Bool(profile, "experimental.retroTerminalEffect"),
+            PixelShaderPath = Resource(profile, "experimental.pixelShaderPath"),
+            PixelShaderImagePath = Resource(profile, "experimental.pixelShaderImagePath"),
+            IntenseTextStyle = String(profile, "intenseTextStyle") ?? "bright",
+            AdjustIndistinguishableColors =
+                String(profile, "adjustIndistinguishableColors") ?? "automatic",
+            UnfocusedAppearance = unfocused is null ? null : ResolveAppearance(unfocused, profile),
             SnapOnInput = Bool(profile, "snapOnInput", true),
             AltGrAliasing = Bool(profile, "altGrAliasing", true),
+            AnswerbackMessage = String(profile, "answerbackMessage"),
+            ScrollbarState = String(profile, "scrollbarState") ?? "visible",
+            AntialiasingMode = String(profile, "antialiasingMode") ?? "grayscale",
+            BellStyle = BellStyleValue(profile["bellStyle"]),
+            BellSound = Resources(profile["bellSound"]),
+            RightClickContextMenu = Bool(profile, "rightClickContextMenu"),
             Elevate = Bool(profile, "elevate"),
             AutoMarkPrompts = Bool(profile, "autoMarkPrompts", true),
             ShowMarksOnScrollbar = Bool(profile, "showMarksOnScrollbar"),
+            RepositionCursorWithMouse = Bool(profile, "experimental.repositionCursorWithMouse"),
             ReloadEnvironmentVariables = Bool(profile, "compatibility.reloadEnvironmentVariables", true),
+            RainbowSuggestions = Bool(profile, "experimental.rainbowSuggestions"),
+            ForceVtInput = Bool(profile, "compatibility.input.forceVT"),
             AllowKittyKeyboardMode = Bool(profile, "compatibility.kittyKeyboardMode", true),
+            AllowVtChecksumReport = Bool(profile, "compatibility.allowDECRQCRA"),
             AllowVtClipboardWrite = Bool(profile, "compatibility.allowOSC52", true),
             AllowOscNotifications = Bool(profile, "compatibility.allowOSC777"),
+            AllowKeypadMode = Bool(profile, "compatibility.allowDECNKM"),
+            DragDropDelimiter = String(profile, "dragDropDelimiter") ?? " ",
+            PathTranslationStyle = String(profile, "pathTranslationStyle") ?? "none",
             Environment = StringMap(profile["environment"]),
         };
     }
@@ -275,6 +358,8 @@ public static class SettingsLoader
     private static SchemeSettings ResolveScheme(JsonObject scheme) => new()
     {
         Name = String(scheme, "name") ?? "Unnamed scheme",
+        Origin = Origin(scheme, SettingsOrigin.Inbox),
+        SourcePath = String(scheme, SourceKey),
         Foreground = String(scheme, "foreground") ?? "#CCCCCC",
         Background = String(scheme, "background") ?? "#0C0C0C",
         CursorColor = String(scheme, "cursorColor") ?? "#FFFFFF",
@@ -295,20 +380,46 @@ public static class SettingsLoader
         BrightPurple = String(scheme, "brightPurple") ?? "#B4009E",
         BrightCyan = String(scheme, "brightCyan") ?? "#61D6D6",
         BrightWhite = String(scheme, "brightWhite") ?? "#F2F2F2",
-        SourceDocument = (JsonObject)scheme.DeepClone(),
+        SourceDocument = CleanSourceDocument(scheme),
     };
 
     private static ThemeSettings ResolveTheme(JsonObject theme)
     {
         var window = theme["window"] as JsonObject;
+        var settings = theme["settings"] as JsonObject;
         var tabRow = theme["tabRow"] as JsonObject;
+        var tab = theme["tab"] as JsonObject;
         return new ThemeSettings
         {
             Name = String(theme, "name") ?? "unnamed",
-            WindowApplicationTheme = String(window, "applicationTheme"),
-            UseMica = NullableBool(window, "useMica"),
-            TabRowBackground = String(tabRow, "background"),
-            SourceDocument = (JsonObject)theme.DeepClone(),
+            Origin = Origin(theme, SettingsOrigin.Inbox),
+            SourcePath = String(theme, SourceKey),
+            Window = window is null ? null : new WindowThemeSettings
+            {
+                ApplicationTheme = String(window, "applicationTheme") ?? "system",
+                Frame = ThemeColorValue(window["frame"]),
+                UnfocusedFrame = ThemeColorValue(window["unfocusedFrame"]),
+                RainbowFrame = Bool(window, "experimental.rainbowFrame"),
+                UseMica = Bool(window, "useMica"),
+                ShowWorkspacesButton = Bool(window, "showWorkspacesButton", true),
+            },
+            Settings = settings is null ? null : new SettingsThemeSettings
+            {
+                Theme = String(settings, "theme") ?? "system",
+            },
+            TabRow = tabRow is null ? null : new TabRowThemeSettings
+            {
+                Background = ThemeColorValue(tabRow["background"]),
+                UnfocusedBackground = ThemeColorValue(tabRow["unfocusedBackground"]),
+            },
+            Tab = tab is null ? null : new TabThemeSettings
+            {
+                Background = ThemeColorValue(tab["background"]),
+                UnfocusedBackground = ThemeColorValue(tab["unfocusedBackground"]),
+                IconStyle = String(tab, "iconStyle") ?? "default",
+                ShowCloseButton = String(tab, "showCloseButton") ?? "always",
+            },
+            SourceDocument = CleanSourceDocument(theme),
         };
     }
 
@@ -346,16 +457,68 @@ public static class SettingsLoader
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var profile in settings.Profiles)
         {
-            if (!schemeNames.Contains(profile.ColorScheme))
+            if (!schemeNames.Contains(profile.DarkColorScheme) ||
+                !schemeNames.Contains(profile.LightColorScheme))
             {
                 settings.Diagnostics.Add(new SettingsDiagnostic(
                     SettingsDiagnosticSeverity.Warning,
                     "UnknownColorScheme",
-                    $"Profile '{profile.Name}' references unknown color scheme '{profile.ColorScheme}'."));
-                profile.ColorScheme = "Campbell";
+                    $"Profile '{profile.Name}' references an unknown color scheme."));
+                if (!schemeNames.Contains(profile.DarkColorScheme))
+                {
+                    profile.DarkColorScheme = "Campbell";
+                }
+                if (!schemeNames.Contains(profile.LightColorScheme))
+                {
+                    profile.LightColorScheme = "Campbell";
+                }
+            }
+
+            foreach (var name in profile.Environment.Keys.Where(
+                static name => string.IsNullOrWhiteSpace(name) || name.Contains('=')))
+            {
+                settings.Diagnostics.Add(new SettingsDiagnostic(
+                    SettingsDiagnosticSeverity.Warning,
+                    "InvalidEnvironmentVariable",
+                    $"Profile '{profile.Name}' contains invalid environment variable name '{name}'."));
             }
         }
+
+        var themeNames = settings.Themes
+            .Select(static theme => theme.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missingDarkTheme = themeNames.Count > 0 && !themeNames.Contains(settings.Theme.DarkName);
+        var missingLightTheme = themeNames.Count > 0 && !themeNames.Contains(settings.Theme.LightName);
+        if (missingDarkTheme || missingLightTheme)
+        {
+            settings.Diagnostics.Add(new SettingsDiagnostic(
+                SettingsDiagnosticSeverity.Warning,
+                "UnknownTheme",
+                $"Theme '{settings.Theme}' was not found; the system theme will be used."));
+            if (missingDarkTheme)
+            {
+                settings.Theme.DarkName = "system";
+            }
+            if (missingLightTheme)
+            {
+                settings.Theme.LightName = "system";
+            }
+        }
+
+        if (CountMenuEntries(settings.NewTabMenu, NewTabMenuEntryType.RemainingProfiles) > 1)
+        {
+            settings.Diagnostics.Add(new SettingsDiagnostic(
+                SettingsDiagnosticSeverity.Warning,
+                "DuplicateRemainingProfilesEntry",
+                "Only one new-tab menu entry may have type 'remainingProfiles'."));
+        }
     }
+
+    private static int CountMenuEntries(
+        IEnumerable<NewTabMenuEntry> entries,
+        NewTabMenuEntryType type) =>
+        entries.Sum(entry =>
+            (entry.Type == type ? 1 : 0) + CountMenuEntries(entry.Entries, type));
 
     private static JsonObject? ParseObject(
         string json,
@@ -407,6 +570,13 @@ public static class SettingsLoader
     {
         foreach (var pair in layer)
         {
+            if (pair.Value is null)
+            {
+                // An ordinary null clears the setting at this layer and resumes
+                // inheritance from the already-merged parent layer.
+                continue;
+            }
+
             if (pair.Key == "profiles")
             {
                 MergeProfiles(target, pair.Value);
@@ -518,6 +688,19 @@ public static class SettingsLoader
             {
                 target.Add(item.DeepClone());
             }
+            else if (key == "themes")
+            {
+                // Themes are atomic values, not inheritable graphs. Built-in
+                // names are reserved and cannot be replaced by the user layer.
+                if (Origin(item, SettingsOrigin.None) == SettingsOrigin.User &&
+                    Origin(existing, SettingsOrigin.Inbox) != SettingsOrigin.User)
+                {
+                    continue;
+                }
+
+                var index = target.IndexOf(existing);
+                target[index] = item.DeepClone();
+            }
             else
             {
                 MergeObject(existing, item);
@@ -525,13 +708,28 @@ public static class SettingsLoader
         }
     }
 
-    private static void MergeObject(JsonObject target, JsonObject layer)
+    private static void MergeObject(
+        JsonObject target,
+        JsonObject layer,
+        bool preserveNullValues = false)
     {
         foreach (var pair in layer)
         {
+            if (pair.Value is null)
+            {
+                if (preserveNullValues || IsExplicitNullableKey(pair.Key))
+                {
+                    target[pair.Key] = null;
+                }
+                continue;
+            }
+
             if (pair.Value is JsonObject layerObject && target[pair.Key] is JsonObject targetObject)
             {
-                MergeObject(targetObject, layerObject);
+                MergeObject(
+                    targetObject,
+                    layerObject,
+                    preserveNullValues: string.Equals(pair.Key, "environment", StringComparison.Ordinal));
             }
             else
             {
@@ -539,6 +737,16 @@ public static class SettingsLoader
             }
         }
     }
+
+    private static bool IsExplicitNullableKey(string key) => key is
+        "tabColor" or
+        "foreground" or
+        "background" or
+        "selectionBackground" or
+        "cursorColor" or
+        "frame" or
+        "unfocusedFrame" or
+        "unfocusedBackground";
 
     private static bool ProfilesMatch(JsonObject left, JsonObject right)
     {
@@ -601,6 +809,8 @@ public static class SettingsLoader
 
     private static void PrepareFragment(JsonObject fragment, string provider)
     {
+        TagNamedEntries(fragment["schemes"] as JsonArray, SettingsOrigin.Fragment, provider);
+        TagNamedEntries(fragment["themes"] as JsonArray, SettingsOrigin.Fragment, provider);
         var profiles = NormalizeProfiles(fragment["profiles"]);
         fragment["profiles"] = profiles;
         if (profiles["list"] is not JsonArray list)
@@ -614,6 +824,26 @@ public static class SettingsLoader
             {
                 profile["source"] = provider;
             }
+
+            profile[OriginKey] = SettingsOrigin.Fragment.ToString();
+            profile[SourceKey] = provider;
+        }
+    }
+
+    private static void TagNamedEntries(
+        JsonArray? entries,
+        SettingsOrigin origin,
+        string source)
+    {
+        if (entries is null)
+        {
+            return;
+        }
+
+        foreach (var entry in entries.OfType<JsonObject>())
+        {
+            entry[OriginKey] = origin.ToString();
+            entry[SourceKey] = source;
         }
     }
 
@@ -698,33 +928,69 @@ public static class SettingsLoader
 
     private static JsonObject SerializeResolvedSettings(AppSettings settings) => new()
     {
+        ["language"] = settings.Language,
+        ["warning.inputService"] = settings.InputServiceWarning,
+        ["firstWindowPreference"] = settings.FirstWindowPreference,
+        ["debugFeatures"] = settings.DebugFeaturesEnabled,
+        ["windowingBehavior"] = settings.WindowingBehavior,
+        ["alwaysShowNotificationIcon"] = settings.AlwaysShowNotificationIcon,
+        ["disabledProfileSources"] = StringArray(settings.DisabledProfileSources),
+        ["compatibility.allowHeadless"] = settings.AllowHeadless,
+        ["experimental.enableColorSelection"] = settings.EnableColorSelection,
         ["defaultProfile"] = settings.DefaultProfile,
         ["initialCols"] = settings.InitialCols,
         ["initialRows"] = settings.InitialRows,
+        ["initialPosition"] = settings.InitialPosition,
+        ["centerOnLaunch"] = settings.CenterOnLaunch,
         ["launchMode"] = LaunchModeString(settings.LaunchMode),
         ["alwaysOnTop"] = settings.AlwaysOnTop,
+        ["autoHideWindow"] = settings.AutoHideWindow,
         ["alwaysShowTabs"] = settings.AlwaysShowTabs,
         ["showTabsInTitlebar"] = settings.ShowTabsInTitlebar,
         ["showTerminalTitleInTitlebar"] = settings.ShowTerminalTitleInTitlebar,
         ["showTabsFullscreen"] = settings.ShowTabsFullscreen,
         ["copyOnSelect"] = settings.CopyOnSelect,
-        ["copyFormatting"] = settings.CopyFormatting,
+        ["copyFormatting"] = CopyFormatsNode(
+            settings.CopyFormatting
+                ? settings.CopyFormatFormats == CopyFormat.None ? CopyFormat.All : settings.CopyFormatFormats
+                : CopyFormat.None),
         ["trimBlockSelection"] = settings.TrimBlockSelection,
         ["trimPaste"] = settings.TrimPaste,
         ["focusFollowMouse"] = settings.FocusFollowMouse,
+        ["experimental.scrollToZoom"] = settings.ScrollToZoom,
+        ["experimental.scrollToChangeOpacity"] = settings.ScrollToChangeOpacity,
+        ["rendering.graphicsAPI"] = settings.GraphicsApi,
+        ["rendering.disablePartialInvalidation"] = settings.DisablePartialInvalidation,
+        ["rendering.software"] = settings.SoftwareRendering,
+        ["compatibility.textMeasurement"] = settings.TextMeasurement,
+        ["compatibility.ambiguousWidth"] = settings.AmbiguousWidth,
+        ["defaultInputScope"] = settings.DefaultInputScope,
+        ["experimental.useBackgroundImageForWindow"] = settings.UseBackgroundImageForWindow,
+        ["experimental.detectURLs"] = settings.DetectUrls,
+        ["newTabPosition"] = settings.NewTabPosition,
         ["snapToGridOnResize"] = settings.SnapToGridOnResize,
         ["disableAnimations"] = settings.DisableAnimations,
         ["minimizeToNotificationArea"] = settings.MinimizeToNotificationArea,
-        ["alwaysShowNotificationIcon"] = settings.AlwaysShowNotificationIcon,
         ["showAdminShield"] = settings.ShowAdminShield,
-        ["theme"] = settings.Theme,
+        ["theme"] = ThemePairNode(settings.Theme),
         ["startupActions"] = settings.StartupActions,
         ["wordDelimiters"] = settings.WordDelimiters,
         ["tabWidthMode"] = TabWidthModeString(settings.TabWidthMode),
         ["warning.confirmOnClose"] = ConfirmOnCloseString(settings.ConfirmOnClose),
+        ["useAcrylicInTabRow"] = settings.UseAcrylicInTabRow,
+        ["warning.largePaste"] = settings.WarnAboutLargePaste,
+        ["warning.multiLinePaste"] = settings.WarnAboutMultiLinePaste,
+        ["tabSwitcherMode"] = settings.TabSwitcherMode,
+        ["safeUriSchemes"] = StringArray(settings.SafeUriSchemes),
+        ["experimental.enableShellCompletionMenu"] = settings.EnableShellCompletionMenu,
+        ["compatibility.enableUnfocusedAcrylic"] = settings.EnableUnfocusedAcrylic,
+        ["newTabMenu"] = SerializeNewTabMenu(settings.NewTabMenu),
+        ["searchWebDefaultQueryUrl"] = settings.SearchWebDefaultQueryUrl,
         ["profiles"] = SerializeProfiles(settings),
         ["schemes"] = new JsonArray(settings.Schemes.Select(SerializeScheme).ToArray()),
         ["themes"] = new JsonArray(settings.Themes.Select(SerializeTheme).ToArray()),
+        ["actions"] = settings.Actions.DeepClone(),
+        ["keybindings"] = settings.Keybindings.DeepClone(),
     };
 
     [RequiresDynamicCode("Calls Microsoft.Terminal.Settings.SettingsLoader.ApplyProfileChanges(JsonObject, JsonObject, JsonObject)")]
@@ -971,12 +1237,19 @@ public static class SettingsLoader
 
         result["startingDirectory"] = profile.StartingDirectory;
         result["icon"] = profile.Icon;
-        result["colorScheme"] = profile.ColorScheme;
+        result["connectionType"] = profile.ConnectionType;
+        result["colorScheme"] = ColorSchemeNode(profile.DarkColorScheme, profile.LightColorScheme);
         result["font"] = new JsonObject
         {
             ["face"] = profile.FontFace,
             ["size"] = profile.FontSize,
             ["weight"] = profile.FontWeight,
+            ["axes"] = DoubleMap(profile.Font.Axes),
+            ["features"] = DoubleMap(profile.Font.Features),
+            ["builtinGlyphs"] = profile.Font.BuiltinGlyphs,
+            ["colorGlyphs"] = profile.Font.ColorGlyphs,
+            ["cellWidth"] = profile.Font.CellWidth,
+            ["cellHeight"] = profile.Font.CellHeight,
         };
         result["historySize"] = profile.HistorySize;
         result["padding"] = profile.Padding;
@@ -995,15 +1268,37 @@ public static class SettingsLoader
         result["backgroundImage"] = profile.BackgroundImage;
         result["backgroundImageOpacity"] = profile.BackgroundImageOpacity;
         result["backgroundImageStretchMode"] = profile.BackgroundImageStretchMode;
+        result["backgroundImageAlignment"] = profile.BackgroundImageAlignment;
+        result["experimental.retroTerminalEffect"] = profile.RetroTerminalEffect;
+        result["experimental.pixelShaderPath"] = ResourceNode(profile.PixelShaderPath);
+        result["experimental.pixelShaderImagePath"] = ResourceNode(profile.PixelShaderImagePath);
+        result["intenseTextStyle"] = profile.IntenseTextStyle;
+        result["adjustIndistinguishableColors"] = profile.AdjustIndistinguishableColors;
+        result["unfocusedAppearance"] = profile.UnfocusedAppearance is null
+            ? null
+            : SerializeAppearance(profile.UnfocusedAppearance);
         result["snapOnInput"] = profile.SnapOnInput;
         result["altGrAliasing"] = profile.AltGrAliasing;
+        result["answerbackMessage"] = profile.AnswerbackMessage;
+        result["scrollbarState"] = profile.ScrollbarState;
+        result["antialiasingMode"] = profile.AntialiasingMode;
+        result["bellStyle"] = BellStyleNode(profile.BellStyle);
+        result["bellSound"] = new JsonArray(profile.BellSound.Select(ResourceNode).ToArray());
+        result["rightClickContextMenu"] = profile.RightClickContextMenu;
         result["elevate"] = profile.Elevate;
         result["autoMarkPrompts"] = profile.AutoMarkPrompts;
         result["showMarksOnScrollbar"] = profile.ShowMarksOnScrollbar;
+        result["experimental.repositionCursorWithMouse"] = profile.RepositionCursorWithMouse;
         result["compatibility.reloadEnvironmentVariables"] = profile.ReloadEnvironmentVariables;
+        result["experimental.rainbowSuggestions"] = profile.RainbowSuggestions;
+        result["compatibility.input.forceVT"] = profile.ForceVtInput;
         result["compatibility.kittyKeyboardMode"] = profile.AllowKittyKeyboardMode;
+        result["compatibility.allowDECRQCRA"] = profile.AllowVtChecksumReport;
         result["compatibility.allowOSC52"] = profile.AllowVtClipboardWrite;
         result["compatibility.allowOSC777"] = profile.AllowOscNotifications;
+        result["compatibility.allowDECNKM"] = profile.AllowKeypadMode;
+        result["dragDropDelimiter"] = profile.DragDropDelimiter;
+        result["pathTranslationStyle"] = profile.PathTranslationStyle;
         result["environment"] = new JsonObject(profile.Environment
             .Select(static pair => KeyValuePair.Create<string, JsonNode?>(
                 pair.Key,
@@ -1016,6 +1311,8 @@ public static class SettingsLoader
         var result = scheme.SourceDocument is null
             ? new JsonObject()
             : (JsonObject)scheme.SourceDocument.DeepClone();
+        result.Remove(OriginKey);
+        result.Remove(SourceKey);
         result["name"] = scheme.Name;
         result["foreground"] = scheme.Foreground;
         result["background"] = scheme.Background;
@@ -1046,17 +1343,775 @@ public static class SettingsLoader
             ? new JsonObject()
             : (JsonObject)theme.SourceDocument.DeepClone();
         result["name"] = theme.Name;
+        result.Remove(OriginKey);
+        result.Remove(SourceKey);
 
-        var window = result["window"] as JsonObject ?? new JsonObject();
-        result["window"] = window;
-        window["applicationTheme"] = theme.WindowApplicationTheme;
-        window["useMica"] = theme.UseMica;
-
-        var tabRow = result["tabRow"] as JsonObject ?? new JsonObject();
-        result["tabRow"] = tabRow;
-        tabRow["background"] = theme.TabRowBackground;
+        result["window"] = theme.Window is null ? null : new JsonObject
+        {
+            ["applicationTheme"] = theme.Window.ApplicationTheme,
+            ["frame"] = ThemeColorNode(theme.Window.Frame),
+            ["unfocusedFrame"] = ThemeColorNode(theme.Window.UnfocusedFrame),
+            ["experimental.rainbowFrame"] = theme.Window.RainbowFrame,
+            ["useMica"] = theme.Window.UseMica,
+            ["showWorkspacesButton"] = theme.Window.ShowWorkspacesButton,
+        };
+        result["settings"] = theme.Settings is null ? null : new JsonObject
+        {
+            ["theme"] = theme.Settings.Theme,
+        };
+        result["tabRow"] = theme.TabRow is null ? null : new JsonObject
+        {
+            ["background"] = ThemeColorNode(theme.TabRow.Background),
+            ["unfocusedBackground"] = ThemeColorNode(theme.TabRow.UnfocusedBackground),
+        };
+        result["tab"] = theme.Tab is null ? null : new JsonObject
+        {
+            ["background"] = ThemeColorNode(theme.Tab.Background),
+            ["unfocusedBackground"] = ThemeColorNode(theme.Tab.UnfocusedBackground),
+            ["iconStyle"] = theme.Tab.IconStyle,
+            ["showCloseButton"] = theme.Tab.ShowCloseButton,
+        };
         return result;
     }
+
+    private static FontSettings ResolveFont(JsonObject profile, JsonObject? font)
+    {
+        if (font is null)
+        {
+            return new FontSettings
+            {
+                Face = String(profile, "fontFace") ?? "Cascadia Mono",
+                Size = Double(profile, "fontSize", 12, minimum: 1),
+                Weight = LegacyFontWeight(profile),
+            };
+        }
+
+        return new FontSettings
+        {
+            Face = font.ContainsKey("face")
+                ? String(font, "face") ?? "Cascadia Mono"
+                : String(profile, "fontFace") ?? "Cascadia Mono",
+            Size = font.ContainsKey("size")
+                ? Double(font, "size", 12, minimum: 1)
+                : Double(profile, "fontSize", 12, minimum: 1),
+            Weight = font.ContainsKey("weight") ? FontWeight(font) : LegacyFontWeight(profile),
+            Axes = DoubleMap(font["axes"]),
+            Features = DoubleMap(font["features"]),
+            BuiltinGlyphs = Bool(font, "builtinGlyphs", true),
+            ColorGlyphs = Bool(font, "colorGlyphs", true),
+            CellWidth = String(font, "cellWidth"),
+            CellHeight = String(font, "cellHeight"),
+        };
+    }
+
+    private static AppearanceSettings ResolveAppearance(JsonObject appearance, JsonObject focused)
+    {
+        var appearanceSchemes = ColorSchemeNames(appearance);
+        var focusedSchemes = ColorSchemeNames(focused);
+        return new AppearanceSettings
+        {
+            CursorShape = String(appearance, "cursorShape") ?? String(focused, "cursorShape") ?? "bar",
+            CursorHeight = Int(
+                appearance,
+                "cursorHeight",
+                Int(focused, "cursorHeight", 25, minimum: 1, maximum: 100),
+                minimum: 1,
+                maximum: 100),
+            Foreground = InheritedNullableString(appearance, focused, "foreground"),
+            Background = InheritedNullableString(appearance, focused, "background"),
+            SelectionBackground = InheritedNullableString(
+                appearance,
+                focused,
+                "selectionBackground"),
+            CursorColor = InheritedNullableString(appearance, focused, "cursorColor"),
+            BackgroundImage =
+                Resource(appearance, "backgroundImage") ?? Resource(focused, "backgroundImage"),
+            BackgroundImageOpacity = Double(
+                appearance,
+                "backgroundImageOpacity",
+                Double(focused, "backgroundImageOpacity", 1, minimum: 0, maximum: 1),
+                minimum: 0,
+                maximum: 1),
+            BackgroundImageStretchMode =
+                String(appearance, "backgroundImageStretchMode")
+                ?? String(focused, "backgroundImageStretchMode")
+                ?? "uniformToFill",
+            BackgroundImageAlignment =
+                String(appearance, "backgroundImageAlignment")
+                ?? String(focused, "backgroundImageAlignment")
+                ?? "center",
+            RetroTerminalEffect = Bool(
+                appearance,
+                "experimental.retroTerminalEffect",
+                Bool(focused, "experimental.retroTerminalEffect")),
+            PixelShaderPath =
+                Resource(appearance, "experimental.pixelShaderPath")
+                ?? Resource(focused, "experimental.pixelShaderPath"),
+            PixelShaderImagePath =
+                Resource(appearance, "experimental.pixelShaderImagePath")
+                ?? Resource(focused, "experimental.pixelShaderImagePath"),
+            IntenseTextStyle =
+                String(appearance, "intenseTextStyle")
+                ?? String(focused, "intenseTextStyle")
+                ?? "bright",
+            AdjustIndistinguishableColors =
+                String(appearance, "adjustIndistinguishableColors")
+                ?? String(focused, "adjustIndistinguishableColors")
+                ?? "automatic",
+            UseAcrylic = Bool(appearance, "useAcrylic", Bool(focused, "useAcrylic")),
+            Opacity = Int(
+                appearance,
+                "opacity",
+                Int(focused, "opacity", AcrylicOpacity(focused), minimum: 0, maximum: 100),
+                minimum: 0,
+                maximum: 100),
+            DarkColorScheme =
+                appearanceSchemes.DarkName ?? focusedSchemes.DarkName ?? "Campbell",
+            LightColorScheme =
+                appearanceSchemes.LightName ?? focusedSchemes.LightName ?? "Campbell",
+        };
+    }
+
+    private static string? InheritedNullableString(
+        JsonObject appearance,
+        JsonObject focused,
+        string key) =>
+        appearance.ContainsKey(key) ? String(appearance, key) : String(focused, key);
+
+    private static JsonObject SerializeAppearance(AppearanceSettings appearance) => new()
+    {
+        ["cursorShape"] = appearance.CursorShape,
+        ["cursorHeight"] = appearance.CursorHeight,
+        ["foreground"] = appearance.Foreground,
+        ["background"] = appearance.Background,
+        ["selectionBackground"] = appearance.SelectionBackground,
+        ["cursorColor"] = appearance.CursorColor,
+        ["backgroundImage"] = ResourceNode(appearance.BackgroundImage),
+        ["backgroundImageOpacity"] = appearance.BackgroundImageOpacity,
+        ["backgroundImageStretchMode"] = appearance.BackgroundImageStretchMode,
+        ["backgroundImageAlignment"] = appearance.BackgroundImageAlignment,
+        ["experimental.retroTerminalEffect"] = appearance.RetroTerminalEffect,
+        ["experimental.pixelShaderPath"] = ResourceNode(appearance.PixelShaderPath),
+        ["experimental.pixelShaderImagePath"] = ResourceNode(appearance.PixelShaderImagePath),
+        ["intenseTextStyle"] = appearance.IntenseTextStyle,
+        ["adjustIndistinguishableColors"] = appearance.AdjustIndistinguishableColors,
+        ["useAcrylic"] = appearance.UseAcrylic,
+        ["opacity"] = appearance.Opacity,
+        ["colorScheme"] = ColorSchemeNode(appearance.DarkColorScheme, appearance.LightColorScheme),
+    };
+
+    private static List<NewTabMenuEntry> ResolveNewTabMenu(
+        JsonNode? node,
+        bool useDefaultWhenAbsent = true)
+    {
+        if (node is not JsonArray array)
+        {
+            return useDefaultWhenAbsent
+                ? [new NewTabMenuEntry { Type = NewTabMenuEntryType.RemainingProfiles }]
+                : [];
+        }
+
+        return array
+            .OfType<JsonObject>()
+            .Select(ResolveNewTabMenuEntry)
+            .Where(static entry => entry is not null)
+            .Cast<NewTabMenuEntry>()
+            .ToList();
+    }
+
+    private static NewTabMenuEntry? ResolveNewTabMenuEntry(JsonObject source)
+    {
+        var type = String(source, "type")?.ToLowerInvariant() switch
+        {
+            "profile" => NewTabMenuEntryType.Profile,
+            "separator" => NewTabMenuEntryType.Separator,
+            "folder" => NewTabMenuEntryType.Folder,
+            "remainingprofiles" => NewTabMenuEntryType.RemainingProfiles,
+            "matchprofiles" => NewTabMenuEntryType.MatchProfiles,
+            "action" => NewTabMenuEntryType.Action,
+            _ => NewTabMenuEntryType.Invalid,
+        };
+        if (type == NewTabMenuEntryType.Invalid)
+        {
+            return null;
+        }
+
+        return new NewTabMenuEntry
+        {
+            Type = type,
+            Profile = String(source, "profile"),
+            ActionId = String(source, "action"),
+            Name = String(source, "name"),
+            Icon = Resource(source, "icon"),
+            Inlining = String(source, "inline") ?? "never",
+            AllowEmpty = Bool(source, "allowEmpty"),
+            MatchName = String(source, "name"),
+            MatchCommandline = String(source, "commandline"),
+            MatchSource = String(source, "source"),
+            Entries = ResolveNewTabMenu(source["entries"], useDefaultWhenAbsent: false),
+            SourceDocument = (JsonObject)source.DeepClone(),
+        };
+    }
+
+    private static JsonArray SerializeNewTabMenu(IEnumerable<NewTabMenuEntry> entries) =>
+        new(entries.Select(SerializeNewTabMenuEntry).ToArray());
+
+    private static JsonObject SerializeNewTabMenuEntry(NewTabMenuEntry entry)
+    {
+        var result = entry.SourceDocument is null
+            ? new JsonObject()
+            : (JsonObject)entry.SourceDocument.DeepClone();
+        result["type"] = entry.Type switch
+        {
+            NewTabMenuEntryType.Profile => "profile",
+            NewTabMenuEntryType.Separator => "separator",
+            NewTabMenuEntryType.Folder => "folder",
+            NewTabMenuEntryType.RemainingProfiles => "remainingProfiles",
+            NewTabMenuEntryType.MatchProfiles => "matchProfiles",
+            NewTabMenuEntryType.Action => "action",
+            _ => "invalid",
+        };
+
+        if (entry.Type == NewTabMenuEntryType.Profile)
+        {
+            result["profile"] = entry.Profile;
+        }
+        else if (entry.Type == NewTabMenuEntryType.Action)
+        {
+            result["action"] = entry.ActionId;
+        }
+        else if (entry.Type == NewTabMenuEntryType.Folder)
+        {
+            result["name"] = entry.Name;
+            result["icon"] = ResourceNode(entry.Icon);
+            result["inline"] = entry.Inlining;
+            result["allowEmpty"] = entry.AllowEmpty;
+            result["entries"] = SerializeNewTabMenu(entry.Entries);
+        }
+        else if (entry.Type == NewTabMenuEntryType.MatchProfiles)
+        {
+            result["name"] = entry.MatchName;
+            result["commandline"] = entry.MatchCommandline;
+            result["source"] = entry.MatchSource;
+        }
+
+        return result;
+    }
+
+    private static ThemePair ThemePairValue(JsonNode? node)
+    {
+        if (node is JsonValue value && value.TryGetValue<string>(out var name))
+        {
+            return new ThemePair { DarkName = name, LightName = name };
+        }
+
+        if (node is JsonObject pair)
+        {
+            return new ThemePair
+            {
+                DarkName = String(pair, "dark") ?? "system",
+                LightName = String(pair, "light") ?? "system",
+            };
+        }
+
+        return new ThemePair();
+    }
+
+    private static JsonNode ThemePairNode(ThemePair pair) =>
+        string.Equals(pair.DarkName, pair.LightName, StringComparison.Ordinal)
+            ? JsonValue.Create(pair.DarkName)
+            : new JsonObject
+            {
+                ["dark"] = pair.DarkName,
+                ["light"] = pair.LightName,
+            };
+
+    private static (string? DarkName, string? LightName) ColorSchemeNames(JsonObject profile)
+    {
+        if (profile["colorScheme"] is JsonValue value && value.TryGetValue<string>(out var name))
+        {
+            return (name, name);
+        }
+
+        if (profile["colorScheme"] is JsonObject pair)
+        {
+            return (String(pair, "dark"), String(pair, "light"));
+        }
+
+        return (null, null);
+    }
+
+    private static JsonNode ColorSchemeNode(string dark, string light) =>
+        string.Equals(dark, light, StringComparison.Ordinal)
+            ? JsonValue.Create(dark)
+            : new JsonObject { ["dark"] = dark, ["light"] = light };
+
+    private static ThemeColor? ThemeColorValue(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<string>(out var text)
+            ? new ThemeColor { Value = text }
+            : null;
+
+    private static JsonNode? ThemeColorNode(ThemeColor? color) =>
+        color is null ? null : JsonValue.Create(color.Value);
+
+    private static MediaResource? Resource(JsonObject root, string key) =>
+        root.TryGetPropertyValue(key, out var node)
+            ? new MediaResource { Path = node is null ? null : StringValue(node) }
+            : null;
+
+    private static List<MediaResource> Resources(JsonNode? node)
+    {
+        if (node is JsonValue value && value.TryGetValue<string>(out var path))
+        {
+            return [new MediaResource { Path = path }];
+        }
+
+        return node is JsonArray array
+            ? array.Select(static item => new MediaResource
+                {
+                    Path = item is null ? null : StringValue(item),
+                })
+                .ToList()
+            : [];
+    }
+
+    private static JsonNode? ResourceNode(MediaResource? resource) =>
+        resource?.Path is null ? null : JsonValue.Create(resource.Path);
+
+    private static BellStyle BellStyleValue(JsonNode? node)
+    {
+        if (node is JsonValue value)
+        {
+            if (value.TryGetValue<string>(out var single))
+            {
+                return BellStyleName(single);
+            }
+
+            if (value.TryGetValue<bool>(out var enabled))
+            {
+                return enabled ? BellStyle.Audible : BellStyle.None;
+            }
+        }
+
+        if (node is not JsonArray array)
+        {
+            return BellStyle.Audible;
+        }
+
+        var result = BellStyle.None;
+        foreach (var name in array.Select(static item => item is null ? null : StringValue(item)))
+        {
+            result |= BellStyleName(name);
+        }
+
+        return result;
+    }
+
+    private static BellStyle BellStyleName(string? name) => name?.ToLowerInvariant() switch
+    {
+        "audible" => BellStyle.Audible,
+        "window" => BellStyle.Window,
+        "taskbar" => BellStyle.Taskbar,
+        "notification" => BellStyle.Notification,
+        "all" => BellStyle.All,
+        _ => BellStyle.None,
+    };
+
+    private static JsonNode BellStyleNode(BellStyle style)
+    {
+        if (style == BellStyle.None)
+        {
+            return JsonValue.Create("none");
+        }
+
+        if (style == BellStyle.All)
+        {
+            return JsonValue.Create("all");
+        }
+
+        var values = new JsonArray();
+        if (style.HasFlag(BellStyle.Audible)) values.Add((JsonNode?)JsonValue.Create("audible"));
+        if (style.HasFlag(BellStyle.Window)) values.Add((JsonNode?)JsonValue.Create("window"));
+        if (style.HasFlag(BellStyle.Taskbar)) values.Add((JsonNode?)JsonValue.Create("taskbar"));
+        if (style.HasFlag(BellStyle.Notification)) values.Add((JsonNode?)JsonValue.Create("notification"));
+        return values.Count == 1 ? values[0]!.DeepClone() : values;
+    }
+
+    private static CopyFormat CopyFormats(JsonObject root)
+    {
+        if (root["copyFormatting"] is JsonValue value)
+        {
+            if (value.TryGetValue<bool>(out var boolean))
+            {
+                return boolean ? CopyFormat.All : CopyFormat.None;
+            }
+
+            if (value.TryGetValue<string>(out var single))
+            {
+                return CopyFormatName(single);
+            }
+        }
+
+        if (root["copyFormatting"] is not JsonArray array)
+        {
+            return CopyFormat.None;
+        }
+
+        var result = CopyFormat.None;
+        foreach (var name in array.Select(static item => item is null ? null : StringValue(item)))
+        {
+            result |= CopyFormatName(name);
+        }
+
+        return result;
+    }
+
+    private static CopyFormat CopyFormatName(string? name) => name?.ToLowerInvariant() switch
+    {
+        "html" => CopyFormat.Html,
+        "rtf" => CopyFormat.Rtf,
+        "all" => CopyFormat.All,
+        _ => CopyFormat.None,
+    };
+
+    private static JsonNode CopyFormatsNode(CopyFormat formats) => formats switch
+    {
+        CopyFormat.None => JsonValue.Create(false),
+        CopyFormat.All => JsonValue.Create(true),
+        CopyFormat.Html => JsonValue.Create("html"),
+        CopyFormat.Rtf => JsonValue.Create("rtf"),
+        _ => JsonValue.Create(false),
+    };
+
+    private static JsonArray StringArray(IEnumerable<string> values) =>
+        new(values.Select(static value => (JsonNode?)JsonValue.Create(value)).ToArray());
+
+    private static List<string> StringList(JsonNode? node) =>
+        node is JsonArray array
+            ? array.Select(static item => item is null ? null : StringValue(item))
+                .Where(static value => value is not null)
+                .Cast<string>()
+                .ToList()
+            : [];
+
+    private static JsonArray CloneArray(JsonNode? node) =>
+        node is JsonArray array ? (JsonArray)array.DeepClone() : [];
+
+    private static Dictionary<string, double> DoubleMap(JsonNode? node)
+    {
+        var result = new Dictionary<string, double>(StringComparer.Ordinal);
+        if (node is not JsonObject map)
+        {
+            return result;
+        }
+
+        foreach (var pair in map)
+        {
+            if (pair.Value is JsonValue value && value.TryGetValue<double>(out var number))
+            {
+                result[pair.Key] = number;
+            }
+        }
+
+        return result;
+    }
+
+    private static JsonObject DoubleMap(IReadOnlyDictionary<string, double> values) =>
+        new(values.Select(static pair =>
+            KeyValuePair.Create<string, JsonNode?>(pair.Key, JsonValue.Create(pair.Value))));
+
+    private static int LegacyFontWeight(JsonObject source)
+    {
+        if (source["fontWeight"] is JsonValue value && value.TryGetValue<int>(out var numeric))
+        {
+            return Math.Clamp(numeric, 100, 999);
+        }
+
+        return FontWeightName(String(source, "fontWeight"));
+    }
+
+    private static int FontWeightName(string? name) => name?.ToLowerInvariant() switch
+    {
+        "thin" => 100,
+        "extralight" => 200,
+        "light" => 300,
+        "semilight" => 350,
+        "medium" => 500,
+        "semibold" => 600,
+        "bold" => 700,
+        "extrabold" => 800,
+        "black" => 900,
+        _ => 400,
+    };
+
+    private static SettingsOrigin Origin(JsonObject source, SettingsOrigin fallback) =>
+        Enum.TryParse<SettingsOrigin>(String(source, OriginKey), out var origin) ? origin : fallback;
+
+    private static JsonObject CleanSourceDocument(JsonObject source)
+    {
+        var result = (JsonObject)source.DeepClone();
+        result.Remove(OriginKey);
+        result.Remove(SourceKey);
+        return result;
+    }
+
+    private static IEnumerable<JsonObject> OrderProfiles(JsonArray profiles, JsonArray? userProfiles)
+    {
+        var yielded = new HashSet<JsonObject>(ReferenceEqualityComparer.Instance);
+        if (userProfiles is not null)
+        {
+            foreach (var userProfile in userProfiles.OfType<JsonObject>())
+            {
+                var match = profiles.OfType<JsonObject>().FirstOrDefault(
+                    profile => ProfilesMatch(profile, userProfile));
+                if (match is not null && yielded.Add(match))
+                {
+                    yield return match;
+                }
+            }
+        }
+
+        foreach (var profile in profiles.OfType<JsonObject>())
+        {
+            if (yielded.Add(profile))
+            {
+                yield return profile;
+            }
+        }
+    }
+
+    private static void MigrateLegacyAliases(JsonObject root)
+    {
+        Alias(root, "inputServiceWarning", "warning.inputService");
+        Alias(root, "largePasteWarning", "warning.largePaste");
+        Alias(root, "multiLinePasteWarning", "warning.multiLinePaste");
+
+        if (!root.ContainsKey("tabSwitcherMode") &&
+            root["useTabSwitcher"] is JsonValue switcher &&
+            switcher.TryGetValue<bool>(out var useSwitcher))
+        {
+            root["tabSwitcherMode"] = useSwitcher ? "mostRecentlyUsed" : "disabled";
+        }
+
+        if (!root.ContainsKey("warning.confirmOnClose") &&
+            root["confirmCloseAllTabs"] is JsonValue close &&
+            close.TryGetValue<bool>(out var confirmClose))
+        {
+            root["warning.confirmOnClose"] = confirmClose ? "automatic" : "never";
+        }
+
+        if (!root.ContainsKey("firstWindowPreference") &&
+            root["persistedWindowLayout"] is JsonValue persisted &&
+            persisted.TryGetValue<bool>(out var usePersisted) &&
+            usePersisted)
+        {
+            root["firstWindowPreference"] = "persistedLayoutAndContent";
+        }
+
+        var profiles = NormalizeProfiles(root["profiles"]);
+        root["profiles"] = profiles;
+        var defaults = profiles["defaults"] as JsonObject ?? new JsonObject();
+        profiles["defaults"] = defaults;
+        MigrateProfileAliases(defaults);
+        if (root.TryGetPropertyValue("compatibility.reloadEnvironmentVariables", out var reload) &&
+            !defaults.ContainsKey("compatibility.reloadEnvironmentVariables"))
+        {
+            defaults["compatibility.reloadEnvironmentVariables"] = reload?.DeepClone();
+        }
+        if (root.TryGetPropertyValue("experimental.input.forceVT", out var forceVt) &&
+            !defaults.ContainsKey("compatibility.input.forceVT"))
+        {
+            defaults["compatibility.input.forceVT"] = forceVt?.DeepClone();
+        }
+
+        if (profiles["list"] is JsonArray list)
+        {
+            foreach (var profile in list.OfType<JsonObject>())
+            {
+                MigrateProfileAliases(profile);
+            }
+        }
+
+        if (root["updates"] is JsonArray updates)
+        {
+            foreach (var update in updates.OfType<JsonObject>())
+            {
+                MigrateProfileAliases(update);
+            }
+        }
+    }
+
+    private static void MigrateProfileAliases(JsonObject profile)
+    {
+        Alias(profile, "experimental.autoMarkPrompts", "autoMarkPrompts");
+        Alias(profile, "experimental.showMarksOnScrollbar", "showMarksOnScrollbar");
+        Alias(profile, "experimental.rightClickContextMenu", "rightClickContextMenu");
+        Alias(profile, "experimental.input.forceVT", "compatibility.input.forceVT");
+
+        // A modern font object suppresses legacy keys declared in the same
+        // layer, while still allowing missing properties to inherit legacy
+        // values from lower-precedence layers.
+        if (profile["font"] is JsonObject)
+        {
+            profile.Remove("fontFace");
+            profile.Remove("fontSize");
+            profile.Remove("fontWeight");
+        }
+    }
+
+    private static void Alias(JsonObject root, string legacyKey, string modernKey)
+    {
+        if (!root.ContainsKey(modernKey) && root.TryGetPropertyValue(legacyKey, out var value))
+        {
+            root[modernKey] = value?.DeepClone();
+        }
+    }
+
+    private static void HandleUserSchemeCollisions(
+        JsonObject merged,
+        JsonObject user,
+        ICollection<SettingsDiagnostic> diagnostics)
+    {
+        if (merged["schemes"] is not JsonArray inherited ||
+            user["schemes"] is not JsonArray userSchemes)
+        {
+            return;
+        }
+
+        for (var index = userSchemes.Count - 1; index >= 0; index--)
+        {
+            if (userSchemes[index] is not JsonObject candidate)
+            {
+                continue;
+            }
+
+            var name = String(candidate, "name");
+            var collision = FindNamed(inherited, name);
+            if (collision is null)
+            {
+                continue;
+            }
+
+            if (SchemesEquivalent(collision, candidate))
+            {
+                userSchemes.RemoveAt(index);
+                continue;
+            }
+
+            var renamed = UniqueModifiedSchemeName(name ?? "Unnamed", inherited, userSchemes);
+            var replacement = (JsonObject)collision.DeepClone();
+            MergeObject(replacement, candidate);
+            replacement["name"] = renamed;
+            userSchemes[index] = replacement;
+            RetargetColorSchemeReferences(merged, name, renamed);
+            RetargetColorSchemeReferences(user, name, renamed);
+            diagnostics.Add(new SettingsDiagnostic(
+                SettingsDiagnosticSeverity.Warning,
+                "ColorSchemeRenamed",
+                $"User color scheme '{name}' conflicts with a built-in scheme and was renamed to '{renamed}'."));
+        }
+    }
+
+    private static bool SchemesEquivalent(JsonObject inherited, JsonObject candidate)
+    {
+        foreach (var key in SchemeColorKeys)
+        {
+            if (!candidate.TryGetPropertyValue(key, out var candidateValue) ||
+                !JsonNode.DeepEquals(candidateValue, inherited[key]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string UniqueModifiedSchemeName(
+        string name,
+        JsonArray inherited,
+        JsonArray userSchemes)
+    {
+        for (var suffix = 1; ; suffix++)
+        {
+            var candidate = suffix == 1 ? $"{name} (modified)" : $"{name} (modified {suffix})";
+            if (FindNamed(inherited, candidate) is null && FindNamed(userSchemes, candidate) is null)
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private static void RetargetColorSchemeReferences(JsonNode node, string? oldName, string newName)
+    {
+        if (oldName is null)
+        {
+            return;
+        }
+
+        if (node is JsonObject obj)
+        {
+            foreach (var pair in obj.ToArray())
+            {
+                if (pair.Key == "colorScheme" && pair.Value is not null)
+                {
+                    RetargetColorSchemeNode(obj, pair.Key, pair.Value, oldName, newName);
+                }
+                else if (pair.Value is not null)
+                {
+                    RetargetColorSchemeReferences(pair.Value, oldName, newName);
+                }
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                if (item is not null)
+                {
+                    RetargetColorSchemeReferences(item, oldName, newName);
+                }
+            }
+        }
+    }
+
+    private static void RetargetColorSchemeNode(
+        JsonObject parent,
+        string key,
+        JsonNode value,
+        string oldName,
+        string newName)
+    {
+        if (value is JsonValue scalar &&
+            scalar.TryGetValue<string>(out var current) &&
+            string.Equals(current, oldName, StringComparison.OrdinalIgnoreCase))
+        {
+            parent[key] = newName;
+            return;
+        }
+
+        if (value is not JsonObject pair)
+        {
+            return;
+        }
+
+        foreach (var channel in new[] { "dark", "light" })
+        {
+            if (pair[channel] is JsonValue channelValue &&
+                channelValue.TryGetValue<string>(out var channelName) &&
+                string.Equals(channelName, oldName, StringComparison.OrdinalIgnoreCase))
+            {
+                pair[channel] = newName;
+            }
+        }
+    }
+
+    private static readonly string[] SchemeColorKeys =
+    [
+        "foreground", "background", "cursorColor", "selectionBackground",
+        "black", "red", "green", "yellow", "blue", "purple", "cyan", "white",
+        "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue",
+        "brightPurple", "brightCyan", "brightWhite",
+    ];
 
     private static string LaunchModeString(LaunchMode value) => value switch
     {

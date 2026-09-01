@@ -13,6 +13,10 @@ public static class SettingsService
         Environment.GetEnvironmentVariable("WT_DOTNET_SETTINGS_PATH") ??
         Path.Combine(SettingsDirectory, "settings.json");
 
+    public static string StatePath => Path.Combine(
+        Path.GetDirectoryName(Path.GetFullPath(SettingsPath))!,
+        "state.json");
+
     public static IReadOnlyList<SettingsDiagnostic> LastDiagnostics { get; private set; } = [];
 
     public static AppSettings Load()
@@ -86,6 +90,9 @@ public static class SettingsService
 
     public static AppSettings CreateDefault() =>
         SettingsLoader.Load(SettingsLoader.ReadEmbeddedDefaults());
+
+    public static ApplicationStateStore LoadApplicationState() =>
+        ApplicationStateStore.ForSettingsPath(SettingsPath);
 
     private static SettingsDiagnostic ReadDiagnostic(Exception exception) => new(
         SettingsDiagnosticSeverity.Error,
