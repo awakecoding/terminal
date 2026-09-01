@@ -173,9 +173,13 @@ public sealed class DynamicProfileManager
             new InboxShellProfileGenerator(environment),
             new PowerShellCoreProfileGenerator(environment),
             new WslDistroProfileGenerator(commandRunner, environment),
-            new SshHostProfileGenerator(environment),
             new VisualStudioProfileGenerator(commandRunner, environment),
         };
+        if (environment.EnableSshProfiles)
+        {
+            generators.Add(new SshHostProfileGenerator(environment));
+        }
+
         if (azureConnectionType is not null)
         {
             generators.Add(new AzureCloudShellProfileGenerator(azureConnectionType));

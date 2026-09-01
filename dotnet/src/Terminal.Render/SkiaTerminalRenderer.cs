@@ -780,8 +780,17 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
         var result = shaper.Shape(buffer, shapingPaint);
         using var font = new SKFont(typeface, key.FontSize)
         {
-            Embolden = ShouldEmbolden(typeface, key.Flags),
+            // DirectWrite's grayscale enhanced contrast produces a slightly heavier
+            // stem than Skia's default antialiasing for the same Cascadia face.
+            Embolden = ShouldEmbolden(typeface, key.Flags) ||
+                       (!typeface.IsBold &&
+                        _settings.FontWeight >= 400 &&
+                        IsPrimaryCascadia(typeface)),
+            Edging = SKFontEdging.Antialias,
+            ForceAutoHinting = true,
+            Hinting = SKFontHinting.Full,
             SkewX = ShouldSkew(typeface, key.Flags) ? -0.25f : 0,
+            Subpixel = false,
         };
         var glyphData = new byte[result.Codepoints.Length * sizeof(ushort)];
         for (var index = 0; index < result.Codepoints.Length; index++)
@@ -803,6 +812,10 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
         new()
         {
             IsAntialias = true,
+            IsAutohinted = true,
+            HintingLevel = SKPaintHinting.Full,
+            LcdRenderText = false,
+            SubpixelText = false,
             Typeface = typeface,
             TextSize = _settings.FontSize,
             FakeBoldText = ShouldEmbolden(typeface, flags),
@@ -885,6 +898,20 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
 
     private static bool ShouldSkew(SKTypeface typeface, CellFlags flags) =>
         (flags & CellFlags.Italic) != 0 && !typeface.IsItalic;
+
+    private bool IsPrimaryCascadia(SKTypeface typeface)
+    {
+        var configured = _settings.FontFamily.AsSpan();
+        var separator = configured.IndexOf(',');
+        if (separator >= 0)
+        {
+            configured = configured[..separator];
+        }
+
+        configured = configured.Trim();
+        return configured.StartsWith("Cascadia", StringComparison.OrdinalIgnoreCase) &&
+               configured.Equals(typeface.FamilyName.AsSpan(), StringComparison.OrdinalIgnoreCase);
+    }
 
     private static uint CursorTextColor(uint cursorColor, uint cellBackground)
     {

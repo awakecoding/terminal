@@ -1675,10 +1675,13 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             return profile.WithOverrides(terminal);
         }
 
+        var visibleProfiles = _settings.Profiles
+            .Where(static profile => !profile.Hidden && !profile.Orphaned)
+            .ToArray();
         var selected = terminal.ProfileIndex is { } selectedIndex &&
                        selectedIndex >= 0 &&
-                       selectedIndex < _settings.Profiles.Count
-            ? _settings.Profiles[selectedIndex]
+                       selectedIndex < visibleProfiles.Length
+            ? visibleProfiles[selectedIndex]
             : _settings.GetDefaultProfile();
         return selected.WithOverrides(terminal);
     }
@@ -2237,7 +2240,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private void MainWindow_OnSizeChanged(object? sender, SizeChangedEventArgs e)
     {
-        TabScrollViewer.MaxWidth = Math.Max(120, e.NewSize.Width - 247);
+        TabScrollViewer.MaxWidth = Math.Max(120, e.NewSize.Width - 253);
         RebuildTabs();
     }
 

@@ -55,11 +55,13 @@ The settings loader applies embedded defaults, generated profiles, extension
 fragments, then the user layer. Its typed action map covers the complete
 generated action inventory; actions not yet implemented by the Avalonia shell
 produce an explicit unsupported dispatch result. Dynamic discovery covers installed PowerShell,
-Windows PowerShell, Command Prompt, WSL distributions, OpenSSH config hosts, and
+Windows PowerShell, Command Prompt, WSL distributions, and
 Visual Studio developer shells. Sources honor `disabledProfileSources`, retain
 upstream GUID/source identities, and reconcile removed generated profiles through
 `state.json`. Set `WT_RUN_MACHINE_PROFILE_TESTS=1` to opt into machine-dependent
 generator smoke coverage.
+Dynamic SSH profiles match native stable WT's feature gate and are disabled by
+default; set `WT_ENABLE_SSH_PROFILES=1` to opt into OpenSSH config discovery.
 Azure Cloud Shell is generated when `WT_AZURE_CLIENT_ID` contains the GUID of a
 host-owned Entra public-client application. The host supplies device-code and
 tenant-selection UI and never receives or persists access/refresh tokens.

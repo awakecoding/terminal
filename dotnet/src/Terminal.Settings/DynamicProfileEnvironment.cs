@@ -23,6 +23,11 @@ public sealed class DynamicProfileEnvironment
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
     public string SystemDirectory { get; init; } = Environment.SystemDirectory;
     public Architecture ProcessArchitecture { get; init; } = RuntimeInformation.ProcessArchitecture;
+    public bool EnableSshProfiles { get; init; } =
+        string.Equals(
+            Environment.GetEnvironmentVariable("WT_ENABLE_SSH_PROFILES"),
+            "1",
+            StringComparison.Ordinal);
 
     private static string? ResolveFromPath(string executable)
     {

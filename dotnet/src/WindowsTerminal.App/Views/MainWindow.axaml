@@ -30,18 +30,35 @@
                        Spacing="0" />
           </ScrollViewer>
           <Button Classes="icon"
+                 Width="31"
+                 Height="24"
+                 Margin="0,4"
+                 VerticalAlignment="Center"
                  Click="NewTab_OnClick"
                  AutomationProperties.Name="New tab"
                  ToolTip.Tip="New tab (Ctrl+Shift+T)">
-            <TextBlock Text="+" FontSize="18" />
+            <Path Data="M 0,5 L 10,5 M 5,0 L 5,10"
+                  Width="10"
+                  Height="10"
+                  Stretch="Uniform"
+                  Stroke="#F2F2F2"
+                  StrokeThickness="1" />
           </Button>
           <Button x:Name="MenuButton"
                  Classes="icon"
-                 Width="24"
+                 Width="31"
+                 Height="24"
+                 Margin="0,4"
+                 VerticalAlignment="Center"
                  Click="Menu_OnClick"
                  AutomationProperties.Name="New tab menu"
                  ToolTip.Tip="New tab menu">
-            <TextBlock Text="⌄" FontSize="14" />
+            <Path Data="M 0,1 L 4,5 L 8,1"
+                  Width="8"
+                  Height="5"
+                  Stretch="Uniform"
+                  Stroke="#F2F2F2"
+                  StrokeThickness="1" />
           </Button>
         </StackPanel>
         <Border Grid.Column="1" MinWidth="45" />

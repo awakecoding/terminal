@@ -165,6 +165,25 @@ public sealed class DynamicProfileGeneratorTests
     }
 
     [Fact]
+    public async Task DefaultManagerGatesSshProfilesLikeStableWindowsTerminal()
+    {
+        using var fixture = new DirectoryFixture();
+        fixture.Touch("System32", "OpenSSH", "ssh.exe");
+        fixture.Write("home", ".ssh", "config", "Host work\n    HostName work.example");
+        var runner = new StubRunner(new DynamicProfileCommandResult(0, string.Empty, string.Empty, false));
+
+        var stable = await DynamicProfileManager.CreateDefault(
+            fixture.Environment(readFiles: true, enableSshProfiles: false),
+            runner).GenerateAsync();
+        var optedIn = await DynamicProfileManager.CreateDefault(
+            fixture.Environment(readFiles: true, enableSshProfiles: true),
+            runner).GenerateAsync();
+
+        Assert.DoesNotContain(stable.Profiles, profile => profile.Source == DynamicProfileSource.Ssh);
+        Assert.Contains(optedIn.Profiles, profile => profile.Source == DynamicProfileSource.Ssh);
+    }
+
+    [Fact]
     public async Task VisualStudioProfilesUseVswhereWithoutComAndHideOlderInstances()
     {
         using var fixture = new DirectoryFixture();
@@ -463,7 +482,8 @@ public sealed class DynamicProfileGeneratorTests
 
         public DynamicProfileEnvironment Environment(
             bool readFiles = false,
-            Architecture architecture = Architecture.X64) => new()
+            Architecture architecture = Architecture.X64,
+            bool enableSshProfiles = false) => new()
         {
             ProgramFiles = PathOf("ProgramFiles"),
             ProgramFilesX86 = PathOf("ProgramFilesX86"),
@@ -472,6 +492,7 @@ public sealed class DynamicProfileGeneratorTests
             LocalApplicationData = PathOf("LocalAppData"),
             SystemDirectory = PathOf("System32"),
             ProcessArchitecture = architecture,
+            EnableSshProfiles = enableSshProfiles,
             FileExists = File.Exists,
             EnumerateDirectories = path =>
                 System.IO.Directory.Exists(path) ? System.IO.Directory.EnumerateDirectories(path) : [],
