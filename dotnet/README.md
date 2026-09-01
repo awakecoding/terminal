@@ -27,6 +27,19 @@ dotnet publish src/WindowsTerminal -c Release -r win-x64 --self-contained
 The native executable is written to
 `src/WindowsTerminal/bin/Release/net10.0/win-x64/publish/WindowsTerminal.exe`.
 
+## MSIX packages
+
+The package project builds unsigned `win-x64` and `win-arm64` MSIX packages and
+an architecture-selecting bundle without affecting direct unpackaged runs:
+
+```powershell
+cd dotnet
+.\src\WindowsTerminal.Package\Scripts\Build-Packages.ps1
+```
+
+Development signing, trust, install, validation, and uninstall commands are in
+[`src/WindowsTerminal.Package/README.md`](src/WindowsTerminal.Package/README.md).
+
 ## Keyboard
 
 Keyboard input is resolved through the Windows Terminal-compatible `actions` and

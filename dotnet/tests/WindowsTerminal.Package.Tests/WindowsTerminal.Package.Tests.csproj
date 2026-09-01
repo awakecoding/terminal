@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\WindowsTerminal.Package\WindowsTerminal.Package.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\src\WindowsTerminal.Package\Package.appxmanifest"
+          Link="Package.appxmanifest"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

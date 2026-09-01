@@ -24,6 +24,7 @@
     <Project Path="tests/WindowsTerminal.App.Tests/WindowsTerminal.App.Tests.csproj" />
     <Project Path="tests/WindowsTerminal.Compatibility.Tests/WindowsTerminal.Compatibility.Tests.csproj" />
     <Project Path="tests/WindowsTerminal.Settings.Tests/WindowsTerminal.Settings.Tests.csproj" />
+    <Project Path="tests/WindowsTerminal.Package.Tests/WindowsTerminal.Package.Tests.csproj" />
     <Project Path="tests/WindowsTerminal.UI.Tests/WindowsTerminal.UI.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">

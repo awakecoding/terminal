@@ -73,3 +73,51 @@ jobs:
           name: WindowsTerminal-${{ matrix.rid }}
           path: artifacts/${{ matrix.rid }}
           if-no-files-found: error
+
+  msix:
+    name: Unsigned MSIX packages
+    needs: native-aot
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up WinApp CLI
+        uses: microsoft/setup-WinAppCli@cc8ea9a08b3ee3db43d5aa6bddda4a0e87d800f7 # v0.1
+        with:
+          version: v0.6.0
+
+      - name: Download x64 publish
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: WindowsTerminal-win-x64
+          path: artifacts/msix/layout/win-x64
+
+      - name: Download arm64 publish
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: WindowsTerminal-win-arm64
+          path: artifacts/msix/layout/win-arm64
+
+      - name: Build unsigned MSIX packages and bundle
+        shell: pwsh
+        run: >
+          ./dotnet/src/WindowsTerminal.Package/Scripts/Build-Packages.ps1
+          -SkipPublish
+          -OutputDirectory ./artifacts/msix
+          -Version "0.1.${{ github.run_number }}.0"
+
+      - name: Validate package structure
+        shell: pwsh
+        run: >
+          ./dotnet/src/WindowsTerminal.Package/Scripts/Test-Packages.ps1
+          -PackagePath (Get-ChildItem ./artifacts/msix/packages -File |
+          Where-Object Extension -In ".msix", ".msixbundle" |
+          ForEach-Object FullName)
+
+      - name: Upload unsigned MSIX artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: WindowsTerminal-MSIX-unsigned
+          path: artifacts/msix/packages
+          if-no-files-found: error
