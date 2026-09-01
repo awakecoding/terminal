@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>WindowsTerminal.Package</RootNamespace>
+    <AssemblyName>WindowsTerminal.Package</AssemblyName>
+    <Description>Package capability model and future MSIX build integration.</Description>
+  </PropertyGroup>
+</Project>

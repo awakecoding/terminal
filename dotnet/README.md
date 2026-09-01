@@ -13,7 +13,7 @@ The original C++/WinUI tree is unchanged. This port lives entirely under `dotnet
 
 ```powershell
 cd dotnet
-dotnet test
+dotnet test Terminal.slnx
 dotnet run --project src/WindowsTerminal
 ```
 
@@ -43,10 +43,12 @@ Settings are stored at `%LOCALAPPDATA%\WindowsTerminal.NET\settings.json`.
 
 ```
 Terminal.Core         VT parser + text buffer + terminal engine
+Terminal.Render       Renderer-neutral contracts; Skia atlas lands in P1
 Terminal.Connection   ConPTY (LibraryImport, NativeAOT-safe)
 Terminal.Settings     JSON settings (source-generated)
 Terminal.Control      Avalonia TermControl renderer
-WindowsTerminal       Tabs, title bar, app host
+WindowsTerminal.App   Tabs, title bar, panes, actions, window behavior
+WindowsTerminal       NativeAOT executable and composition root
 ```
 
 This is not a line-for-line translation of every C++ file. The engine covers the
@@ -54,3 +56,18 @@ VT sequences needed for modern shells, editors, and TUIs (SGR including truecolo
 cursor/erase, scroll regions, alt screen, OSC titles, mouse/bracketed-paste modes).
 
 The full phased plan for a complete port is in [PORTING.md](PORTING.md).
+Architecture decisions are recorded in [doc/decisions](doc/decisions).
+
+## Compatibility inventory
+
+The port tracks the C++ implementation's settings, actions, VT dispatch,
+command line, and settings-page surfaces in
+[`compat/windows-terminal.json`](compat/windows-terminal.json). Regenerate it
+after an intentional upstream compatibility change:
+
+```powershell
+dotnet run --project tools/Terminal.PortInventory -- .. compat/windows-terminal.json
+```
+
+The compatibility test fails when the C++ source changes without updating this
+manifest, making parity work explicit.

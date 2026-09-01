@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>WindowsTerminal.Settings</RootNamespace>
+    <AssemblyName>WindowsTerminal.Settings</AssemblyName>
+    <Description>Avalonia settings editor for Windows Terminal.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Terminal.Settings\Terminal.Settings.csproj" />
+  </ItemGroup>
+</Project>

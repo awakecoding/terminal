@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>WindowsTerminal</RootNamespace>
+    <AssemblyName>WindowsTerminal.App</AssemblyName>
+    <Description>Avalonia application shell for tabs, panes, actions, and windows.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Terminal.Control\Terminal.Control.csproj" />
+    <ProjectReference Include="..\Terminal.Settings\Terminal.Settings.csproj" />
+  </ItemGroup>
+</Project>

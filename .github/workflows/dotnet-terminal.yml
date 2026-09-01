@@ -1,0 +1,75 @@
+name: .NET Terminal
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "dotnet/**"
+      - ".github/workflows/dotnet-terminal.yml"
+  pull_request:
+    paths:
+      - "dotnet/**"
+      - ".github/workflows/dotnet-terminal.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dotnet-terminal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore dotnet/Terminal.slnx
+
+      - name: Build
+        run: dotnet build dotnet/Terminal.slnx -c Release --no-restore
+
+      - name: Test
+        run: dotnet test dotnet/Terminal.slnx -c Release --no-build
+
+  native-aot:
+    name: NativeAOT ${{ matrix.rid }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rid:
+          - win-x64
+          - win-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish
+        run: >
+          dotnet publish dotnet/src/WindowsTerminal/WindowsTerminal.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained
+          -o artifacts/${{ matrix.rid }}
+
+      - name: Upload native executable
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: WindowsTerminal-${{ matrix.rid }}
+          path: artifacts/${{ matrix.rid }}
+          if-no-files-found: error

@@ -14,18 +14,22 @@ Those types do not exist in this stack. The bar is:
 
 The original C++ tree stays in place. All new work lives under `dotnet/`.
 
-## Current prototype (done)
+## Current baseline (done)
 
 | Project | What it covers today |
 | --- | --- |
 | `Terminal.Core` | Cell/attributes, text buffer, VT ground/CSI/OSC subset, alt screen, SGR (16/256/truecolor) |
+| `Terminal.Render` | Renderer-neutral contracts for the future Skia glyph atlas |
 | `Terminal.Connection` | NativeAOT-safe ConPTY via `LibraryImport` |
 | `Terminal.Settings` | Tiny JSON model (profiles, schemes, cols/rows) |
 | `Terminal.Control` | Avalonia `TermControl`: Skia text, selection, copy/paste, key map |
-| `WindowsTerminal` | Tabbed window, title bar, Ctrl+Shift+T/W/N/C/V |
+| `WindowsTerminal.App` | Tabbed window, title bar, Ctrl+Shift+T/W/N/C/V |
+| `WindowsTerminal` | NativeAOT executable and composition root |
 
-Verified: `dotnet test` (10 tests), Debug build, NativeAOT `win-x64` publish
-(~18 MB).
+The baseline also includes dedicated settings, connection, control, app,
+compatibility, and UI test projects; x64/ARM64 NativeAOT CI; architecture
+decisions; and a generated compatibility inventory covering 120 settings keys,
+92 actions, 123 VT dispatch methods, 14 CLI commands, and 25 settings pages.
 
 What it is **not**: a daily driver. No panes, no ActionMap, no settings UI, no
 Atlas-quality rendering, no `wt` CLI, no WSL/VS generators, no search, no
