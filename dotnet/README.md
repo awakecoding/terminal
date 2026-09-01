@@ -90,6 +90,8 @@ The full phased plan for a complete port is in [PORTING.md](PORTING.md).
 Architecture decisions are recorded in [doc/decisions](doc/decisions).
 Renderer contracts, cache ownership, and integration details are documented in
 [doc/renderer.md](doc/renderer.md).
+Control interaction, clipboard safety, IME, and accessibility contracts are documented in
+[doc/control-accessibility.md](doc/control-accessibility.md).
 The image-overlay renderer contract and protocol limits are documented in
 [doc/advanced-vt-protocols.md](doc/advanced-vt-protocols.md).
 Azure authentication, service protocol, diagnostics, and host composition are

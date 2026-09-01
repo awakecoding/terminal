@@ -68,7 +68,8 @@ internal sealed class TerminalSkiaDrawOperation : ICustomDrawOperation
 
         return RangesEqual(_overlays.Selection, operation._overlays.Selection) &&
                RangesEqual(_overlays.Search, operation._overlays.Search) &&
-               RangesEqual(_overlays.Hyperlink, operation._overlays.Hyperlink);
+               RangesEqual(_overlays.Hyperlink, operation._overlays.Hyperlink) &&
+               _overlays.Composition == operation._overlays.Composition;
     }
 
     public void Dispose()
