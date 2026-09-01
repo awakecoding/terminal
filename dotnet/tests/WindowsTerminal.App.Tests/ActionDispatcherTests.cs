@@ -119,4 +119,14 @@ public sealed class ActionDispatcherTests
     [InlineData(Key.Apps, "menu")]
     public void AvaloniaKeysUseActionMapNames(Key key, string expected) =>
         Assert.Equal(expected, AvaloniaKeyChord.GetKeyName(key));
+
+    [Theory]
+    [InlineData(ShortcutAction.DuplicateTab, ActionScope.Tab)]
+    [InlineData(ShortcutAction.RestoreLastClosed, ActionScope.Tab)]
+    [InlineData(ShortcutAction.MovePane, ActionScope.Pane)]
+    [InlineData(ShortcutAction.TogglePaneReadOnly, ActionScope.Pane)]
+    [InlineData(ShortcutAction.ToggleBroadcastInput, ActionScope.Pane)]
+    [InlineData(ShortcutAction.TabSearch, ActionScope.Window)]
+    public void PracticalActionsHaveExpectedScope(ShortcutAction action, ActionScope expected) =>
+        Assert.Equal(expected, ActionScopeCatalog.GetScope(ActionCatalog.GetJsonName(action)));
 }

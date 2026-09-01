@@ -11,6 +11,7 @@ using Microsoft.Terminal.Control;
 using Microsoft.Terminal.Core;
 using Microsoft.Terminal.Settings;
 using WindowsTerminal.Actions;
+using WindowsTerminal.Models;
 using WindowsTerminal.Panes;
 using WindowsTerminal.Routing;
 using WindowsTerminal.Settings;
@@ -20,15 +21,22 @@ namespace WindowsTerminal.Views;
 public partial class MainWindow : Window, ITerminalWindowActivationTarget
 {
     private readonly AppSettings _settings;
+    private readonly ApplicationStateStore _stateStore;
     private readonly ActionDispatcher _actionDispatcher = new();
-    private readonly List<TerminalTab> _tabs = [];
+    private readonly TabCollection<TerminalTab, TabLayoutDescriptor> _tabCollection = new();
     private readonly List<PaletteItem> _paletteItems = [];
+    private IReadOnlyList<TerminalTab> _tabs => _tabCollection.Items;
     private uint _nextPaneId;
     private TerminalTab? _activeTab;
+    private TerminalTab? _draggedTab;
+    private Point _dragStart;
+    private bool _tabSearchMode;
+    private bool _layoutPersisted;
     private ActionDispatchResult? _lastDispatchResult;
     private ProfileSettings? _initialProfile;
     private readonly TerminalWindowActivation? _initialActivation;
     private readonly Action<TerminalWindowActivation>? _newWindowRequested;
+    private readonly Action<TabTearOffRequest>? _tabTearOffRequested;
     private readonly TaskCompletionSource<TerminalWindowActivationResult> _initialActivationCompletion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly DispatcherTimer _notificationTimer;
@@ -41,12 +49,14 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         int windowId,
         string windowName,
         TerminalWindowActivation? initialActivation,
-        Action<TerminalWindowActivation>? newWindowRequested = null)
+        Action<TerminalWindowActivation>? newWindowRequested = null,
+        Action<TabTearOffRequest>? tabTearOffRequested = null)
     {
         WindowId = windowId;
         WindowName = windowName;
         _initialActivation = initialActivation;
         _newWindowRequested = newWindowRequested;
+        _tabTearOffRequested = tabTearOffRequested;
         InitializeComponent();
         _notificationTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _notificationTimer.Tick += (_, _) =>
@@ -55,10 +65,12 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             NotificationToast.IsVisible = false;
         };
         _settings = SettingsService.Load();
+        _stateStore = SettingsService.LoadApplicationState();
         Width = Math.Max(640, _settings.InitialCols * 8);
         Height = Math.Max(400, _settings.InitialRows * 16 + 80);
         Opened += OnOpened;
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
+        AddHandler(TextInputEvent, OnWindowTextInput, RoutingStrategies.Tunnel);
         ConfigureActionDispatcher();
         PopulateCommandPalette();
     }
@@ -71,6 +83,10 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     public int WindowId { get; }
     public string WindowName { get; }
     public Task<TerminalWindowActivationResult> InitialActivation => _initialActivationCompletion.Task;
+    public IReadOnlyList<TerminalTab> Tabs => _tabCollection.Items;
+    public TerminalTab? ActiveTab => _activeTab;
+    public string? LastPersistenceError { get; private set; }
+    public event Action<TabTearOffRequest>? TabTearOffRequested;
 
     public async ValueTask<TerminalWindowActivationResult> ActivateAsync(
         TerminalWindowActivation activation,
@@ -99,12 +115,26 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         {
             if (_initialActivation is not null)
             {
-                _initialActivationCompletion.SetResult(
-                    await ActivateAsync(_initialActivation).ConfigureAwait(true));
+                if (IsDefaultStartupActivation(_initialActivation) &&
+                    await TryRestorePersistedLayoutAsync().ConfigureAwait(true))
+                {
+                    ApplyLaunchOptions(_initialActivation);
+                    _initialActivationCompletion.SetResult(
+                        new(true, "Persisted layout restored.", []));
+                }
+                else
+                {
+                    _initialActivationCompletion.SetResult(
+                        await ActivateAsync(_initialActivation).ConfigureAwait(true));
+                }
             }
             else
             {
-                await CreateTabAsync(_initialProfile ?? _settings.GetDefaultProfile()).ConfigureAwait(true);
+                if (_initialProfile is not null ||
+                    !await TryRestorePersistedLayoutAsync().ConfigureAwait(true))
+                {
+                    await CreateTabAsync(_initialProfile ?? _settings.GetDefaultProfile()).ConfigureAwait(true);
+                }
                 _initialActivationCompletion.SetResult(
                     new(true, "Activation completed.", []));
             }
@@ -144,6 +174,16 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         TitleBar.IsVisible = !activation.LaunchMode.HasFlag(TerminalWindowLaunchMode.Focus);
     }
 
+    private static bool IsDefaultStartupActivation(TerminalWindowActivation activation) =>
+        activation.Actions.Count == 0 ||
+        (activation.Actions.Count == 1 &&
+         activation.Actions[0] is
+         {
+             Action: ShortcutAction.NewTab,
+             Args: NewTabArgs { ContentArgs: NewTerminalArgs terminal },
+         } &&
+         terminal == new NewTerminalArgs());
+
     private async void NewTab_OnClick(object? sender, RoutedEventArgs e) =>
         await CreateTabAsync(_settings.GetDefaultProfile()).ConfigureAwait(true);
 
@@ -151,23 +191,20 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     {
         var menu = new ContextMenu
         {
-            ItemsSource = BuildProfileMenu(),
+            ItemsSource = BuildNewTabMenu(),
         };
         menu.Open(sender as Control);
     }
 
-    private List<MenuItem> BuildProfileMenu()
+    private List<MenuItem> BuildNewTabMenu()
     {
-        var items = _settings.Profiles
-            .Where(static profile => !profile.Hidden)
-            .Select(profile => new MenuItem
-            {
-                Header = profile.Name,
-                Command = new RelayCommand(() => _ = CreateTabAsync(profile)),
-            })
+        var items = NewTabMenuResolver.Resolve(_settings)
+            .Select(CreateMenuItem)
             .ToList();
-
-        items.Add(new MenuItem { Header = "-" });
+        if (items.Count > 0)
+        {
+            items.Add(new MenuItem { Header = "-" });
+        }
         items.Add(new MenuItem
         {
             Header = "Split pane",
@@ -181,11 +218,40 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         return items;
     }
 
+    private MenuItem CreateMenuItem(ResolvedNewTabMenuItem item)
+    {
+        if (item.Type == ResolvedNewTabMenuItemType.Separator)
+        {
+            return new MenuItem { Header = "-" };
+        }
+
+        var menu = new MenuItem { Header = item.Name };
+        if (item.Type == ResolvedNewTabMenuItemType.Folder)
+        {
+            menu.ItemsSource = item.Children?.Select(CreateMenuItem).ToArray() ?? [];
+        }
+        else if (item.Profile is not null)
+        {
+            menu.Command = new RelayCommand(() => _ = CreateTabAsync(item.Profile));
+        }
+        else if (item.ActionId is { } actionId &&
+                 _settings.ActionMap.AvailableActions.TryGetValue(actionId, out var action))
+        {
+            menu.Command = new RelayCommand(() => _ = DispatchActionAsync(action));
+        }
+        else
+        {
+            menu.IsEnabled = false;
+        }
+
+        return menu;
+    }
+
     private async Task CreateTabAsync(ProfileSettings profile)
     {
         var pane = CreatePane(profile);
         var tab = new TerminalTab(pane);
-        _tabs.Add(tab);
+        _tabCollection.Add(tab);
         ActivateTab(tab);
         RebuildTabs();
 
@@ -202,7 +268,10 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         }
     }
 
-    private TerminalPane CreatePane(ProfileSettings profile)
+    private TerminalPane CreatePane(
+        ProfileSettings profile,
+        TerminalSessionDescriptor? session = null,
+        PanePresentationState? presentation = null)
     {
         var control = new TermControl();
         control.InteractionOptions = TerminalInteractionOptions.FromSettings(_settings);
@@ -211,7 +280,12 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         control.InteractionError += (_, error) => ShowNotification(new TerminalNotification(
             error.Operation,
             error.Exception.Message));
-        var pane = new TerminalPane(_nextPaneId++, profile, control);
+        var pane = new TerminalPane(
+            _nextPaneId++,
+            session ?? CreateSessionDescriptor(profile),
+            profile,
+            control,
+            presentation);
         control.TitleChanged += (_, title) =>
         {
             pane.Title = profile.SuppressApplicationTitle || string.IsNullOrWhiteSpace(title)
@@ -223,9 +297,14 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
                 return;
             }
 
-            if (ReferenceEquals(tab.Panes.ActiveContent, pane))
+            if (ReferenceEquals(tab.Panes.ActiveContent, pane) &&
+                string.IsNullOrWhiteSpace(tab.CustomTitle))
             {
                 tab.Title = pane.Title;
+            }
+            else
+            {
+                pane.Presentation.HasUnseenActivity = true;
             }
 
             RebuildTabs();
@@ -288,6 +367,9 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         }
 
         _activeTab = tab;
+        _tabCollection.Activate(tab);
+        tab.Panes.ActiveContent!.Presentation.HasUnseenActivity = false;
+        tab.Panes.ActiveContent.Presentation.HasBellIndicator = false;
         SynchronizeTitle(tab);
         RebuildTabs();
         RebuildTerminalHost();
@@ -308,17 +390,23 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private async Task ClosePaneAsync(TerminalTab tab, TerminalPane pane)
     {
-        if (tab.IsClosing || !tab.Panes.Close(pane))
+        if (tab.IsClosing)
+        {
+            return;
+        }
+
+        if (tab.Panes.Count == 1)
+        {
+            await CloseTabAsync(tab).ConfigureAwait(true);
+            return;
+        }
+
+        if (!tab.Panes.Close(pane))
         {
             return;
         }
 
         await pane.Control.CloseAsync().ConfigureAwait(true);
-        if (tab.Panes.Count == 0)
-        {
-            await CloseTabAsync(tab).ConfigureAwait(true);
-            return;
-        }
 
         SynchronizeTitle(tab);
         if (ReferenceEquals(_activeTab, tab))
@@ -329,22 +417,24 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         }
     }
 
-    private async Task CloseTabAsync(TerminalTab tab)
+    private async Task CloseTabAsync(TerminalTab tab, bool remember = true)
     {
         if (tab.IsClosing)
         {
             return;
         }
 
+        var finalLayout = _tabs.Count == 1 ? CaptureLayout() : null;
         tab.IsClosing = true;
         var wasActive = ReferenceEquals(_activeTab, tab);
         DetachPaneControls(tab);
-        _tabs.Remove(tab);
+        _tabCollection.Close(tab, CaptureTab, remember);
         if (wasActive)
         {
             _activeTab = null;
             TerminalHost.Children.Clear();
-            var replacement = _tabs.LastOrDefault(static candidate => !candidate.IsClosing);
+            var replacement = _tabCollection.ActiveTab ??
+                              _tabs.LastOrDefault(static candidate => !candidate.IsClosing);
             if (replacement is not null)
             {
                 ActivateTab(replacement);
@@ -362,6 +452,11 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
         if (_tabs.Count == 0)
         {
+            if (finalLayout is not null)
+            {
+                TryPersistLayout(finalLayout);
+            }
+
             Close();
             return;
         }
@@ -476,34 +571,195 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         TabStrip.Children.Clear();
         foreach (var tab in _tabs)
         {
+            var presentation = tab.Panes.ActiveContent?.Presentation ?? new PanePresentationState();
+            var content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+            };
+            if (!string.IsNullOrWhiteSpace(presentation.Icon))
+            {
+                content.Children.Add(new TextBlock
+                {
+                    Text = presentation.Icon,
+                    MaxWidth = 18,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+            }
+
+            if (presentation.IsAdministrator)
+            {
+                content.Children.Add(new TextBlock { Text = "◆" });
+            }
+
+            content.Children.Add(new TextBlock
+            {
+                Text = tab.Title,
+                MaxWidth = 180,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontWeight = presentation.HasUnseenActivity ? FontWeight.Bold : FontWeight.Normal,
+            });
+            if (presentation.IsReadOnly)
+            {
+                content.Children.Add(new TextBlock { Text = "🔒" });
+            }
+
+            if (presentation.HasBellIndicator)
+            {
+                content.Children.Add(new TextBlock { Text = "●" });
+            }
+
+            if (presentation.ProgressState != TerminalProgressState.None)
+            {
+                content.Children.Add(new ProgressBar
+                {
+                    Width = 34,
+                    Height = 3,
+                    IsIndeterminate = presentation.ProgressState == TerminalProgressState.Indeterminate,
+                    Value = presentation.Progress * 100,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+            }
+
+            content.Children.Add(CreateCloseButton(tab));
             var button = new Button
             {
                 Classes = { "tab" },
-                Content = new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 8,
-                    Children =
-                    {
-                        new TextBlock
-                        {
-                            Text = tab.Title,
-                            MaxWidth = 180,
-                            TextTrimming = TextTrimming.CharacterEllipsis,
-                            VerticalAlignment = VerticalAlignment.Center,
-                        },
-                        CreateCloseButton(tab),
-                    },
-                },
+                Content = content,
                 Tag = tab,
+                ContextMenu = CreateTabContextMenu(tab),
             };
+            if (TryParseColor(tab.Color ?? presentation.Color, out var tabColor))
+            {
+                button.Background = new SolidColorBrush(tabColor);
+            }
             if (ReferenceEquals(tab, _activeTab))
             {
                 button.Classes.Add("active");
             }
 
             button.Click += (_, _) => ActivateTab(tab);
+            button.PointerPressed += (_, e) => BeginTabDrag(tab, button, e);
+            button.PointerReleased += (_, e) => EndTabDrag(tab, button, e);
             TabStrip.Children.Add(button);
+        }
+    }
+
+    private ContextMenu CreateTabContextMenu(TerminalTab tab) =>
+        new()
+        {
+            ItemsSource = new[]
+            {
+                new MenuItem
+                {
+                    Header = "Duplicate",
+                    Command = new RelayCommand(() => _ = RestoreTabAsync(CaptureTab(tab), regenerateIdentities: true)),
+                },
+                new MenuItem
+                {
+                    Header = "Move left",
+                    IsEnabled = TabIndexOf(tab) > 0,
+                    Command = new RelayCommand(() =>
+                    {
+                        _tabCollection.MoveRelative(tab, -1);
+                        RebuildTabs();
+                    }),
+                },
+                new MenuItem
+                {
+                    Header = "Move right",
+                    IsEnabled = TabIndexOf(tab) < _tabs.Count - 1,
+                    Command = new RelayCommand(() =>
+                    {
+                        _tabCollection.MoveRelative(tab, 1);
+                        RebuildTabs();
+                    }),
+                },
+                new MenuItem { Header = "-" },
+                new MenuItem
+                {
+                    Header = "Close other tabs",
+                    IsEnabled = _tabs.Count > 1,
+                    Command = new RelayCommand(() => _ = CloseOtherTabsAsync((uint)TabIndexOf(tab))),
+                },
+                new MenuItem
+                {
+                    Header = "Close tabs after",
+                    IsEnabled = TabIndexOf(tab) < _tabs.Count - 1,
+                    Command = new RelayCommand(() => _ = CloseTabsAfterAsync((uint)TabIndexOf(tab))),
+                },
+                new MenuItem
+                {
+                    Header = "Close",
+                    Command = new RelayCommand(() => _ = CloseTabAsync(tab)),
+                },
+            },
+        };
+
+    private void BeginTabDrag(TerminalTab tab, Control control, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(control).Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        _draggedTab = tab;
+        _dragStart = e.GetPosition(TabStrip);
+        e.Pointer.Capture(control);
+    }
+
+    private void EndTabDrag(TerminalTab tab, Control control, PointerReleasedEventArgs e)
+    {
+        e.Pointer.Capture(null);
+        if (!ReferenceEquals(_draggedTab, tab))
+        {
+            return;
+        }
+
+        _draggedTab = null;
+        var position = e.GetPosition(TabStrip);
+        if (Math.Abs(position.X - _dragStart.X) < 4 &&
+            Math.Abs(position.Y - _dragStart.Y) < 4)
+        {
+            return;
+        }
+
+        if (position.Y < -24 || position.Y > TabStrip.Bounds.Height + 24)
+        {
+            var local = e.GetPosition(this);
+            var screen = new PixelPoint(Position.X + (int)local.X, Position.Y + (int)local.Y);
+            var request = new TabTearOffRequest(
+                Guid.NewGuid(),
+                WindowId,
+                CaptureTab(tab),
+                new PixelPosition(screen.X, screen.Y));
+            _tabTearOffRequested?.Invoke(request);
+            TabTearOffRequested?.Invoke(request);
+            return;
+        }
+
+        var targetIndex = _tabs.Count;
+        for (var index = 0; index < TabStrip.Children.Count; index++)
+        {
+            var child = TabStrip.Children[index];
+            if (position.X < child.Bounds.Center.X)
+            {
+                targetIndex = index;
+                break;
+            }
+        }
+
+        var sourceIndex = TabIndexOf(tab);
+        if (sourceIndex >= 0 && sourceIndex < targetIndex)
+        {
+            targetIndex--;
+        }
+
+        if (_tabCollection.Move(tab, targetIndex))
+        {
+            RebuildTabs();
         }
     }
 
@@ -538,12 +794,17 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
                 ActiveControl.ClearSelection();
             }
         });
-        Register(ShortcutAction.PasteText, ActionScope.Control, _ => ActiveControl is not null,
-            async _ => await ActiveControl!.PasteAsync().ConfigureAwait(true));
+        Register(ShortcutAction.PasteText, ActionScope.Control,
+            _ => CanPaste(),
+            async _ => await PasteCoordinatedAsync().ConfigureAwait(true));
         Register(ShortcutAction.SendInput, ActionScope.Control, action => ActiveControl is not null && action.Args is SendInputArgs,
             action =>
             {
-                ActiveControl!.WriteInput(((SendInputArgs)action.Args!).Input);
+                var activePane = _activeTab!.Panes.ActiveContent!;
+                _activeTab.BroadcastInput.WriteInput(
+                    activePane,
+                    _activeTab.Panes.Leaves(),
+                    ((SendInputArgs)action.Args!).Input);
                 return Task.CompletedTask;
             });
         Register(ShortcutAction.SelectAll, ActionScope.Control, _ => ActiveControl is not null, _ =>
@@ -616,17 +877,21 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         Register(ShortcutAction.NewTab, ActionScope.Tab, _ => true,
             async action => await CreateTabAsync(ResolveProfile((action.Args as NewTabArgs)?.ContentArgs)).ConfigureAwait(true));
         Register(ShortcutAction.DuplicateTab, ActionScope.Tab, _ => _activeTab?.Panes.ActiveContent is not null,
-            async _ => await CreateTabAsync(_activeTab!.Panes.ActiveContent!.Profile).ConfigureAwait(true));
+            async _ => await RestoreTabAsync(CaptureTab(_activeTab!), regenerateIdentities: true).ConfigureAwait(true));
         Register(ShortcutAction.CloseTab, ActionScope.Tab, action => ResolveTab((action.Args as CloseTabArgs)?.Index) is not null,
             async action => await CloseTabAsync(ResolveTab((action.Args as CloseTabArgs)?.Index)!).ConfigureAwait(true));
-        Register(ShortcutAction.NextTab, ActionScope.Tab, _ => _tabs.Count > 1, _ =>
+        Register(ShortcutAction.NextTab, ActionScope.Tab, _ => _tabs.Count > 1, action =>
         {
-            ActivateRelativeTab(1);
+            ActivateRelativeTab(
+                1,
+                (action.Args as NextTabArgs)?.SwitcherMode == TabSwitcherMode.MostRecentlyUsed);
             return Task.CompletedTask;
         });
-        Register(ShortcutAction.PrevTab, ActionScope.Tab, _ => _tabs.Count > 1, _ =>
+        Register(ShortcutAction.PrevTab, ActionScope.Tab, _ => _tabs.Count > 1, action =>
         {
-            ActivateRelativeTab(-1);
+            ActivateRelativeTab(
+                -1,
+                (action.Args as PrevTabArgs)?.SwitcherMode == TabSwitcherMode.MostRecentlyUsed);
             return Task.CompletedTask;
         });
         Register(ShortcutAction.SwitchToTab, ActionScope.Tab,
@@ -639,8 +904,52 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         Register(ShortcutAction.CloseOtherTabs, ActionScope.Tab, _ => _tabs.Count > 1,
             async action => await CloseOtherTabsAsync((action.Args as CloseOtherTabsArgs)?.Index).ConfigureAwait(true));
         Register(ShortcutAction.CloseTabsAfter, ActionScope.Tab,
-            action => ResolveTab((action.Args as CloseTabsAfterArgs)?.Index) is { } tab && _tabs.IndexOf(tab) < _tabs.Count - 1,
+            action => ResolveTab((action.Args as CloseTabsAfterArgs)?.Index) is { } tab && TabIndexOf(tab) < _tabs.Count - 1,
             async action => await CloseTabsAfterAsync((action.Args as CloseTabsAfterArgs)?.Index).ConfigureAwait(true));
+        Register(ShortcutAction.MoveTab, ActionScope.Tab,
+            action => _activeTab is not null &&
+                      action.Args is MoveTabArgs { Window.Length: 0, Direction: not MoveTabDirection.None },
+            action =>
+            {
+                var delta = ((MoveTabArgs)action.Args!).Direction == MoveTabDirection.Forward ? 1 : -1;
+                _tabCollection.MoveRelative(_activeTab!, delta);
+                RebuildTabs();
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.RestoreLastClosed, ActionScope.Tab, _ => _tabCollection.ClosedCount > 0,
+            async _ =>
+            {
+                if (_tabCollection.TryTakeLastClosed(out var closed) && closed is not null)
+                {
+                    await RestoreTabAsync(closed).ConfigureAwait(true);
+                }
+            });
+        Register(ShortcutAction.RenameTab, ActionScope.Tab,
+            action => _activeTab is not null && action.Args is RenameTabArgs,
+            action =>
+            {
+                _activeTab!.CustomTitle = ((RenameTabArgs)action.Args!).Title;
+                SynchronizeTitle(_activeTab);
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.SetTabColor, ActionScope.Tab,
+            action => _activeTab is not null && action.Args is SetTabColorArgs,
+            action =>
+            {
+                _activeTab!.Color = ((SetTabColorArgs)action.Args!).TabColor;
+                RebuildTabs();
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.TabSearch, ActionScope.Window, _ => _tabs.Count > 0, _ =>
+        {
+            ShowTabSearch();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.OpenNewTabDropdown, ActionScope.Window, _ => true, _ =>
+        {
+            Menu_OnClick(TitleBar, new RoutedEventArgs());
+            return Task.CompletedTask;
+        });
 
         Register(ShortcutAction.SplitPane, ActionScope.Pane, _ => ActiveControl is not null,
             async action =>
@@ -717,6 +1026,33 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             });
         Register(ShortcutAction.RestartConnection, ActionScope.Pane, _ => ActiveControl is not null,
             async _ => await ActiveControl!.RestartAsync().ConfigureAwait(true));
+        Register(ShortcutAction.TogglePaneReadOnly, ActionScope.Pane, _ => _activeTab?.Panes.ActiveContent is not null, _ =>
+        {
+            var state = _activeTab!.Panes.ActiveContent!.Presentation;
+            state.IsReadOnly = !state.IsReadOnly;
+            RebuildTabs();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.EnablePaneReadOnly, ActionScope.Pane,
+            _ => _activeTab?.Panes.ActiveContent?.Presentation.IsReadOnly == false, _ =>
+            {
+                _activeTab!.Panes.ActiveContent!.Presentation.IsReadOnly = true;
+                RebuildTabs();
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.DisablePaneReadOnly, ActionScope.Pane,
+            _ => _activeTab?.Panes.ActiveContent?.Presentation.IsReadOnly == true, _ =>
+            {
+                _activeTab!.Panes.ActiveContent!.Presentation.IsReadOnly = false;
+                RebuildTabs();
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.ToggleBroadcastInput, ActionScope.Pane,
+            _ => _activeTab?.Panes.Count > 1, _ =>
+            {
+                _activeTab!.BroadcastInput.Toggle();
+                return Task.CompletedTask;
+            });
 
         Register(ShortcutAction.ToggleCommandPalette, ActionScope.Window, _ => true, _ =>
         {
@@ -841,15 +1177,31 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             : index < _tabs.Count ? _tabs[(int)index] : null;
     }
 
-    private void ActivateRelativeTab(int delta)
+    private int TabIndexOf(TerminalTab tab)
+    {
+        for (var index = 0; index < _tabs.Count; index++)
+        {
+            if (ReferenceEquals(_tabs[index], tab))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private void ActivateRelativeTab(int delta, bool mostRecentlyUsed = false)
     {
         if (_activeTab is null || _tabs.Count == 0)
         {
             return;
         }
 
-        var index = (_tabs.IndexOf(_activeTab) + delta + _tabs.Count) % _tabs.Count;
-        ActivateTab(_tabs[index]);
+        if (_tabCollection.SelectRelative(delta, mostRecentlyUsed) &&
+            _tabCollection.ActiveTab is { } selected)
+        {
+            ActivateTab(selected);
+        }
     }
 
     private async Task CloseOtherTabsAsync(uint? index)
@@ -869,7 +1221,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     private async Task CloseTabsAfterAsync(uint? index)
     {
         var keep = ResolveTab(index) ?? _activeTab;
-        var keepIndex = keep is null ? -1 : _tabs.IndexOf(keep);
+        var keepIndex = keep is null ? -1 : TabIndexOf(keep);
         foreach (var tab in _tabs.Skip(keepIndex + 1).ToArray())
         {
             await CloseTabAsync(tab).ConfigureAwait(true);
@@ -939,7 +1291,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         targetTab.Panes.SplitActive(pane, PaneSplitOrientation.Vertical);
         if (sourceTab.Panes.Count == 0)
         {
-            _tabs.Remove(sourceTab);
+            _tabCollection.Remove(sourceTab);
         }
 
         ActivateTab(targetTab);
@@ -1031,8 +1383,19 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private void ShowCommandPalette()
     {
+        _tabSearchMode = false;
         CommandPalette.IsVisible = true;
         CommandPaletteQuery.Text = string.Empty;
+        RefreshCommandPalette();
+        CommandPaletteQuery.Focus();
+    }
+
+    private void ShowTabSearch()
+    {
+        _tabSearchMode = true;
+        CommandPalette.IsVisible = true;
+        CommandPaletteQuery.Text = string.Empty;
+        CommandPaletteQuery.Watermark = "Search tabs";
         RefreshCommandPalette();
         CommandPaletteQuery.Focus();
     }
@@ -1040,17 +1403,26 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     private void CloseCommandPalette()
     {
         CommandPalette.IsVisible = false;
+        CommandPaletteQuery.Watermark = "Search actions";
         _activeTab?.Panes.ActiveContent?.Control.Focus();
     }
 
     private void RefreshCommandPalette()
     {
         var query = CommandPaletteQuery.Text;
-        CommandPaletteList.ItemsSource = string.IsNullOrWhiteSpace(query)
-            ? _paletteItems
-            : _paletteItems
-                .Where(item => item.Name.Contains(query, StringComparison.CurrentCultureIgnoreCase))
-                .ToArray();
+        CommandPaletteList.ItemsSource = _tabSearchMode
+            ? _tabCollection.Search(query, static tab => tab.Title)
+                .Select(tab => new PaletteItem(tab.Title, () =>
+                {
+                    ActivateTab(tab);
+                    return Task.CompletedTask;
+                }))
+                .ToArray()
+            : string.IsNullOrWhiteSpace(query)
+                ? _paletteItems
+                : _paletteItems
+                    .Where(item => item.Name.Contains(query, StringComparison.CurrentCultureIgnoreCase))
+                    .ToArray();
         CommandPaletteList.SelectedIndex = CommandPaletteList.ItemCount > 0 ? 0 : -1;
     }
 
@@ -1099,22 +1471,95 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     {
         if ((FindBar.IsVisible && FindBox.IsKeyboardFocusWithin) ||
             (CommandPalette.IsVisible && CommandPaletteQuery.IsKeyboardFocusWithin) ||
-            e.Handled ||
-            !AvaloniaKeyChord.TryCreate(e, out var chord) ||
-            _settings.ActionMap.ResolveAction(chord) is not { } action)
+            e.Handled)
         {
             return;
         }
 
-        // Claim executable bindings before an asynchronous clipboard/process action yields,
-        // so the terminal control cannot also translate the same chord to VT input.
-        e.Handled = true;
-        var result = await DispatchActionAsync(action).ConfigureAwait(true);
-        if (result.Status == ActionDispatchStatus.Disabled)
+        if (AvaloniaKeyChord.TryCreate(e, out var chord) &&
+            _settings.ActionMap.ResolveAction(chord) is { } action)
         {
-            e.Handled = false;
+            // Claim executable bindings before an asynchronous clipboard/process action yields,
+            // so the terminal control cannot also translate the same chord to VT input.
+            e.Handled = true;
+            var result = await DispatchActionAsync(action).ConfigureAwait(true);
+            if (result.Status == ActionDispatchStatus.Disabled)
+            {
+                e.Handled = TryRouteCoordinatedKey(e);
+            }
+        }
+        else
+        {
+            e.Handled = TryRouteCoordinatedKey(e);
         }
     }
+
+    private bool TryRouteCoordinatedKey(KeyEventArgs e)
+    {
+        if (_activeTab is not { } activeTab ||
+            activeTab.Panes.ActiveContent is not { } activePane ||
+            (!activePane.Presentation.IsReadOnly && !activeTab.BroadcastInput.IsEnabled))
+        {
+            return false;
+        }
+
+        var input = KeyMapper.ToVt(
+            e.Key,
+            e.KeyModifiers,
+            e.PhysicalKey,
+            e.KeySymbol,
+            activePane.Control.Engine.ApplicationCursorKeys);
+        if (input is null)
+        {
+            return activePane.Presentation.IsReadOnly;
+        }
+
+        activeTab.BroadcastInput.WriteInput(activePane, activeTab.Panes.Leaves(), input);
+        return true;
+    }
+
+    private void OnWindowTextInput(object? sender, TextInputEventArgs e)
+    {
+        if (e.Handled ||
+            string.IsNullOrEmpty(e.Text) ||
+            e.Text is "\r" or "\n" or "\t" ||
+            _activeTab is not { } activeTab ||
+            activeTab.Panes.ActiveContent is not { } activePane ||
+            (!activePane.Presentation.IsReadOnly && !activeTab.BroadcastInput.IsEnabled))
+        {
+            return;
+        }
+
+        activeTab.BroadcastInput.WriteInput(activePane, activeTab.Panes.Leaves(), e.Text);
+        e.Handled = true;
+    }
+
+    private async Task PasteCoordinatedAsync()
+    {
+        var tab = _activeTab;
+        var activePane = tab?.Panes.ActiveContent;
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        var text = clipboard is null ? null : await clipboard.GetTextAsync().ConfigureAwait(true);
+        if (tab is null ||
+            activePane is null ||
+            !_tabs.Contains(tab) ||
+            string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        text = text.Replace("\r\n", "\r", StringComparison.Ordinal).Replace('\n', '\r');
+        foreach (var target in tab.BroadcastInput
+                     .ResolveTargets(activePane, tab.Panes.Leaves())
+                     .Cast<TerminalPane>())
+        {
+            target.WriteInput(target.Control.Engine.WrapPaste(text));
+        }
+    }
+
+    private bool CanPaste() =>
+        _activeTab?.Panes.ActiveContent is { } activePane &&
+        _activeTab.BroadcastInput.ResolveTargets(activePane, _activeTab.Panes.Leaves()).Count > 0;
 
     private void TitleBar_OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -1167,6 +1612,260 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         return double.IsNaN(TerminalHost.Bounds.Width) || TerminalHost.Bounds.Width <= 0
             ? (_settings.InitialCols, _settings.InitialRows)
             : (columns, rows);
+    }
+
+    public TerminalWindowLayoutDescriptor CaptureLayout() =>
+        new()
+        {
+            ActiveTabId = _activeTab?.Id,
+            Tabs = _tabs.Select(CaptureTab).ToList(),
+        };
+
+    private TabLayoutDescriptor CaptureTab(TerminalTab tab) =>
+        new()
+        {
+            TabId = tab.Id,
+            ActiveSessionId = tab.Panes.ActiveContent?.Session.SessionId ?? Guid.Empty,
+            ZoomedSessionId = tab.Panes.ZoomedContent?.Session.SessionId,
+            Title = tab.Title,
+            CustomTitle = tab.CustomTitle,
+            Color = tab.Color,
+            Root = CapturePaneNode(tab.Panes.Root ??
+                throw new InvalidOperationException("Cannot capture an empty tab.")),
+        };
+
+    private static PaneLayoutDescriptor CapturePaneNode(PaneNode<TerminalPane> node) =>
+        node switch
+        {
+            PaneLeaf<TerminalPane> leaf => new()
+            {
+                Session = CloneSession(leaf.Content.Session),
+                Presentation = ClonePresentation(leaf.Content.Presentation),
+            },
+            PaneSplit<TerminalPane> split => new()
+            {
+                Orientation = split.Orientation,
+                Ratio = split.Ratio,
+                First = CapturePaneNode(split.First),
+                Second = CapturePaneNode(split.Second),
+            },
+            _ => throw new InvalidOperationException("Unknown pane node."),
+        };
+
+    private async Task<bool> TryRestorePersistedLayoutAsync()
+    {
+        var windowState = TerminalLayoutStateStore.ReadWindowState(_stateStore, WindowId);
+        var layout = TerminalLayoutStateStore.ReadWindow(_stateStore, WindowId);
+        if (layout is null || layout.Tabs.Count == 0)
+        {
+            return false;
+        }
+
+        ApplyPersistedWindowState(windowState);
+        foreach (var descriptor in layout.Tabs)
+        {
+            await RestoreTabAsync(descriptor).ConfigureAwait(true);
+        }
+
+        if (layout.ActiveTabId is { } activeId &&
+            _tabs.FirstOrDefault(tab => tab.Id == activeId) is { } active)
+        {
+            ActivateTab(active);
+        }
+
+        return true;
+    }
+
+    private void ApplyPersistedWindowState(WindowLayoutState? state)
+    {
+        if (state?.InitialPosition?.Split(',') is [var xText, var yText] &&
+            int.TryParse(xText, out var x) &&
+            int.TryParse(yText, out var y))
+        {
+            Position = new PixelPoint(x, y);
+        }
+
+        if (state?.InitialSize is { Width: > 0, Height: > 0 } size)
+        {
+            Width = size.Width;
+            Height = size.Height;
+        }
+
+        WindowState = state?.LaunchMode switch
+        {
+            LaunchMode.Maximized or LaunchMode.MaximizedFocus => WindowState.Maximized,
+            LaunchMode.Fullscreen => WindowState.FullScreen,
+            _ => WindowState,
+        };
+        if (state?.LaunchMode is LaunchMode.Focus or LaunchMode.MaximizedFocus)
+        {
+            TitleBar.IsVisible = false;
+        }
+    }
+
+    private async Task<TerminalTab> RestoreTabAsync(
+        TabLayoutDescriptor descriptor,
+        bool regenerateIdentities = false)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        var sessions = new Dictionary<Guid, TerminalPane>();
+        var root = RestorePaneNode(descriptor.Root, sessions, regenerateIdentities);
+        var activePane = sessions.GetValueOrDefault(descriptor.ActiveSessionId) ?? sessions.Values.First();
+        var zoomedPane = descriptor.ZoomedSessionId is { } zoomedId
+            ? sessions.GetValueOrDefault(zoomedId)
+            : null;
+        var tree = PaneTree<TerminalPane>.Restore(root, activePane, zoomedPane);
+        var tab = new TerminalTab(
+            regenerateIdentities ? Guid.NewGuid() : descriptor.TabId,
+            tree)
+        {
+            Title = descriptor.Title,
+            CustomTitle = descriptor.CustomTitle,
+            Color = descriptor.Color,
+        };
+        _tabCollection.Add(tab);
+        ActivateTab(tab);
+        RebuildTabs();
+
+        var (columns, rows) = InitialTerminalSize();
+        foreach (var pane in sessions.Values)
+        {
+            await pane.Control.StartAsync(pane.Profile, columns, rows).ConfigureAwait(true);
+        }
+
+        activePane.Control.Focus();
+        return tab;
+    }
+
+    private PaneNode<TerminalPane> RestorePaneNode(
+        PaneLayoutDescriptor descriptor,
+        IDictionary<Guid, TerminalPane> sessions,
+        bool regenerateIdentities)
+    {
+        if (descriptor.Session is { } savedSession)
+        {
+            var session = CloneSession(savedSession);
+            if (regenerateIdentities)
+            {
+                session.SessionId = Guid.NewGuid();
+            }
+
+            var profile = ResolveProfile(new NewTerminalArgs(
+                Commandline: session.Commandline,
+                StartingDirectory: session.StartingDirectory,
+                TabTitle: session.TabTitle ?? string.Empty,
+                TabColor: session.TabColor,
+                Profile: session.ProfileId ?? session.ProfileName,
+                SessionId: session.SessionId,
+                SuppressApplicationTitle: session.SuppressApplicationTitle,
+                Elevate: session.Elevate,
+                ReloadEnvironmentVariables: session.ReloadEnvironmentVariables));
+            var pane = CreatePane(profile, session, ClonePresentation(descriptor.Presentation));
+            sessions.Add(savedSession.SessionId, pane);
+
+            return new PaneLeaf<TerminalPane>(pane);
+        }
+
+        if (descriptor.First is null || descriptor.Second is null || descriptor.Orientation is null)
+        {
+            throw new InvalidOperationException("Invalid persisted pane split.");
+        }
+
+        return new PaneSplit<TerminalPane>(
+            descriptor.Orientation.Value,
+            descriptor.Ratio,
+            RestorePaneNode(descriptor.First, sessions, regenerateIdentities),
+            RestorePaneNode(descriptor.Second, sessions, regenerateIdentities));
+    }
+
+    private static TerminalSessionDescriptor CreateSessionDescriptor(ProfileSettings profile) =>
+        new()
+        {
+            ProfileId = profile.Guid,
+            ProfileName = profile.Name,
+            Commandline = profile.Commandline,
+            StartingDirectory = profile.StartingDirectory,
+            TabTitle = profile.TabTitle,
+            TabColor = profile.TabColor,
+            Icon = profile.IconResource?.ToString(),
+            Elevate = profile.Elevate,
+            SuppressApplicationTitle = profile.SuppressApplicationTitle,
+            ReloadEnvironmentVariables = profile.ReloadEnvironmentVariables,
+        };
+
+    private static TerminalSessionDescriptor CloneSession(TerminalSessionDescriptor session) =>
+        new()
+        {
+            SessionId = session.SessionId,
+            ProfileId = session.ProfileId,
+            ProfileName = session.ProfileName,
+            Commandline = session.Commandline,
+            StartingDirectory = session.StartingDirectory,
+            TabTitle = session.TabTitle,
+            TabColor = session.TabColor,
+            Icon = session.Icon,
+            Elevate = session.Elevate,
+            SuppressApplicationTitle = session.SuppressApplicationTitle,
+            ReloadEnvironmentVariables = session.ReloadEnvironmentVariables,
+        };
+
+    private static PanePresentationState ClonePresentation(PanePresentationState presentation) =>
+        new()
+        {
+            Title = presentation.Title,
+            Icon = presentation.Icon,
+            Color = presentation.Color,
+            ProgressState = presentation.ProgressState,
+            Progress = presentation.Progress,
+            IsAdministrator = presentation.IsAdministrator,
+            IsReadOnly = presentation.IsReadOnly,
+            HasBellIndicator = presentation.HasBellIndicator,
+            HasUnseenActivity = presentation.HasUnseenActivity,
+        };
+
+    private void PersistLayout(TerminalWindowLayoutDescriptor layout)
+    {
+        TerminalLayoutStateStore.SaveWindow(
+            _stateStore,
+            WindowId,
+            layout,
+            $"{Position.X},{Position.Y}",
+            new WindowSizeState { Width = Width, Height = Height },
+            WindowState switch
+            {
+                WindowState.Maximized => LaunchMode.Maximized,
+                WindowState.FullScreen => LaunchMode.Fullscreen,
+                _ => LaunchMode.Default,
+            });
+        _layoutPersisted = true;
+    }
+
+    private void TryPersistLayout(TerminalWindowLayoutDescriptor layout)
+    {
+        try
+        {
+            PersistLayout(layout);
+            LastPersistenceError = null;
+        }
+        catch (IOException ex)
+        {
+            LastPersistenceError = ex.Message;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            LastPersistenceError = ex.Message;
+        }
+    }
+
+    private static bool TryParseColor(string? value, out Color color)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            color = default;
+            return false;
+        }
+
+        return Color.TryParse(value, out color);
     }
 
     private TerminalTab? FindTab(TerminalPane pane) =>
@@ -1266,7 +1965,9 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     {
         if (tab.Panes.ActiveContent is { } activePane)
         {
-            tab.Title = activePane.Title;
+            tab.Title = string.IsNullOrWhiteSpace(tab.CustomTitle)
+                ? activePane.Title
+                : tab.CustomTitle;
         }
 
         RebuildTabs();
@@ -1293,6 +1994,11 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     protected override async void OnClosed(EventArgs e)
     {
+        if (!_layoutPersisted && _tabs.Count > 0)
+        {
+            TryPersistLayout(CaptureLayout());
+        }
+
         foreach (var tab in _tabs.ToArray())
         {
             foreach (var pane in tab.Panes.Leaves())
@@ -1305,18 +2011,72 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     }
 }
 
-internal sealed class TerminalPane(uint id, ProfileSettings profile, TermControl control)
+public sealed class TerminalPane : ITerminalInputTarget
 {
-    public uint Id { get; } = id;
-    public ProfileSettings Profile { get; } = profile;
-    public TermControl Control { get; } = control;
-    public string Title { get; set; } = string.IsNullOrWhiteSpace(profile.TabTitle) ? profile.Name : profile.TabTitle;
+    public TerminalPane(
+        uint id,
+        TerminalSessionDescriptor session,
+        ProfileSettings profile,
+        TermControl control,
+        PanePresentationState? presentation = null)
+    {
+        Id = id;
+        Session = session;
+        Profile = profile;
+        Control = control;
+        Presentation = presentation ?? new PanePresentationState
+        {
+            Title = string.IsNullOrWhiteSpace(profile.TabTitle) ? profile.Name : profile.TabTitle,
+            Icon = profile.IconResource?.ToString(),
+            Color = profile.TabColor,
+            IsAdministrator = profile.Elevate,
+        };
+    }
+
+    public uint Id { get; }
+    public TerminalSessionDescriptor Session { get; }
+    public ProfileSettings Profile { get; }
+    public TermControl Control { get; }
+    public PanePresentationState Presentation { get; }
+    public string Title
+    {
+        get => Presentation.Title;
+        set => Presentation.Title = value;
+    }
+
+    public bool IsReadOnly => Presentation.IsReadOnly;
+
+    public void WriteInput(string input)
+    {
+        if (!IsReadOnly)
+        {
+            Control.WriteInput(input);
+        }
+    }
 }
 
-internal sealed class TerminalTab(TerminalPane initialPane)
+public sealed class TerminalTab
 {
-    public PaneTree<TerminalPane> Panes { get; } = new(initialPane);
-    public string Title { get; set; } = initialPane.Title;
+    public TerminalTab(TerminalPane initialPane)
+        : this(Guid.NewGuid(), new PaneTree<TerminalPane>(initialPane))
+    {
+        Title = initialPane.Title;
+        Color = initialPane.Presentation.Color;
+    }
+
+    public TerminalTab(Guid id, PaneTree<TerminalPane> panes)
+    {
+        Id = id == Guid.Empty ? Guid.NewGuid() : id;
+        Panes = panes;
+        Title = panes.ActiveContent?.Title ?? string.Empty;
+    }
+
+    public Guid Id { get; }
+    public PaneTree<TerminalPane> Panes { get; }
+    public BroadcastInputCoordinator BroadcastInput { get; } = new();
+    public string Title { get; set; }
+    public string? CustomTitle { get; set; }
+    public string? Color { get; set; }
     public bool IsClosing { get; set; }
 }
 

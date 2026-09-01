@@ -56,8 +56,26 @@ public sealed class ApplicationStateStore
 
     public void Save()
     {
+        Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
+        using var stateLock = AcquireStateLock();
+        SaveUnlocked();
+    }
+
+    public void Update(Action<ApplicationStateData> update)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
+        using var stateLock = AcquireStateLock();
+        Data = Load(StatePath, out var diagnostic);
+        LastDiagnostic = diagnostic;
+        update(Data);
+        SaveUnlocked();
+    }
+
+    private void SaveUnlocked()
+    {
         var directory = Path.GetDirectoryName(StatePath)!;
-        Directory.CreateDirectory(directory);
         var temporaryPath = Path.Combine(directory, $".state.{Guid.NewGuid():N}.tmp");
         try
         {
@@ -87,6 +105,8 @@ public sealed class ApplicationStateStore
 
     public void Reset()
     {
+        Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
+        using var stateLock = AcquireStateLock();
         if (File.Exists(StatePath))
         {
             File.Delete(StatePath);
@@ -100,6 +120,46 @@ public sealed class ApplicationStateStore
     {
         ArgumentNullException.ThrowIfNull(layout);
         Data.PersistedWindowLayouts.Add(layout);
+    }
+
+    public void SavePersistedWindowLayout(int index, WindowLayoutState layout)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        ArgumentNullException.ThrowIfNull(layout);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
+        using var stateLock = AcquireStateLock();
+        Data = Load(StatePath, out var diagnostic);
+        LastDiagnostic = diagnostic;
+        while (Data.PersistedWindowLayouts.Count <= index)
+        {
+            Data.PersistedWindowLayouts.Add(new WindowLayoutState());
+        }
+
+        Data.PersistedWindowLayouts[index] = layout;
+        SaveUnlocked();
+    }
+
+    private FileStream AcquireStateLock()
+    {
+        var lockPath = StatePath + ".lock";
+        for (var attempt = 0; attempt < 80; attempt++)
+        {
+            try
+            {
+                return new FileStream(
+                    lockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+            }
+            catch (IOException) when (attempt < 79)
+            {
+                Thread.Sleep(25);
+            }
+        }
+
+        throw new IOException($"Could not acquire the application state lock '{lockPath}'.");
     }
 
     public bool DismissBadge(string badgeId)
