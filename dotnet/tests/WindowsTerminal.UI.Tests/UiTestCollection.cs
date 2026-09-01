@@ -14,7 +14,7 @@ public sealed class UiTestCollection
     {
         var window = new MainWindow();
 
-        Assert.Equal("Windows Terminal", window.Title);
+        Assert.Empty(window.Title ?? string.Empty);
         Assert.True(window.Width >= 640);
         Assert.True(window.Height >= 400);
     }
@@ -24,10 +24,13 @@ public sealed class UiTestCollection
     {
         var window = new MainWindow();
         var menu = window.FindControl<Avalonia.Controls.Button>("MenuButton");
+        var exitFullscreen = window.FindControl<Avalonia.Controls.Button>("ExitFullscreenButton");
         var about = window.FindControl<Avalonia.Controls.Border>("AboutOverlay");
 
         Assert.NotNull(menu);
         Assert.Equal("New tab menu", AutomationProperties.GetName(menu));
+        Assert.NotNull(exitFullscreen);
+        Assert.Equal("Exit full screen", AutomationProperties.GetName(exitFullscreen));
         Assert.NotNull(about);
         Assert.Equal(
             AutomationControlType.Window,

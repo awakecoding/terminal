@@ -3,6 +3,7 @@
     <RootNamespace>WindowsTerminal</RootNamespace>
     <AssemblyName>WindowsTerminal.App</AssemblyName>
     <Description>Avalonia application shell for tabs, panes, actions, and windows.</Description>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

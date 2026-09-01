@@ -7,21 +7,20 @@ namespace WindowsTerminal;
 internal static class Program
 {
     [STAThread]
-    public static async Task<int> Main(string[] args)
+    public static int Main(string[] args)
     {
         var parsed = new CliParser().Parse(args);
         if (parsed.ShouldExit)
         {
             var writer = parsed.ExitCode == 0 ? Console.Out : Console.Error;
-            await writer.WriteLineAsync(parsed.Message).ConfigureAwait(false);
+            writer.WriteLine(parsed.Message);
             return parsed.ExitCode;
         }
 
         var invocation = parsed.Invocation!;
         if (invocation.SavedLayout is not null)
         {
-            await Console.Error.WriteLineAsync(
-                "wt: persisted layout activation is not available in this phase.").ConfigureAwait(false);
+            Console.Error.WriteLine("wt: persisted layout activation is not available in this phase.");
             return 4;
         }
 
@@ -29,10 +28,10 @@ internal static class Program
         var broker = BrokerHost.TryCreate(deferredHandler);
         if (broker is null)
         {
-            var response = await ForwardToPrimaryAsync(invocation).ConfigureAwait(false);
+            var response = ForwardToPrimaryAsync(invocation).AsTask().GetAwaiter().GetResult();
             if (!response.IsSuccess)
             {
-                await Console.Error.WriteLineAsync($"wt: {response.Message}").ConfigureAwait(false);
+                Console.Error.WriteLine($"wt: {response.Message}");
                 return response.Status == BrokerStatus.WindowNotFound ? 3 : 1;
             }
 
@@ -42,17 +41,15 @@ internal static class Program
         if (invocation.TargetWindow.Equals("use-existing", StringComparison.OrdinalIgnoreCase) ||
             (int.TryParse(invocation.TargetWindow, out var requestedWindowId) && requestedWindowId > 0))
         {
-            await broker.DisposeAsync().ConfigureAwait(false);
-            await Console.Error.WriteLineAsync(
-                $"wt: terminal window '{invocation.TargetWindow}' was not found.").ConfigureAwait(false);
+            broker.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            Console.Error.WriteLine($"wt: terminal window '{invocation.TargetWindow}' was not found.");
             return 3;
         }
 
         if (invocation.SaveRequest is not null)
         {
-            await broker.DisposeAsync().ConfigureAwait(false);
-            await Console.Error.WriteLineAsync(
-                "wt: the save command is not available in this phase.").ConfigureAwait(false);
+            broker.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            Console.Error.WriteLine("wt: the save command is not available in this phase.");
             return 4;
         }
 
@@ -65,7 +62,7 @@ internal static class Program
         }
         finally
         {
-            await broker.DisposeAsync().ConfigureAwait(false);
+            broker.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 

@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="WindowsTerminal.Views.MainWindow"
         x:CompileBindings="True"
-        Title="Windows Terminal"
+        Title=""
         Width="1100"
         Height="700"
         MinWidth="480"
@@ -18,7 +18,9 @@
             Height="40"
             Background="#202020"
             PointerPressed="TitleBar_OnPointerPressed">
-      <Grid ColumnDefinitions="Auto,*" Margin="8,0,138,0">
+      <Grid x:Name="TitleBarLayout"
+            ColumnDefinitions="Auto,*"
+            Margin="8,0,138,0">
         <StackPanel Grid.Column="0" Orientation="Horizontal">
           <ScrollViewer x:Name="TabScrollViewer"
                        MaxWidth="720"
@@ -60,7 +62,24 @@
                   StrokeThickness="1" />
           </Button>
         </StackPanel>
-        <Border Grid.Column="1" MinWidth="45" />
+        <Button x:Name="ExitFullscreenButton"
+                Grid.Column="1"
+                Classes="icon"
+                Width="45"
+                Height="30"
+                IsVisible="False"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Click="ExitFullscreen_OnClick"
+                AutomationProperties.Name="Exit full screen"
+                ToolTip.Tip="Exit full screen (F11)">
+          <Path Data="M 0,0 L 4,4 M 4,0 L 4,4 L 0,4 M 10,10 L 6,6 M 6,10 L 6,6 L 10,6"
+                Width="10"
+                Height="10"
+                Stretch="Uniform"
+                Stroke="#F2F2F2"
+                StrokeThickness="1" />
+        </Button>
       </Grid>
     </Border>
     <Grid>

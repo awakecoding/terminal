@@ -294,7 +294,6 @@ public sealed class TermControl : Avalonia.Controls.Control
 
         var data = CreateClipboardDataTransfer(payload);
         await clipboard.SetDataAsync(data).ConfigureAwait(true);
-        await clipboard.FlushAsync().ConfigureAwait(true);
         return payload;
     }
 
@@ -889,6 +888,24 @@ public sealed class TermControl : Avalonia.Controls.Control
             return;
         }
 
+        if (point.Properties.IsRightButtonPressed &&
+            Profile?.RightClickContextMenu != true)
+        {
+            if (_selection is null)
+            {
+                ObserveInteractionAsync("paste", PasteAsync());
+            }
+            else
+            {
+                ObserveInteractionAsync("copy", CopyAsync(InteractionOptions.Copy));
+                ClearSelection();
+            }
+
+            e.Handled = true;
+            base.OnPointerPressed(e);
+            return;
+        }
+
         if (point.Properties.IsLeftButtonPressed &&
             (e.KeyModifiers & KeyModifiers.Control) != 0 &&
             hyperlink is not null)
@@ -1196,7 +1213,6 @@ public sealed class TermControl : Avalonia.Controls.Control
         var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
             ?? throw new InvalidOperationException("No clipboard is available for this control.");
         await clipboard.SetTextAsync(hyperlink.Uri).ConfigureAwait(true);
-        await clipboard.FlushAsync().ConfigureAwait(true);
     }
 
     internal ImeContext GetImeContext()
@@ -1316,7 +1332,6 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
 
         await clipboard.SetTextAsync(text).ConfigureAwait(true);
-        await clipboard.FlushAsync().ConfigureAwait(true);
     }
 
     private void ConfigureRenderer(ProfileSettings profile)

@@ -160,7 +160,7 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
         var top = padding + (composition.Row * (float)CellSize.Height);
         _paint.Color = SKColors.White;
         var typeface = _fonts.Resolve(composition.Text.AsSpan(), CellFlags.None);
-        using var font = CreateFont(typeface, CellFlags.None, enhancePrimaryContrast: false);
+        using var font = CreateFont(typeface, CellFlags.None);
         canvas.DrawText(composition.Text, left, top + _baseline, SKTextAlign.Left, font, _paint);
 
         _strokePaint.Color = SKColors.White;
@@ -772,13 +772,13 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
     {
         var typeface = _fonts.Resolve(key.Text.AsSpan(key.Offset, key.Length), key.Flags);
         LastResolvedFontFamily = typeface.FamilyName;
-        using var shapingFont = CreateFont(typeface, key.Flags, enhancePrimaryContrast: false);
+        using var shapingFont = CreateFont(typeface, key.Flags);
         using var shaper = new SKShaper(typeface);
         using var buffer = new HarfBuzzBuffer();
         buffer.AddUtf16(key.Text, key.Offset, key.Length);
         buffer.GuessSegmentProperties();
         var result = shaper.Shape(buffer, shapingFont);
-        using var font = CreateFont(typeface, key.Flags, enhancePrimaryContrast: true);
+        using var font = CreateFont(typeface, key.Flags);
         var glyphData = new byte[result.Codepoints.Length * sizeof(ushort)];
         for (var index = 0; index < result.Codepoints.Length; index++)
         {
@@ -795,30 +795,21 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
         return new CachedGlyph(blob, result.Width, typeface.FamilyName);
     }
 
-    private SKFont CreateFont(
-        SKTypeface typeface,
-        CellFlags flags,
-        bool enhancePrimaryContrast) =>
+    private SKFont CreateFont(SKTypeface typeface, CellFlags flags) =>
         new(typeface, _settings.FontSize)
         {
-            // DirectWrite's grayscale enhanced contrast produces a slightly heavier
-            // stem than Skia's default antialiasing for the same Cascadia face.
-            Embolden = ShouldEmbolden(typeface, flags) ||
-                       (enhancePrimaryContrast &&
-                        !typeface.IsBold &&
-                        _settings.FontWeight >= 400 &&
-                        IsPrimaryCascadia(typeface)),
-            Edging = SKFontEdging.Antialias,
+            Embolden = ShouldEmbolden(typeface, flags),
+            Edging = SKFontEdging.SubpixelAntialias,
             ForceAutoHinting = true,
             Hinting = SKFontHinting.Full,
             SkewX = ShouldSkew(typeface, flags) ? -0.25f : 0,
-            Subpixel = false,
+            Subpixel = true,
         };
 
     private void MeasureCell()
     {
         var typeface = _fonts.Resolve("M".AsSpan(), CellFlags.None);
-        using var font = CreateFont(typeface, CellFlags.None, enhancePrimaryContrast: false);
+        using var font = CreateFont(typeface, CellFlags.None);
         font.GetFontMetrics(out var metrics);
         var width = Math.Max(1, font.MeasureText("0"));
         var height = Math.Max(1, metrics.Descent - metrics.Ascent + metrics.Leading);
@@ -891,20 +882,6 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
 
     private static bool ShouldSkew(SKTypeface typeface, CellFlags flags) =>
         (flags & CellFlags.Italic) != 0 && !typeface.IsItalic;
-
-    private bool IsPrimaryCascadia(SKTypeface typeface)
-    {
-        var configured = _settings.FontFamily.AsSpan();
-        var separator = configured.IndexOf(',');
-        if (separator >= 0)
-        {
-            configured = configured[..separator];
-        }
-
-        configured = configured.Trim();
-        return configured.StartsWith("Cascadia", StringComparison.OrdinalIgnoreCase) &&
-               configured.Equals(typeface.FamilyName.AsSpan(), StringComparison.OrdinalIgnoreCase);
-    }
 
     private static uint CursorTextColor(uint cursorColor, uint cellBackground)
     {

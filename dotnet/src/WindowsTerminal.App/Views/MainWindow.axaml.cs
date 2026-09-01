@@ -23,6 +23,7 @@ using WindowsTerminal.Panes;
 using WindowsTerminal.Routing;
 using WindowsTerminal.Settings;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace WindowsTerminal.Views;
 
@@ -54,6 +55,8 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     private readonly TaskCompletionSource<TerminalWindowActivationResult> _initialActivationCompletion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly DispatcherTimer _notificationTimer;
+    private PixelPoint? _normalPosition;
+    private WindowSizeState _normalSize = new();
 
     public MainWindow() : this(0, string.Empty, null)
     {
@@ -105,7 +108,17 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             640,
             (_settings.InitialCols * defaultCell.Width) + 16 + ScrollbarWidth(defaultProfile));
         Height = Math.Max(400, (_settings.InitialRows * defaultCell.Height) + 56);
+        _normalSize = new WindowSizeState { Width = Width, Height = Height };
         Opened += OnOpened;
+        PositionChanged += (_, _) =>
+            Dispatcher.UIThread.Post(CaptureNormalWindowBounds, DispatcherPriority.Background);
+        PropertyChanged += (_, args) =>
+        {
+            if (args.Property == WindowStateProperty)
+            {
+                UpdateFullscreenChrome();
+            }
+        };
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
         AddHandler(TextInputEvent, OnWindowTextInput, RoutingStrategies.Tunnel);
         ConfigureActionDispatcher();
@@ -458,7 +471,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             RebuildTabs();
             if (ReferenceEquals(_activeTab, tab))
             {
-                Title = tab.Title;
+                SetNativeWindowTitle(tab.Title);
             }
         };
         control.CloseRequested += async (_, _) =>
@@ -2239,10 +2252,39 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         }
     }
 
+    private void ExitFullscreen_OnClick(object? sender, RoutedEventArgs e) =>
+        WindowState = WindowState.Normal;
+
+    private void UpdateFullscreenChrome()
+    {
+        var isFullscreen = WindowState == WindowState.FullScreen;
+        ExitFullscreenButton.IsVisible = isFullscreen;
+        TitleBarLayout.Margin = isFullscreen
+            ? new Thickness(8, 0, 8, 0)
+            : new Thickness(8, 0, 138, 0);
+    }
+
     private void MainWindow_OnSizeChanged(object? sender, SizeChangedEventArgs e)
     {
+        Dispatcher.UIThread.Post(CaptureNormalWindowBounds, DispatcherPriority.Background);
+
         TabScrollViewer.MaxWidth = Math.Max(120, e.NewSize.Width - 253);
         RebuildTabs();
+    }
+
+    private void CaptureNormalWindowBounds()
+    {
+        if (WindowState != WindowState.Normal)
+        {
+            return;
+        }
+
+        _normalPosition = Position;
+        _normalSize = new WindowSizeState
+        {
+            Width = Bounds.Width,
+            Height = Bounds.Height,
+        };
     }
 
     private void OpenSettings(SettingsTarget target = SettingsTarget.SettingsUI)
@@ -2364,29 +2406,22 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private void ApplyPersistedWindowState(WindowLayoutState? state)
     {
-        if (state?.InitialPosition?.Split(',') is [var xText, var yText] &&
+        var restoreBounds = state?.LaunchMode is null or LaunchMode.Default;
+        if (restoreBounds &&
+            state?.InitialPosition?.Split(',') is [var xText, var yText] &&
             int.TryParse(xText, out var x) &&
             int.TryParse(yText, out var y))
         {
             Position = new PixelPoint(x, y);
         }
 
-        if (state?.InitialSize is { Width: > 0, Height: > 0 } size)
+        if (restoreBounds &&
+            state?.InitialSize is { Width: > 0, Height: > 0 } size)
         {
             Width = size.Width;
             Height = size.Height;
         }
 
-        WindowState = state?.LaunchMode switch
-        {
-            LaunchMode.Maximized or LaunchMode.MaximizedFocus => WindowState.Maximized,
-            LaunchMode.Fullscreen => WindowState.FullScreen,
-            _ => WindowState,
-        };
-        if (state?.LaunchMode is LaunchMode.Focus or LaunchMode.MaximizedFocus)
-        {
-            TitleBar.IsVisible = false;
-        }
     }
 
     private async Task<TerminalTab> RestoreTabAsync(
@@ -2517,14 +2552,9 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             _stateStore,
             WindowId,
             layout,
-            $"{Position.X},{Position.Y}",
-            new WindowSizeState { Width = Width, Height = Height },
-            WindowState switch
-            {
-                WindowState.Maximized => LaunchMode.Maximized,
-                WindowState.FullScreen => LaunchMode.Fullscreen,
-                _ => LaunchMode.Default,
-            });
+            _normalPosition is { } position ? $"{position.X},{position.Y}" : null,
+            _normalSize,
+            LaunchMode.Default);
         _layoutPersisted = true;
     }
 
@@ -2958,9 +2988,22 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         RebuildTabs();
         if (ReferenceEquals(_activeTab, tab))
         {
-            Title = tab.Title;
+            SetNativeWindowTitle(tab.Title);
         }
     }
+
+    private void SetNativeWindowTitle(string title)
+    {
+        var handle = TryGetPlatformHandle()?.Handle ?? 0;
+        if (handle != 0)
+        {
+            _ = SetWindowText(handle, title);
+        }
+    }
+
+    [LibraryImport("user32.dll", EntryPoint = "SetWindowTextW", StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetWindowText(nint windowHandle, string title);
 
     private void DetachPaneControls(TerminalTab tab)
     {
