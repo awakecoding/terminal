@@ -45,6 +45,30 @@ public sealed class PaneTree<T> where T : class
         ActiveContent = initialContent;
     }
 
+    private PaneTree(
+        PaneNode<T> root,
+        T activeContent,
+        T? zoomedContent,
+        IEqualityComparer<T>? comparer)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(activeContent);
+        _comparer = comparer ?? EqualityComparer<T>.Default;
+        Root = NormalizeNode(root);
+        if (FindLeaf(activeContent) is null)
+        {
+            throw new ArgumentException("The active pane must exist in the restored tree.", nameof(activeContent));
+        }
+
+        if (zoomedContent is not null && FindLeaf(zoomedContent) is null)
+        {
+            throw new ArgumentException("The zoomed pane must exist in the restored tree.", nameof(zoomedContent));
+        }
+
+        ActiveContent = activeContent;
+        ZoomedContent = zoomedContent;
+    }
+
     public PaneNode<T>? Root { get; private set; }
 
     public T? ActiveContent { get; private set; }
@@ -52,6 +76,13 @@ public sealed class PaneTree<T> where T : class
     public T? ZoomedContent { get; private set; }
 
     public int Count => Leaves().Count;
+
+    public static PaneTree<T> Restore(
+        PaneNode<T> root,
+        T activeContent,
+        T? zoomedContent = null,
+        IEqualityComparer<T>? comparer = null) =>
+        new(root, activeContent, zoomedContent, comparer);
 
     public IReadOnlyList<T> Leaves() =>
         Root is null ? [] : EnumerateLeaves(Root).Select(static leaf => leaf.Content).ToArray();
@@ -98,11 +129,18 @@ public sealed class PaneTree<T> where T : class
 
     public bool Close(T content)
     {
+        return Detach(content, out _);
+    }
+
+    public bool Detach(T content, out T? detached)
+    {
+        detached = default;
         if (Root is null || FindLeaf(content) is null)
         {
             return false;
         }
 
+        detached = content;
         var replacementFocus = FindSiblingLeaf(Root, content);
         Root = RemoveLeaf(Root, content);
         if (Root is null)
@@ -122,6 +160,31 @@ public sealed class PaneTree<T> where T : class
             ZoomedContent = default;
         }
 
+        return true;
+    }
+
+    public bool InsertAdjacent(
+        T target,
+        T content,
+        PaneSplitOrientation orientation,
+        double ratio = 0.5,
+        bool contentFirst = false)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(content);
+        if (Root is null || FindLeaf(target) is null || FindLeaf(content) is not null)
+        {
+            return false;
+        }
+
+        var replacement = new PaneSplit<T>(
+            orientation,
+            NormalizeRatio(ratio),
+            new PaneLeaf<T>(contentFirst ? content : target),
+            new PaneLeaf<T>(contentFirst ? target : content));
+        Root = ReplaceLeaf(Root, target, replacement);
+        ActiveContent = content;
+        ZoomedContent = null;
         return true;
     }
 
@@ -557,5 +620,18 @@ public sealed class PaneTree<T> where T : class
 
     private static double NormalizeRatio(double ratio) =>
         Math.Clamp(double.IsFinite(ratio) ? ratio : 0.5, MinimumRatio, 1 - MinimumRatio);
+
+    private static PaneNode<T> NormalizeNode(PaneNode<T> node) =>
+        node switch
+        {
+            PaneLeaf<T> leaf => leaf,
+            PaneSplit<T> split => split with
+            {
+                Ratio = NormalizeRatio(split.Ratio),
+                First = NormalizeNode(split.First),
+                Second = NormalizeNode(split.Second),
+            },
+            _ => throw new ArgumentException("Unknown pane node type.", nameof(node)),
+        };
 
 }

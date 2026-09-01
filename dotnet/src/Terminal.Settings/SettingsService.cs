@@ -69,10 +69,9 @@ public static class SettingsService
 
         if (!state.Data.GeneratedProfiles.IsSupersetOf(loaded.Generation.GeneratedProfileIds))
         {
-            loaded.Generation.UpdateState(state.Data);
             try
             {
-                state.Save();
+                state.Update(loaded.Generation.UpdateState);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

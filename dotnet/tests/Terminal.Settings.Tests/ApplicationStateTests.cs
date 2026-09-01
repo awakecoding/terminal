@@ -113,6 +113,60 @@ public sealed class ApplicationStateTests
         Assert.Empty(store.Data.PersistedWorkspaces);
     }
 
+    [Fact]
+    public void WindowLayoutSlotSaveMergesLatestFile()
+    {
+        using var temporary = new TemporaryDirectory();
+        var firstWindow = new ApplicationStateStore(temporary.Path);
+        var secondWindow = new ApplicationStateStore(temporary.Path);
+
+        firstWindow.SavePersistedWindowLayout(0, new WindowLayoutState { InitialPosition = "1,1" });
+        secondWindow.SavePersistedWindowLayout(1, new WindowLayoutState { InitialPosition = "2,2" });
+
+        var restored = new ApplicationStateStore(temporary.Path);
+        Assert.Equal("1,1", restored.Data.PersistedWindowLayouts[0].InitialPosition);
+        Assert.Equal("2,2", restored.Data.PersistedWindowLayouts[1].InitialPosition);
+    }
+
+    [Fact]
+    public async Task ConcurrentWindowLayoutSavesRetainEverySlot()
+    {
+        using var temporary = new TemporaryDirectory();
+        var stores = Enumerable.Range(0, 8)
+            .Select(_ => new ApplicationStateStore(temporary.Path))
+            .ToArray();
+
+        await Task.WhenAll(stores.Select((store, index) => Task.Run(() =>
+            store.SavePersistedWindowLayout(
+                index,
+                new WindowLayoutState { InitialPosition = $"{index},{index}" }))));
+
+        var restored = new ApplicationStateStore(temporary.Path);
+        Assert.Equal(8, restored.Data.PersistedWindowLayouts.Count);
+        for (var index = 0; index < stores.Length; index++)
+        {
+            Assert.Equal($"{index},{index}", restored.Data.PersistedWindowLayouts[index].InitialPosition);
+        }
+    }
+
+    [Fact]
+    public void TransactionalUpdatePreservesConcurrentWindowLayout()
+    {
+        using var temporary = new TemporaryDirectory();
+        var profileStore = new ApplicationStateStore(temporary.Path);
+        var windowStore = new ApplicationStateStore(temporary.Path);
+        var profileId = Guid.NewGuid();
+
+        windowStore.SavePersistedWindowLayout(
+            0,
+            new WindowLayoutState { InitialPosition = "5,6" });
+        profileStore.Update(data => data.GeneratedProfiles.Add(profileId));
+
+        var restored = new ApplicationStateStore(temporary.Path);
+        Assert.Contains(profileId, restored.Data.GeneratedProfiles);
+        Assert.Equal("5,6", Assert.Single(restored.Data.PersistedWindowLayouts).InitialPosition);
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         public TemporaryDirectory()

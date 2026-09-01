@@ -218,4 +218,45 @@ public sealed class PaneTreeTests
         Assert.Equal(["right", "left"], tree.Leaves());
         Assert.Equal("right", tree.ActiveContent);
     }
+
+    [Fact]
+    public void DetachAndInsertAdjacentTransferPaneWithoutLosingIdentity()
+    {
+        var source = new PaneTree<string>("one");
+        source.SplitActive("two", PaneSplitOrientation.Vertical);
+        var target = new PaneTree<string>("three");
+
+        Assert.True(source.Detach("two", out var detached));
+        Assert.Same("two", detached);
+        Assert.True(target.InsertAdjacent("three", detached!, PaneSplitOrientation.Horizontal, 0.65));
+
+        Assert.Equal(["one"], source.Leaves());
+        Assert.Equal(["three", "two"], target.Leaves());
+        Assert.Equal("two", target.ActiveContent);
+    }
+
+    [Theory]
+    [InlineData(double.NaN, 0.5)]
+    [InlineData(double.PositiveInfinity, 0.5)]
+    [InlineData(-1, 0.1)]
+    [InlineData(2, 0.9)]
+    public void RestoreNormalizesInvalidRatios(double ratio, double expected)
+    {
+        var root = new PaneSplit<string>(
+            PaneSplitOrientation.Vertical,
+            ratio,
+            new PaneLeaf<string>("one"),
+            new PaneLeaf<string>("two"));
+
+        var tree = PaneTree<string>.Restore(root, "two");
+
+        Assert.Equal(expected, Assert.IsType<PaneSplit<string>>(tree.Root).Ratio);
+    }
+
+    [Fact]
+    public void RestoreRejectsMissingFocus()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            PaneTree<string>.Restore(new PaneLeaf<string>("one"), "missing"));
+    }
 }
