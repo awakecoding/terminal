@@ -84,6 +84,7 @@ public struct Cell
 {
     public Rune Rune;
     public CellAttributes Attributes;
+    public bool IsProtected;
     public bool IsWideContinuation;
     public byte StoredWidth;
     public string? CombiningCharacters;
@@ -101,6 +102,7 @@ public struct Cell
         !IsWideContinuation &&
         Rune.Value == ' ' &&
         string.IsNullOrEmpty(CombiningCharacters) &&
+        !IsProtected &&
         Attributes.Flags == CellFlags.None &&
         Attributes.Foreground.Kind == ColorKind.Default &&
         Attributes.Background.Kind == ColorKind.Default;

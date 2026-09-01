@@ -8,6 +8,7 @@ public sealed class VtParser
     private const int MaxStringBytes = 1024 * 1024;
     private const int MaxDcsPayloadBytes = TerminalImageLimits.MaximumDcsPayloadBytes;
     private const int MaxDcsIntermediates = 2;
+    private const int MaxEscIntermediates = 3;
 
     private enum State
     {
@@ -24,6 +25,8 @@ public sealed class VtParser
         DcsPassthrough,
         DcsEscape,
         DcsIgnore,
+        Vt52CursorRow,
+        Vt52CursorColumn,
         OscString,
         OscEscape,
         StringIgnore,
@@ -35,6 +38,7 @@ public sealed class VtParser
     private readonly List<byte> _osc = [];
     private readonly List<byte> _dcs = [];
     private readonly byte[] _dcsIntermediates = new byte[MaxDcsIntermediates];
+    private readonly byte[] _escIntermediates = new byte[MaxEscIntermediates];
     private State _state;
     private int _parameterCount;
     private int _currentParameter = -1;
@@ -42,7 +46,10 @@ public sealed class VtParser
     private byte _privateMarker;
     private byte _dcsFinal;
     private int _dcsIntermediateCount;
+    private int _escIntermediateCount;
     private bool _dcsEscapeCanDispatch;
+    private byte _vt52Row;
+    private bool _ansiMode = true;
     private int _utf8Needed;
     private int _utf8Accumulator;
     private int _utf8Minimum;
@@ -67,6 +74,7 @@ public sealed class VtParser
         _osc.Clear();
         ClearDcs();
         ResetUtf8();
+        _ansiMode = true;
     }
 
     private void ProcessByte(byte value)
@@ -86,7 +94,13 @@ public sealed class VtParser
 
         if (_state == State.OscEscape)
         {
-            if (value == (byte)'\\')
+            if (value is 0x18 or 0x1A)
+            {
+                _osc.Clear();
+                _state = State.Ground;
+                _dispatch.ExecuteC0(value);
+            }
+            else if (value == (byte)'\\')
             {
                 FinishOsc();
             }
@@ -102,7 +116,12 @@ public sealed class VtParser
 
         if (_state == State.StringIgnore)
         {
-            if (value == 0x1B)
+            if (value is 0x18 or 0x1A)
+            {
+                _state = State.Ground;
+                _dispatch.ExecuteC0(value);
+            }
+            else if (value == 0x1B)
             {
                 _state = State.StringEscape;
             }
@@ -116,7 +135,16 @@ public sealed class VtParser
 
         if (_state == State.StringEscape)
         {
-            _state = value == (byte)'\\' ? State.Ground : State.StringIgnore;
+            if (value is 0x18 or 0x1A)
+            {
+                _state = State.Ground;
+                _dispatch.ExecuteC0(value);
+            }
+            else
+            {
+                _state = value == (byte)'\\' ? State.Ground : State.StringIgnore;
+            }
+
             return;
         }
 
@@ -176,6 +204,14 @@ public sealed class VtParser
                 }
 
                 break;
+            case State.Vt52CursorRow:
+                _vt52Row = value;
+                _state = State.Vt52CursorColumn;
+                break;
+            case State.Vt52CursorColumn:
+                _state = State.Ground;
+                _dispatch.Vt52Dispatch('Y', _vt52Row, value);
+                break;
         }
     }
 
@@ -217,6 +253,11 @@ public sealed class VtParser
             return;
         }
 
+        if (!_ansiMode && value is >= 0x80 and <= 0x9F)
+        {
+            return;
+        }
+
         if (value is 0x9B)
         {
             EnterCsi();
@@ -241,6 +282,12 @@ public sealed class VtParser
             return;
         }
 
+        if (value is 0x8E or 0x8F)
+        {
+            _dispatch.ExecuteC0(value);
+            return;
+        }
+
         if (value is >= 0xC2 and <= 0xDF)
         {
             StartUtf8(value & 0x1F, 1, 0x80);
@@ -261,6 +308,29 @@ public sealed class VtParser
 
     private void ProcessEscape(byte value)
     {
+        if (!_ansiMode)
+        {
+            if (value == (byte)'Y')
+            {
+                _state = State.Vt52CursorRow;
+            }
+            else
+            {
+                _state = State.Ground;
+                if (value == (byte)'<')
+                {
+                    _ansiMode = true;
+                }
+
+                if (value is >= 0x30 and <= 0x7E)
+                {
+                    _dispatch.Vt52Dispatch((char)value);
+                }
+            }
+
+            return;
+        }
+
         switch (value)
         {
             case (byte)'[':
@@ -278,12 +348,12 @@ public sealed class VtParser
                 _state = State.StringIgnore;
                 break;
             case >= 0x20 and <= 0x2F:
-                _intermediate = value;
+                AppendEscIntermediate(value);
                 _state = State.EscapeIntermediate;
                 break;
             case >= 0x30 and <= 0x7E:
-                _dispatch.EscDispatch((char)value, 0);
                 _state = State.Ground;
+                _dispatch.EscDispatch((char)value, 0);
                 break;
             default:
                 _state = State.Ground;
@@ -295,12 +365,12 @@ public sealed class VtParser
     {
         if (value is >= 0x20 and <= 0x2F)
         {
-            _intermediate = value;
+            AppendEscIntermediate(value);
         }
         else if (IsFinal(value))
         {
-            _dispatch.EscDispatch((char)value, _intermediate);
             _state = State.Ground;
+            _dispatch.EscDispatch((char)value, _escIntermediates.AsSpan(0, _escIntermediateCount));
         }
         else
         {
@@ -367,14 +437,30 @@ public sealed class VtParser
 
     private void DispatchCsi(byte final)
     {
-        PushParameterIfNeeded();
+        if (_state != State.CsiIntermediate)
+        {
+            PushParameterIfNeeded();
+        }
+
+        var enterVt52 = final == (byte)'l' &&
+                        _privateMarker == (byte)'?' &&
+                        _parameterCount == 1 &&
+                        _parameters[0] == 2;
+        _state = State.Ground;
+        var parameterCount = _parameterCount;
+        var intermediate = _intermediate;
+        var privateMarker = _privateMarker;
+        var parameters = _parameters.AsSpan(0, parameterCount).ToArray();
+        ClearSequence();
         _dispatch.CsiDispatch(
             (char)final,
-            _parameters.AsSpan(0, _parameterCount),
-            _intermediate,
-            _privateMarker);
-        _state = State.Ground;
-        ClearSequence();
+            parameters,
+            intermediate,
+            privateMarker);
+        if (enterVt52)
+        {
+            _ansiMode = false;
+        }
     }
 
     private void ProcessOsc(byte value)
@@ -639,17 +725,19 @@ public sealed class VtParser
 
     private void TerminateDcs(bool dispatch)
     {
-        if (dispatch)
+        if (!dispatch)
         {
-            _dispatch.DcsDispatch(
-                (char)_dcsFinal,
-                _parameters.AsSpan(0, _parameterCount),
-                _dcsIntermediates.AsSpan(0, _dcsIntermediateCount),
-                _privateMarker,
-                System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_dcs));
+            CancelDcs();
+            return;
         }
 
+        var final = (char)_dcsFinal;
+        var parameters = _parameters.AsSpan(0, _parameterCount).ToArray();
+        var intermediates = _dcsIntermediates.AsSpan(0, _dcsIntermediateCount).ToArray();
+        var privateMarker = _privateMarker;
+        var data = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_dcs).ToArray();
         CancelDcs();
+        _dispatch.DcsDispatch(final, parameters, intermediates, privateMarker, data);
     }
 
     private void CancelDcs()
@@ -713,6 +801,15 @@ public sealed class VtParser
         _currentParameter = -1;
         _intermediate = 0;
         _privateMarker = 0;
+        _escIntermediateCount = 0;
+    }
+
+    private void AppendEscIntermediate(byte value)
+    {
+        if (_escIntermediateCount < _escIntermediates.Length)
+        {
+            _escIntermediates[_escIntermediateCount++] = value;
+        }
     }
 
     private void StartUtf8(int accumulator, int needed, int minimum)
