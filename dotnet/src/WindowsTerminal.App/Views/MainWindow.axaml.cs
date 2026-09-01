@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Primitives;
@@ -205,16 +206,22 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         {
             items.Add(new MenuItem { Header = "-" });
         }
-        items.Add(new MenuItem
+        var splitPane = new MenuItem
         {
             Header = "Split pane",
             Command = new RelayCommand(() => _ = SplitActivePaneAsync(PaneSplitOrientation.Vertical)),
-        });
-        items.Add(new MenuItem
+        };
+        AutomationProperties.SetName(splitPane, "Split pane");
+        AutomationProperties.SetAutomationId(splitPane, "SplitPaneMenuItem");
+        items.Add(splitPane);
+        var settings = new MenuItem
         {
             Header = "Settings",
             Command = new RelayCommand(() => OpenSettings()),
-        });
+        };
+        AutomationProperties.SetName(settings, "Settings");
+        AutomationProperties.SetAutomationId(settings, "SettingsMenuItem");
+        items.Add(settings);
         return items;
     }
 
@@ -226,6 +233,11 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         }
 
         var menu = new MenuItem { Header = item.Name };
+        AutomationProperties.SetName(menu, item.Name);
+        var menuIdentity = item.Profile?.Guid ?? item.ActionId ?? item.Name;
+        AutomationProperties.SetAutomationId(
+            menu,
+            $"NewTabMenuItem_{item.Type}_{menuIdentity.Replace(' ', '_')}");
         if (item.Type == ResolvedNewTabMenuItemType.Folder)
         {
             menu.ItemsSource = item.Children?.Select(CreateMenuItem).ToArray() ?? [];
