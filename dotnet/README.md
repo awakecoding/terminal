@@ -42,6 +42,8 @@ Set `WT_DOTNET_SETTINGS_PATH` to load a specific Windows Terminal settings file.
 Runtime application state is stored atomically in `state.json` beside that file.
 The settings loader applies embedded defaults, fragments, then the user layer;
 actions and keybindings are preserved losslessly for the dedicated action phase.
+The standalone compiled-XAML settings editor and host wiring contract are
+documented in [doc/settings-editor.md](doc/settings-editor.md).
 
 ## Architecture
 

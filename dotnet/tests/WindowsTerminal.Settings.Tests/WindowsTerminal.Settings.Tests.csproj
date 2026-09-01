@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Headless.XUnit" />
+    <ProjectReference Include="..\..\src\WindowsTerminal.Settings\WindowsTerminal.Settings.csproj" />
+  </ItemGroup>
+</Project>
