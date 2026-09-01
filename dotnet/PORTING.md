@@ -21,7 +21,7 @@ The original C++ tree stays in place. All new work lives under `dotnet/`.
 | `Terminal.Core` | Cell/attributes, text buffer, VT ground/CSI/OSC subset, alt screen, SGR (16/256/truecolor) |
 | `Terminal.Render` | Renderer-neutral contracts for the future Skia glyph atlas |
 | `Terminal.Connection` | NativeAOT-safe ConPTY via `LibraryImport`, transactional safe-handle lifecycle, cancellation, async writes, resize, and environment overrides |
-| `Terminal.Settings` | Complete MTSM global/window/profile/font/appearance/theme/scheme/media/new-tab-menu projection; tri-state inheritance, legacy migrations, fragments/origins, diagnostics, stable profile GUIDs, local-layer diff serialization, and atomic `settings.json`/`state.json` persistence |
+| `Terminal.Settings` | Complete MTSM global/window/profile/font/appearance/theme/scheme/media/new-tab-menu projection; tri-state inheritance, legacy migrations, fragments/origins, diagnostics, stable profile GUIDs, deterministic PowerShell/WSL/SSH/Visual Studio generators, orphan reconciliation, local-layer diff serialization, and atomic `settings.json`/`state.json` persistence |
 | `Terminal.Control` | Avalonia `TermControl`: Skia text, selection, copy/paste, key map |
 | `WindowsTerminal.App` | Tabbed window, title bar, Ctrl+Shift+T/W/N/C/V |
 | `WindowsTerminal` | NativeAOT executable and composition root |
@@ -31,9 +31,9 @@ compatibility, and UI test projects; x64/ARM64 NativeAOT CI; architecture
 decisions; and a generated compatibility inventory covering 120 settings keys,
 92 actions, 123 VT dispatch methods, 14 CLI commands, and 25 settings pages.
 
-What it is **not**: a daily driver. No panes, no ActionMap, no settings UI, no
-Atlas-quality rendering, no `wt` CLI, no WSL/VS generators, no search, no
-command palette, no accessibility.
+What it is **not**: a daily driver. No ActionMap, no settings UI, no
+Atlas-quality rendering, no `wt` CLI, no search, no command palette, no
+accessibility.
 
 ## Non-goals
 
@@ -136,9 +136,10 @@ Reimplement `TerminalSettingsModel` in C#, not WinRT projections.
 Implemented load order:
 
 1. Embedded `defaults.json` (checked in, generated from the C++ copy)
-2. Fragment files (`%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\`,
+2. Deterministic dynamic profiles (PowerShell, inbox shells, WSL, SSH, VS)
+3. Fragment files (`%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\`,
    `%PROGRAMDATA%\...`)
-3. User `settings.json`
+4. User `settings.json`
 
 Fragment `updates` are applied after profile identity is known, including to
 user-created profiles. Ordinary `null` clears an override and resumes
@@ -348,7 +349,8 @@ Goal: replace Windows Terminal for local `pwsh`/`cmd`/`wsl` work.
 3. **Panes.** Binary split tree, focus movement, zoom, close.
 4. **Search.** Incremental find in the buffer, next/prev.
 5. **Command palette.** Action search, fuzzy filter.
-6. **Dynamic profiles.** `pwsh` on PATH, WSL `-l -q`, cmd, Windows PowerShell.
+6. **Dynamic profiles.** Complete: installed PowerShell, WSL `-l -q`, cmd,
+   Windows PowerShell, SSH config hosts, and Visual Studio developer shells.
 7. **Buffer/VT bucket A–D** completed and tested.
 8. **Scrollbar, copy HTML/RTF optional, confirm close.**
 9. **`wt nt` / `wt sp` CLI.**
@@ -378,7 +380,7 @@ without hand edits; neovim and lazygit look correct.
 
 1. Sixel and image slices
 2. Azure Cloud Shell
-3. Fragments / extensions
+3. Extension fragment discovery/merge complete; extension UI remains
 4. Quake, tray, global summon
 5. Broadcast input, suggestions, Quick Fix
 6. Scratchpad / markdown panes

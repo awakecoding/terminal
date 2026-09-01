@@ -606,4 +606,12 @@ public sealed class SettingsLoaderTests
         Assert.Equal(first, second);
         Assert.NotEqual(first, otherSource);
     }
+
+    [Fact]
+    public void DynamicProfileGuidMatchesUpstreamNamespace()
+    {
+        Assert.Equal(
+            new Guid("2c4de342-38b7-51cf-b940-2309a097f518"),
+            ProfileGuid.CreateDynamic("Ubuntu"));
+    }
 }

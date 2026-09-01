@@ -204,15 +204,18 @@ public sealed class AppSettings
         {
             var hasDefaultGuid = Guid.TryParse(DefaultProfile, out var defaultGuid);
             var match = Profiles.Find(p =>
-                (hasDefaultGuid && Guid.TryParse(p.Guid, out var profileGuid) && profileGuid == defaultGuid) ||
-                string.Equals(p.Name, DefaultProfile, StringComparison.OrdinalIgnoreCase));
+                !p.Hidden &&
+                !p.Orphaned &&
+                ((hasDefaultGuid && Guid.TryParse(p.Guid, out var profileGuid) && profileGuid == defaultGuid) ||
+                 string.Equals(p.Name, DefaultProfile, StringComparison.OrdinalIgnoreCase)));
             if (match is not null)
             {
                 return match;
             }
         }
 
-        return Profiles.Count > 0 ? Profiles[0] : ProfileSettings.CreatePowerShell();
+        return Profiles.Find(profile => !profile.Hidden && !profile.Orphaned)
+            ?? ProfileSettings.CreatePowerShell();
     }
 }
 
@@ -259,6 +262,8 @@ public sealed class ProfileSettings
     public string? Source { get; set; }
     public SettingsOrigin Origin { get; set; }
     public string? SourcePath { get; set; }
+    [JsonIgnore]
+    public bool Orphaned { get; internal set; }
     public bool Hidden { get; set; }
     public string Commandline { get; set; } = @"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe";
     public string StartingDirectory { get; set; } = "%USERPROFILE%";
@@ -360,7 +365,7 @@ public sealed class ProfileSettings
 
     public static ProfileSettings CreatePwsh(string commandline = "pwsh.exe") => new()
     {
-        Guid = "{574e775e-4f2a-5b96-ac1e-a2962a157abf}",
+        Guid = "{574e775e-4f2a-5b96-ac1e-a2962a402336}",
         Name = "PowerShell",
         Commandline = commandline,
         Origin = SettingsOrigin.Generated,

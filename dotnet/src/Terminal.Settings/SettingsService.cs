@@ -19,7 +19,10 @@ public static class SettingsService
 
     public static IReadOnlyList<SettingsDiagnostic> LastDiagnostics { get; private set; } = [];
 
-    public static AppSettings Load()
+    public static AppSettings Load() =>
+        LoadAsync().AsTask().GetAwaiter().GetResult();
+
+    public static async ValueTask<AppSettings> LoadAsync(CancellationToken cancellationToken = default)
     {
         string? userJson = null;
         SettingsDiagnostic? readDiagnostic = null;
@@ -27,7 +30,10 @@ public static class SettingsService
         {
             try
             {
-                userJson = File.ReadAllText(SettingsPath, Encoding.UTF8);
+                userJson = await File.ReadAllTextAsync(
+                    SettingsPath,
+                    Encoding.UTF8,
+                    cancellationToken).ConfigureAwait(false);
             }
             catch (IOException ex)
             {
@@ -39,14 +45,43 @@ public static class SettingsService
             }
         }
 
-        var settings = SettingsLoader.Load(
+        var fragmentDiscovery = ExtensionFragmentDiscovery.Discover();
+        var state = LoadApplicationState();
+        var loaded = await DynamicSettingsLoader.LoadAsync(
             SettingsLoader.ReadEmbeddedDefaults(),
             userJson,
-            ReadFragments(),
-            SettingsPath);
+            fragmentDiscovery.Fragments,
+            DynamicProfileManager.CreateDefault(),
+            state.Data.GeneratedProfiles,
+            SettingsPath,
+            cancellationToken).ConfigureAwait(false);
+        var settings = loaded.Settings;
+        settings.Diagnostics.AddRange(fragmentDiscovery.Diagnostics);
         if (readDiagnostic is not null)
         {
             settings.Diagnostics.Add(readDiagnostic);
+        }
+
+        if (state.LastDiagnostic is not null)
+        {
+            settings.Diagnostics.Add(state.LastDiagnostic);
+        }
+
+        if (!state.Data.GeneratedProfiles.IsSupersetOf(loaded.Generation.GeneratedProfileIds))
+        {
+            loaded.Generation.UpdateState(state.Data);
+            try
+            {
+                state.Save();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                settings.Diagnostics.Add(state.LastDiagnostic ?? new SettingsDiagnostic(
+                    SettingsDiagnosticSeverity.Warning,
+                    "ApplicationStateWriteFailed",
+                    $"Could not persist generated profile state: {ex.Message}",
+                    state.StatePath));
+            }
         }
 
         LastDiagnostics = settings.Diagnostics;
@@ -100,67 +135,4 @@ public static class SettingsService
         $"Could not read settings from '{SettingsPath}': {exception.Message}",
         SettingsPath);
 
-    private static IEnumerable<SettingsLayer> ReadFragments()
-    {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-        var roots = new[]
-        {
-            Path.Combine(localAppData, "Microsoft", "Windows Terminal", "Fragments"),
-            Path.Combine(programData, "Microsoft", "Windows Terminal", "Fragments"),
-        };
-
-        foreach (var root in roots)
-        {
-            if (!Directory.Exists(root))
-            {
-                continue;
-            }
-
-            string[] paths;
-            try
-            {
-                paths = Directory.GetFiles(
-                    root,
-                    "*.json",
-                    new EnumerationOptions
-                    {
-                        RecurseSubdirectories = true,
-                        IgnoreInaccessible = true,
-                        AttributesToSkip = FileAttributes.ReparsePoint,
-                    });
-            }
-            catch (IOException ex)
-            {
-                Trace.WriteLine($"Could not enumerate settings fragments in '{root}': {ex.Message}");
-                continue;
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                Trace.WriteLine($"Could not enumerate settings fragments in '{root}': {ex.Message}");
-                continue;
-            }
-
-            foreach (var path in paths.Order(StringComparer.OrdinalIgnoreCase))
-            {
-                string json;
-                try
-                {
-                    json = File.ReadAllText(path, Encoding.UTF8);
-                }
-                catch (IOException ex)
-                {
-                    Trace.WriteLine($"Could not read settings fragment '{path}': {ex.Message}");
-                    continue;
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    Trace.WriteLine($"Could not read settings fragment '{path}': {ex.Message}");
-                    continue;
-                }
-
-                yield return new SettingsLayer(path, json, SettingsLayerKind.Fragment);
-            }
-        }
-    }
 }
