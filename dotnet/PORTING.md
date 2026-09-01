@@ -166,23 +166,34 @@ subset. Remaining work is grouped so tests can gate each bucket.
 
 | Bucket | Sequences / features | Phase |
 | --- | --- | --- |
-| A. Editing | ICH/DCH/IL/DL/ECH, DECSTBM, SU/SD, DECSC/DECRC | P0 (partially done) |
-| B. Modes | DECCKM, DECAWM, DECTCEM, alt buffer, bracketed paste, mouse SGR | P0 |
-| C. Reports | DA1/DA2, DSR CPR, DECRQM | P0 |
-| D. Color | SGR 38/48 2/5, OSC 4/10/11/12, indexed/RGB | P0 |
-| E. Unicode | UTF-8, wcwidth, emoji ZWJ (best-effort), reflow on resize | P0–P1 |
-| F. Shell integration | OSC 7, OSC 133 marks, OSC 8 hyperlinks | P1 |
+| A. Editing | ICH/DCH/IL/DL/ECH, DECSTBM, SU/SD, DECSC/DECRC | P0 slice complete |
+| B. Modes | DECCKM, DECAWM, DECTCEM, alt buffer, bracketed paste, mouse SGR | P0 slice complete |
+| C. Reports | DA1/DA2, DSR CPR, DECRQM | P0 slice complete |
+| D. Color | SGR 38/48 2/5, OSC 4/10/11/12, indexed/RGB | P0 slice complete |
+| E. Unicode | UTF-8, wcwidth, emoji ZWJ (best-effort), reflow on resize | P0 reflow/wide/combining complete; grapheme shaping remains |
+| F. Shell integration | OSC 7, OSC 133 marks, OSC 8 hyperlinks | OSC 7/8 complete; OSC 133 remains P1 |
 | G. Input | Application keypad, win32-input-mode, Kitty protocol | P1 |
 | H. Images | Sixel, OSC 1337, ConEmu | P2 |
 | I. Rare VT | Rectangular ops, DECDLD, macros, DECRQSS, VT52 | P2 |
 
-Buffer work beyond the prototype:
+The .NET buffer now uses bounded circular scrollback, keeps independent
+main/alternate state (cursor, margins, attributes, tab stops), reflows logical
+wrapped lines on resize, repairs wide-cell boundaries, retains combining marks
+and hyperlink metadata, and exposes detached read-only snapshots. Existing
+`GetRow`, cursor, selection, and scroll-offset APIs remain compatible with
+`Terminal.Control`.
 
-- Circular scrollback with cheap rotation (not `List<Cell[]>` copies)
-- Reflow on resize (`src/buffer/out` Reflow)
+Buffer work beyond the current parity slice:
+
 - Double-width / double-height rows
+- Full grapheme-cluster and emoji ZWJ shaping
 - Search over the buffer (`src/buffer/out/search.cpp`)
 - Image slices (sixel) as a later overlay
+
+Parser/core gaps intentionally left for later buckets include DCS payload
+dispatch (including sixel and DECRQSS), OSC 52/133/1337, selective and rectangular
+erase/attribute operations, downloadable character sets, VT52 mode, and the
+extended keyboard protocols.
 
 Port tests from `src/terminal/parser/ut_parser` and
 `src/cascadia/UnitTests_TerminalCore` as xUnit facts. That is the correctness

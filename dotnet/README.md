@@ -53,8 +53,13 @@ WindowsTerminal       NativeAOT executable and composition root
 ```
 
 This is not a line-for-line translation of every C++ file. The engine covers the
-VT sequences needed for modern shells, editors, and TUIs (SGR including truecolor,
-cursor/erase, scroll regions, alt screen, OSC titles, mouse/bracketed-paste modes).
+VT sequences needed for modern shells, editors, and TUIs: bounded circular
+scrollback with resize reflow, wide/combining cells, main/alternate buffers,
+editing and cursor commands, DEC/ANSI modes and reports, SGR including truecolor,
+OSC color resources/titles/working directories/hyperlinks, and incremental UTF-8.
+`TextBuffer.CreateSnapshot` and `TerminalEngine.CreateSnapshot` provide detached,
+read-only cell snapshots for render and test consumers; the existing live
+`TextBuffer.GetRow` API remains available to `Terminal.Control`.
 
 The full phased plan for a complete port is in [PORTING.md](PORTING.md).
 Architecture decisions are recorded in [doc/decisions](doc/decisions).

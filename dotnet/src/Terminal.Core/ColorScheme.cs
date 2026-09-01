@@ -18,7 +18,7 @@ public sealed class ColorScheme
 
     public uint Resolve(int index)
     {
-        if ((uint)index < 16)
+        if ((uint)index < (uint)Table.Length)
         {
             return Table[index];
         }
@@ -29,6 +29,76 @@ public sealed class ColorScheme
         }
 
         return Foreground;
+    }
+
+    public ColorScheme WithColorTableEntry(int index, uint color)
+    {
+        var table = new uint[256];
+        for (var i = 0; i < table.Length; i++)
+        {
+            table[i] = Resolve(i);
+        }
+
+        if ((uint)index < (uint)table.Length)
+        {
+            table[index] = ForceOpaque(color);
+        }
+
+        return Copy(table: table);
+    }
+
+    public ColorScheme WithForeground(uint color) => Copy(foreground: ForceOpaque(color));
+
+    public ColorScheme WithBackground(uint color) => Copy(background: ForceOpaque(color));
+
+    public ColorScheme WithCursor(uint color) => Copy(cursor: ForceOpaque(color));
+
+    public static bool TryParseXtermColor(ReadOnlySpan<char> value, out uint color)
+    {
+        color = 0;
+        if (value.StartsWith('#') && value.Length is 4 or 7)
+        {
+            if (value.Length == 4 &&
+                TryHex(value[1..2], out var r4) &&
+                TryHex(value[2..3], out var g4) &&
+                TryHex(value[3..4], out var b4))
+            {
+                color = 0xFF000000u | (r4 * 17u << 16) | (g4 * 17u << 8) | (b4 * 17u);
+                return true;
+            }
+
+            if (value.Length == 7 &&
+                TryHex(value[1..3], out var r8) &&
+                TryHex(value[3..5], out var g8) &&
+                TryHex(value[5..7], out var b8))
+            {
+                color = 0xFF000000u | (r8 << 16) | (g8 << 8) | b8;
+                return true;
+            }
+        }
+
+        if (value.StartsWith("rgb:", StringComparison.OrdinalIgnoreCase))
+        {
+            var components = value[4..].ToString().Split('/');
+            if (components.Length == 3 &&
+                TryScaleHex(components[0], out var r) &&
+                TryScaleHex(components[1], out var g) &&
+                TryScaleHex(components[2], out var b))
+            {
+                color = 0xFF000000u | (r << 16) | (g << 8) | b;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static string FormatXtermColor(uint color)
+    {
+        var r = (byte)(color >> 16);
+        var g = (byte)(color >> 8);
+        var b = (byte)color;
+        return $"rgb:{r:x2}{r:x2}/{g:x2}{g:x2}/{b:x2}{b:x2}";
     }
 
     public static ColorScheme Campbell { get; } = new()
@@ -140,6 +210,7 @@ public sealed class ColorScheme
                     _xterm256[idx] = 0xFF000000u | ((uint)cube[r] << 16) | ((uint)cube[g] << 8) | cube[b];
                 }
             }
+
         }
 
         for (var i = 0; i < 24; i++)
@@ -147,5 +218,37 @@ public sealed class ColorScheme
             var level = (byte)(8 + (i * 10));
             _xterm256[232 + i] = 0xFF000000u | ((uint)level << 16) | ((uint)level << 8) | level;
         }
+    }
+
+    private ColorScheme Copy(
+        uint? foreground = null,
+        uint? background = null,
+        uint? cursor = null,
+        uint[]? table = null) => new()
+    {
+        Name = Name,
+        Foreground = foreground ?? Foreground,
+        Background = background ?? Background,
+        Cursor = cursor ?? Cursor,
+        SelectionBackground = SelectionBackground,
+        Table = table ?? (uint[])Table.Clone(),
+    };
+
+    private static uint ForceOpaque(uint color) => color | 0xFF000000u;
+
+    private static bool TryHex(ReadOnlySpan<char> value, out uint parsed) =>
+        uint.TryParse(value, System.Globalization.NumberStyles.HexNumber, null, out parsed);
+
+    private static bool TryScaleHex(string value, out uint component)
+    {
+        component = 0;
+        if (value.Length is < 1 or > 4 || !TryHex(value, out var parsed))
+        {
+            return false;
+        }
+
+        var maximum = (1u << (value.Length * 4)) - 1u;
+        component = (parsed * 255u + (maximum / 2u)) / maximum;
+        return true;
     }
 }

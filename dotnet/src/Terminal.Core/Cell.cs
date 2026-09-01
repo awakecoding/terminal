@@ -65,6 +65,8 @@ public struct Cell
     public Rune Rune;
     public CellAttributes Attributes;
     public bool IsWideContinuation;
+    public string? CombiningCharacters;
+    public string? HyperlinkUri;
 
     public static Cell Blank => new()
     {
@@ -75,7 +77,11 @@ public struct Cell
     public bool IsBlank =>
         !IsWideContinuation &&
         Rune.Value == ' ' &&
+        string.IsNullOrEmpty(CombiningCharacters) &&
         Attributes.Flags == CellFlags.None &&
         Attributes.Foreground.Kind == ColorKind.Default &&
         Attributes.Background.Kind == ColorKind.Default;
+
+    public readonly string Text =>
+        IsWideContinuation ? string.Empty : Rune + (CombiningCharacters ?? string.Empty);
 }
