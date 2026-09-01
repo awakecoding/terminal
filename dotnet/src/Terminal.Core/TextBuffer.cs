@@ -2,7 +2,10 @@ using System.Text;
 
 namespace Microsoft.Terminal.Core;
 
-public sealed record TextBufferLineSnapshot(IReadOnlyList<Cell> Cells, bool Wrapped);
+public sealed record TextBufferLineSnapshot(
+    IReadOnlyList<Cell> Cells,
+    bool Wrapped,
+    ShellMark? Mark = null);
 
 public sealed record TextBufferSnapshot(
     int Columns,
@@ -24,12 +27,16 @@ public sealed class TextBuffer
 
         public Cell[] Cells { get; }
         public bool Wrapped { get; set; }
+        public ShellMark? Mark { get; set; }
     }
 
     private CircularBuffer<BufferLine> _lines;
     private readonly int _historySize;
     private bool[] _tabStops;
     private int _scrollOffset;
+    private ShellIntegrationKind _shellIntegration;
+    private BufferLine? _activeMarkedLine;
+    private bool _activeMarkHasOutput;
 
     public TextBuffer(int columns, int rows, int historySize, bool hasHistory)
     {
@@ -80,6 +87,7 @@ public sealed class TextBuffer
         var oldViewport = ViewportStart;
         var cursorAbsoluteLine = oldViewport + CursorY;
         var source = _lines.ToList();
+        var activeMark = _activeMarkedLine?.Mark;
 
         Columns = columns;
         Rows = rows;
@@ -96,6 +104,18 @@ public sealed class TextBuffer
         }
 
         _lines.ResetCapacity(rows + _historySize, reflowed);
+        _activeMarkedLine = null;
+        if (activeMark is not null)
+        {
+            for (var index = 0; index < _lines.Count; index++)
+            {
+                if (ReferenceEquals(_lines[index].Mark, activeMark))
+                {
+                    _activeMarkedLine = _lines[index];
+                    break;
+                }
+            }
+        }
         var dropped = Math.Max(0, reflowed.Count - _lines.Count);
         cursorLine = Math.Max(0, cursorLine - dropped);
 
@@ -136,7 +156,10 @@ public sealed class TextBuffer
         {
             var sourceIndex = Math.Min(first + i, _lines.Count - 1);
             var cells = Array.AsReadOnly((Cell[])_lines[sourceIndex].Cells.Clone());
-            copies[i] = new TextBufferLineSnapshot(cells, _lines[sourceIndex].Wrapped);
+            copies[i] = new TextBufferLineSnapshot(
+                cells,
+                _lines[sourceIndex].Wrapped,
+                _lines[sourceIndex].Mark is { } mark ? new ShellMark(mark.ExitCode) : null);
         }
 
         return new TextBufferSnapshot(Columns, Rows, CursorX, CursorY, HistoryCount, ScrollOffset, copies);
@@ -177,6 +200,7 @@ public sealed class TextBuffer
             Rune = rune,
             Attributes = CurrentAttributes,
             HyperlinkUri = CurrentHyperlinkUri,
+            ShellIntegration = _shellIntegration,
         };
 
         if (width == 2 && CursorX + 1 < Columns)
@@ -187,6 +211,7 @@ public sealed class TextBuffer
                 Attributes = CurrentAttributes,
                 IsWideContinuation = true,
                 HyperlinkUri = CurrentHyperlinkUri,
+                ShellIntegration = _shellIntegration,
             };
         }
 
@@ -504,6 +529,9 @@ public sealed class TextBuffer
     {
         CurrentAttributes = CellAttributes.Default;
         CurrentHyperlinkUri = null;
+        _shellIntegration = ShellIntegrationKind.None;
+        _activeMarkedLine = null;
+        _activeMarkHasOutput = false;
         CursorX = 0;
         CursorY = 0;
         WrapPending = false;
@@ -557,6 +585,53 @@ public sealed class TextBuffer
     }
 
     public string GetVisibleText() => GetText(0, 0, Columns - 1, Rows - 1);
+
+    public void StartPrompt()
+    {
+        var line = GetLiveLine(CursorY);
+        line.Mark ??= new ShellMark();
+        _activeMarkedLine = line;
+        _activeMarkHasOutput = false;
+        _shellIntegration = ShellIntegrationKind.Prompt;
+    }
+
+    public void StartCommand()
+    {
+        EnsureShellMark();
+        _shellIntegration = ShellIntegrationKind.Command;
+    }
+
+    public void StartOutput()
+    {
+        EnsureShellMark();
+        _activeMarkHasOutput = true;
+        _shellIntegration = ShellIntegrationKind.Output;
+    }
+
+    public void EndCommand(uint? exitCode)
+    {
+        _shellIntegration = ShellIntegrationKind.None;
+        if (_activeMarkedLine?.Mark is { } mark)
+        {
+            mark.ExitCode = exitCode;
+        }
+
+        _activeMarkedLine = null;
+        _activeMarkHasOutput = false;
+    }
+
+    private void EnsureShellMark()
+    {
+        if (_activeMarkedLine is not null && !_activeMarkHasOutput)
+        {
+            return;
+        }
+
+        var line = GetLiveLine(CursorY);
+        line.Mark ??= new ShellMark();
+        _activeMarkedLine = line;
+        _activeMarkHasOutput = false;
+    }
 
     private BufferLine GetVisibleLine(int viewportY)
     {
@@ -716,6 +791,7 @@ public sealed class TextBuffer
                         Attributes = row[x].Attributes,
                         IsWideContinuation = true,
                         HyperlinkUri = row[x].HyperlinkUri,
+                        ShellIntegration = row[x].ShellIntegration,
                     };
                     x++;
                 }
@@ -736,12 +812,18 @@ public sealed class TextBuffer
         newCursorLine = 0;
         newCursorX = 0;
         var paragraphCells = new List<Cell>();
+        var paragraphMarks = new List<(int Offset, ShellMark Mark)>();
         var cursorOffset = -1;
 
         for (var lineIndex = 0; lineIndex < source.Count; lineIndex++)
         {
             var line = source[lineIndex];
             var used = line.Wrapped ? oldColumns : LastContentColumn(line.Cells) + 1;
+            if (line.Mark is not null)
+            {
+                paragraphMarks.Add((DisplayWidth(paragraphCells), line.Mark));
+            }
+
             if (lineIndex == cursorLine)
             {
                 used = Math.Max(used, cursorX);
@@ -758,7 +840,16 @@ public sealed class TextBuffer
 
             if (!line.Wrapped || lineIndex == source.Count - 1)
             {
+                var paragraphStart = result.Count;
                 EmitParagraph(paragraphCells, newColumns, result, cursorOffset, out var relativeLine, out var relativeColumn);
+                foreach (var (offset, mark) in paragraphMarks)
+                {
+                    var destination = paragraphStart + Math.Min(
+                        offset / newColumns,
+                        result.Count - paragraphStart - 1);
+                    result[destination].Mark ??= mark;
+                }
+
                 if (cursorOffset >= 0)
                 {
                     newCursorLine = result.Count - relativeLine;
@@ -767,6 +858,7 @@ public sealed class TextBuffer
                 }
 
                 paragraphCells.Clear();
+                paragraphMarks.Clear();
             }
         }
 
@@ -824,6 +916,7 @@ public sealed class TextBuffer
                     Attributes = cell.Attributes,
                     IsWideContinuation = true,
                     HyperlinkUri = cell.HyperlinkUri,
+                    ShellIntegration = cell.ShellIntegration,
                 };
             }
 

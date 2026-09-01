@@ -75,6 +75,7 @@ public sealed class TerminalEngine : IVtDispatch
     public event EventHandler? Invalidated;
     public event EventHandler<string>? TitleChanged;
     public event EventHandler<string?>? WorkingDirectoryChanged;
+    public event EventHandler? ShellIntegrationChanged;
     public event EventHandler? Bell;
     public event EventHandler<byte[]>? ResponseReady;
 
@@ -245,7 +246,50 @@ public sealed class TerminalEngine : IVtDispatch
             case 12:
                 DispatchDynamicColors(command, data);
                 break;
+            case 133:
+                DispatchShellIntegration(data);
+                break;
         }
+    }
+
+    private void DispatchShellIntegration(ReadOnlySpan<char> data)
+    {
+        if (data.IsEmpty)
+        {
+            return;
+        }
+
+        switch (data[0])
+        {
+            case 'A':
+                Buffer.StartPrompt();
+                break;
+            case 'B':
+                Buffer.StartCommand();
+                break;
+            case 'C':
+                Buffer.StartOutput();
+                break;
+            case 'D':
+                uint? exitCode = null;
+                if (data.Length >= 2 && data[1] == ';')
+                {
+                    exitCode = uint.TryParse(
+                        data[2..],
+                        System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var parsed)
+                        ? parsed
+                        : uint.MaxValue;
+                }
+
+                Buffer.EndCommand(exitCode);
+                break;
+            default:
+                return;
+        }
+
+        ShellIntegrationChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void DispatchCsi(char final, ReadOnlySpan<int> parameters, byte intermediate, byte privateMarker)

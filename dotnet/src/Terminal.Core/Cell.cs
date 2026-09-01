@@ -23,6 +23,24 @@ public enum ColorKind : byte
     Rgb = 2,
 }
 
+public enum ShellIntegrationKind : byte
+{
+    None,
+    Prompt,
+    Command,
+    Output,
+}
+
+public sealed class ShellMark
+{
+    public ShellMark(uint? exitCode = null)
+    {
+        ExitCode = exitCode;
+    }
+
+    public uint? ExitCode { get; internal set; }
+}
+
 public readonly record struct TermColor(ColorKind Kind, byte Index, byte R, byte G, byte B)
 {
     public static TermColor Default { get; } = new(ColorKind.Default, 0, 0, 0, 0);
@@ -67,6 +85,7 @@ public struct Cell
     public bool IsWideContinuation;
     public string? CombiningCharacters;
     public string? HyperlinkUri;
+    public ShellIntegrationKind ShellIntegration;
 
     public static Cell Blank => new()
     {
