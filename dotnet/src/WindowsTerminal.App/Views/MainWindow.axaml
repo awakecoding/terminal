@@ -80,6 +80,25 @@
                    DoubleTapped="CommandPaletteList_OnDoubleTapped" />
         </Grid>
       </Border>
+      <Border x:Name="NotificationToast"
+              IsVisible="False"
+              MaxWidth="420"
+              HorizontalAlignment="Right"
+              VerticalAlignment="Bottom"
+              Margin="16"
+              Padding="14"
+              CornerRadius="6"
+              Background="#F03A3A3A"
+              AutomationProperties.LiveSetting="Polite">
+        <StackPanel Spacing="4">
+          <TextBlock x:Name="NotificationTitle"
+                     FontWeight="SemiBold"
+                     TextWrapping="Wrap" />
+          <TextBlock x:Name="NotificationBody"
+                     AutomationProperties.LiveSetting="Polite"
+                     TextWrapping="Wrap" />
+        </StackPanel>
+      </Border>
     </Grid>
   </DockPanel>
 </Window>

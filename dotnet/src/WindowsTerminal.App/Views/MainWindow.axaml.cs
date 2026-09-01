@@ -6,7 +6,9 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Microsoft.Terminal.Control;
+using Microsoft.Terminal.Core;
 using Microsoft.Terminal.Settings;
 using WindowsTerminal.Actions;
 using WindowsTerminal.Panes;
@@ -29,6 +31,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     private readonly Action<TerminalWindowActivation>? _newWindowRequested;
     private readonly TaskCompletionSource<TerminalWindowActivationResult> _initialActivationCompletion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly DispatcherTimer _notificationTimer;
 
     public MainWindow() : this(0, string.Empty, null)
     {
@@ -45,6 +48,12 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         _initialActivation = initialActivation;
         _newWindowRequested = newWindowRequested;
         InitializeComponent();
+        _notificationTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        _notificationTimer.Tick += (_, _) =>
+        {
+            _notificationTimer.Stop();
+            NotificationToast.IsVisible = false;
+        };
         _settings = SettingsService.Load();
         Width = Math.Max(640, _settings.InitialCols * 8);
         Height = Math.Max(400, _settings.InitialRows * 16 + 80);
@@ -196,7 +205,12 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     private TerminalPane CreatePane(ProfileSettings profile)
     {
         var control = new TermControl();
+        control.InteractionOptions = TerminalInteractionOptions.FromSettings(_settings);
         control.Cursor = new Cursor(StandardCursorType.Ibeam);
+        control.NotificationRequested += (_, notification) => ShowNotification(notification);
+        control.InteractionError += (_, error) => ShowNotification(new TerminalNotification(
+            error.Operation,
+            error.Exception.Message));
         var pane = new TerminalPane(_nextPaneId++, profile, control);
         control.TitleChanged += (_, title) =>
         {
@@ -1225,6 +1239,17 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         };
         close.Click += (_, _) => dialog.Close();
         await dialog.ShowDialog(this).ConfigureAwait(true);
+    }
+
+    private void ShowNotification(TerminalNotification notification)
+    {
+        NotificationTitle.Text = string.IsNullOrWhiteSpace(notification.Title)
+            ? "Windows Terminal"
+            : notification.Title;
+        NotificationBody.Text = notification.Body;
+        NotificationToast.IsVisible = true;
+        _notificationTimer.Stop();
+        _notificationTimer.Start();
     }
 
     private static bool IsLaunchFailure(Exception error) =>
