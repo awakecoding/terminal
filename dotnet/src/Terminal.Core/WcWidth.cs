@@ -18,6 +18,11 @@ public static class WcWidth
             return 0;
         }
 
+        if (value is >= 0x1F3FB and <= 0x1F3FF)
+        {
+            return 0;
+        }
+
         var category = Rune.GetUnicodeCategory(rune);
         if (category is UnicodeCategory.NonSpacingMark
             or UnicodeCategory.EnclosingMark
@@ -47,6 +52,7 @@ public static class WcWidth
         || v is >= 0xFE30 and <= 0xFE6F
         || v is >= 0xFF00 and <= 0xFF60
         || v is >= 0xFFE0 and <= 0xFFE6
+        || v is >= 0x1F1E6 and <= 0x1F1FF
         || v is >= 0x1F300 and <= 0x1F64F
         || v is >= 0x1F900 and <= 0x1F9FF
         || v is >= 0x1FA70 and <= 0x1FAFF

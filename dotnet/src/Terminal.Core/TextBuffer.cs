@@ -159,8 +159,27 @@ public sealed class TextBuffer
         return new TextBufferSnapshot(Columns, Rows, CursorX, CursorY, HistoryCount, ScrollOffset, copies);
     }
 
+    public int GetPrintAdvance(Rune rune)
+    {
+        var target = GetJoinTarget(rune);
+        if (target is null)
+        {
+            return WcWidth.Width(rune);
+        }
+
+        var (row, column, desiredWidth) = target.Value;
+        return column + desiredWidth <= row.Length
+            ? Math.Max(0, desiredWidth - row[column].DisplayWidth)
+            : 0;
+    }
+
     public void Print(Rune rune)
     {
+        if (TryAppendJoinedRune(rune))
+        {
+            return;
+        }
+
         var width = WcWidth.Width(rune);
         if (width == 0)
         {
@@ -193,6 +212,7 @@ public sealed class TextBuffer
         {
             Rune = rune,
             Attributes = CurrentAttributes,
+            StoredWidth = (byte)width,
             HyperlinkUri = CurrentHyperlinkUri,
             ShellIntegration = _shellIntegration,
         };
@@ -204,6 +224,7 @@ public sealed class TextBuffer
                 Rune = new Rune(' '),
                 Attributes = CurrentAttributes,
                 IsWideContinuation = true,
+                StoredWidth = 0,
                 HyperlinkUri = CurrentHyperlinkUri,
                 ShellIntegration = _shellIntegration,
             };
@@ -681,6 +702,7 @@ public sealed class TextBuffer
     {
         Rune = new Rune(' '),
         Attributes = attributes,
+        StoredWidth = 1,
     };
 
     private void EraseLineRange(int fromY, int toY)
@@ -741,6 +763,99 @@ public sealed class TextBuffer
         row[x].CombiningCharacters = (row[x].CombiningCharacters ?? string.Empty) + rune;
     }
 
+    private bool TryAppendJoinedRune(Rune rune)
+    {
+        var target = GetJoinTarget(rune);
+        if (target is null)
+        {
+            return false;
+        }
+
+        var (row, x, desiredWidth) = target.Value;
+        ref var previous = ref row[x];
+        var previousWidth = previous.DisplayWidth;
+        previous.CombiningCharacters = (previous.CombiningCharacters ?? string.Empty) + rune;
+        if (desiredWidth > previousWidth && x + desiredWidth <= row.Length)
+        {
+            ClearGlyphAt(row, x + 1);
+            previous.StoredWidth = (byte)desiredWidth;
+            row[x + 1] = new Cell
+            {
+                Rune = new Rune(' '),
+                Attributes = previous.Attributes,
+                IsWideContinuation = true,
+                HyperlinkUri = previous.HyperlinkUri,
+                ShellIntegration = previous.ShellIntegration,
+            };
+
+            var newCursor = CursorX + desiredWidth - previousWidth;
+            if (newCursor >= Columns)
+            {
+                CursorX = Columns - 1;
+                WrapPending = true;
+            }
+            else
+            {
+                CursorX = newCursor;
+            }
+        }
+
+        return true;
+    }
+
+    private (Cell[] Row, int Column, int DesiredWidth)? GetJoinTarget(Rune rune)
+    {
+        var y = CursorY;
+        var x = WrapPending ? CursorX : CursorX - 1;
+        if (!WrapPending && x < 0 && y > 0 && GetLiveLine(y - 1).Wrapped)
+        {
+            y--;
+            x = Columns - 1;
+        }
+
+        if (x < 0)
+        {
+            return null;
+        }
+
+        var row = GetLiveLine(y).Cells;
+        if (row[x].IsWideContinuation && x > 0)
+        {
+            x--;
+        }
+
+        ref var previous = ref row[x];
+        if (previous.IsBlank)
+        {
+            return null;
+        }
+
+        var joinedByZwj =
+            previous.CombiningCharacters?.EndsWith('\u200D') == true &&
+            IsExtendedPictographic(rune) &&
+            (IsExtendedPictographic(previous.Rune) ||
+             previous.CombiningCharacters.EnumerateRunes().Any(IsExtendedPictographic));
+        var regionalPair =
+            IsRegionalIndicator(previous.Rune) &&
+            IsRegionalIndicator(rune) &&
+            (previous.CombiningCharacters is null ||
+             !previous.CombiningCharacters.EnumerateRunes().Any(IsRegionalIndicator));
+        if (!joinedByZwj && !regionalPair)
+        {
+            return null;
+        }
+
+        return (row, x, 2);
+    }
+
+    private static bool IsRegionalIndicator(Rune rune) =>
+        rune.Value is >= 0x1F1E6 and <= 0x1F1FF;
+
+    private static bool IsExtendedPictographic(Rune rune) =>
+        rune.Value is >= 0x1F000 and <= 0x1FAFF or
+            >= 0x2300 and <= 0x23FF or
+            >= 0x2600 and <= 0x27BF;
+
     private static void ClearGlyphAt(Cell[] row, int x)
     {
         if ((uint)x >= (uint)row.Length)
@@ -756,7 +871,7 @@ public sealed class TextBuffer
                 row[x - 1] = Cell.Blank;
             }
         }
-        else if (WcWidth.Width(row[x].Rune) == 2)
+        else if (row[x].DisplayWidth == 2)
         {
             row[x] = Cell.Blank;
             if (x + 1 < row.Length && row[x + 1].IsWideContinuation)
@@ -772,12 +887,12 @@ public sealed class TextBuffer
         {
             if (row[x].IsWideContinuation)
             {
-                if (x == 0 || WcWidth.Width(row[x - 1].Rune) != 2)
+                if (x == 0 || row[x - 1].DisplayWidth != 2)
                 {
                     row[x] = Cell.Blank;
                 }
             }
-            else if (WcWidth.Width(row[x].Rune) == 2)
+            else if (row[x].DisplayWidth == 2)
             {
                 if (x + 1 >= row.Length)
                 {
@@ -790,6 +905,7 @@ public sealed class TextBuffer
                         Rune = new Rune(' '),
                         Attributes = row[x].Attributes,
                         IsWideContinuation = true,
+                        StoredWidth = 0,
                         HyperlinkUri = row[x].HyperlinkUri,
                         ShellIntegration = row[x].ShellIntegration,
                     };
@@ -887,7 +1003,7 @@ public sealed class TextBuffer
 
         foreach (var cell in cells)
         {
-            var width = Math.Max(1, WcWidth.Width(cell.Rune));
+            var width = cell.DisplayWidth;
             if (width > columns)
             {
                 continue;
@@ -916,6 +1032,7 @@ public sealed class TextBuffer
                     Rune = new Rune(' '),
                     Attributes = cell.Attributes,
                     IsWideContinuation = true,
+                    StoredWidth = 0,
                     HyperlinkUri = cell.HyperlinkUri,
                     ShellIntegration = cell.ShellIntegration,
                 };
@@ -941,7 +1058,7 @@ public sealed class TextBuffer
         {
             if (!cells[x].IsBlank && !cells[x].IsWideContinuation)
             {
-                return Math.Min(cells.Length - 1, x + Math.Max(1, WcWidth.Width(cells[x].Rune)) - 1);
+                return Math.Min(cells.Length - 1, x + cells[x].DisplayWidth - 1);
             }
         }
 
@@ -953,7 +1070,7 @@ public sealed class TextBuffer
         var width = 0;
         for (var i = 0; i < cells.Count; i++)
         {
-            width += Math.Max(1, WcWidth.Width(cells[i].Rune));
+            width += cells[i].DisplayWidth;
         }
 
         return width;

@@ -183,13 +183,14 @@ public sealed class TerminalEngine : IVtDispatch
             Buffer.WrapPending = false;
         }
 
-        if (InsertMode && WcWidth.Width(rune) > 0)
+        var advance = Buffer.GetPrintAdvance(rune);
+        if (InsertMode && advance > 0)
         {
-            Buffer.InsertCharacters(WcWidth.Width(rune));
+            Buffer.InsertCharacters(advance);
         }
 
         Buffer.Print(rune);
-        if (WcWidth.Width(rune) > 0)
+        if (advance > 0)
         {
             _lastPrintedRune = rune;
             _hasLastPrintedRune = true;

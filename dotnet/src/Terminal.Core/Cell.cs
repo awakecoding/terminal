@@ -85,6 +85,7 @@ public struct Cell
     public Rune Rune;
     public CellAttributes Attributes;
     public bool IsWideContinuation;
+    public byte StoredWidth;
     public string? CombiningCharacters;
     public string? HyperlinkUri;
     public ShellIntegrationKind ShellIntegration;
@@ -93,6 +94,7 @@ public struct Cell
     {
         Rune = new Rune(' '),
         Attributes = CellAttributes.Default,
+        StoredWidth = 1,
     };
 
     public bool IsBlank =>
@@ -105,4 +107,11 @@ public struct Cell
 
     public readonly string Text =>
         IsWideContinuation ? string.Empty : Rune + (CombiningCharacters ?? string.Empty);
+
+    public readonly int DisplayWidth =>
+        IsWideContinuation
+            ? 0
+            : StoredWidth == 0
+                ? Math.Max(1, WcWidth.Width(Rune))
+                : StoredWidth;
 }

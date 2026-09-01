@@ -67,7 +67,7 @@ public sealed class TerminalRenderPlannerTests
 
         Assert.Equal("\U0001F469\u200D\U0001F4BB", frame.RowsData[0].Runs[0].Text[..5]);
         Assert.Equal(1, clusters.Count(cluster => cluster.TextLength > 1));
-        Assert.Equal(4, clusters[0].CellCount);
+        Assert.Equal(2, clusters[0].CellCount);
     }
 
     [Fact]
