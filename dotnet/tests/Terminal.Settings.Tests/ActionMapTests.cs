@@ -245,9 +245,23 @@ public sealed class ActionMapTests
     [InlineData("ctrl+numpad_1", "ctrl+numpad1")]
     [InlineData("shift+ctrl+alt+f12", "ctrl+alt+shift+f12")]
     [InlineData("ctrl+vk(0x09)", "ctrl+tab")]
+    [InlineData("ctrl+,", "ctrl+comma")]
+    [InlineData("ctrl+.", "ctrl+period")]
     public void NormalizesChordAliases(string input, string expected)
     {
         Assert.Equal(expected, KeyChord.Normalize(input));
+    }
+
+    [Theory]
+    [InlineData(SettingsTarget.SettingsUI, "Open Settings: Settings UI")]
+    [InlineData(SettingsTarget.SettingsFile, "Open Settings: Settings file")]
+    [InlineData(SettingsTarget.DefaultsFile, "Open Settings: Defaults file")]
+    [InlineData(SettingsTarget.Directory, "Open Settings: Settings directory")]
+    public void SettingsTargetsHaveDistinctGeneratedNames(SettingsTarget target, string expected)
+    {
+        var action = new ActionAndArgs(ShortcutAction.OpenSettings, new OpenSettingsArgs(target));
+
+        Assert.Equal(expected, action.GenerateName());
     }
 
     [Fact]

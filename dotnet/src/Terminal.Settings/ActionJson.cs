@@ -55,9 +55,20 @@ public sealed record ActionAndArgs
             RenameWindowArgs { Name.Length: > 0 } value => $"{baseName}: {value.Name}",
             OpenWorkspaceArgs { Name.Length: > 0 } value => $"{baseName}: {value.Name}",
             ExecuteCommandlineArgs { Commandline.Length: > 0 } value => $"{baseName}: {value.Commandline}",
+            OpenSettingsArgs value => $"{baseName}: {SettingsTargetName(value.Target)}",
             _ => baseName,
         };
     }
+
+    private static string SettingsTargetName(SettingsTarget target) => target switch
+    {
+        SettingsTarget.SettingsUI => "Settings UI",
+        SettingsTarget.SettingsFile => "Settings file",
+        SettingsTarget.DefaultsFile => "Defaults file",
+        SettingsTarget.AllFiles => "All settings files",
+        SettingsTarget.Directory => "Settings directory",
+        _ => target.ToString(),
+    };
 
     private static string Humanize(string value)
     {

@@ -74,7 +74,7 @@ public partial class MainWindow : Window
         items.Add(new MenuItem
         {
             Header = "Settings",
-            Command = new RelayCommand(OpenSettings),
+            Command = new RelayCommand(() => OpenSettings()),
         });
         return items;
     }
@@ -578,9 +578,9 @@ public partial class MainWindow : Window
             ShowCommandPalette();
             return Task.CompletedTask;
         });
-        Register(ShortcutAction.OpenSettings, ActionScope.Application, _ => true, _ =>
+        Register(ShortcutAction.OpenSettings, ActionScope.Application, _ => true, action =>
         {
-            OpenSettings();
+            OpenSettings((action.Args as OpenSettingsArgs)?.Target ?? SettingsTarget.SettingsFile);
             return Task.CompletedTask;
         });
         Register(ShortcutAction.NewWindow, ActionScope.Application, _ => true, action =>
@@ -963,10 +963,41 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OpenSettings()
+    private void OpenSettings(SettingsTarget target = SettingsTarget.SettingsUI)
     {
-        SettingsViewFactory.CreateWindow().Show(this);
+        switch (target)
+        {
+            case SettingsTarget.SettingsUI:
+            case SettingsTarget.AllFiles:
+                SettingsViewFactory.CreateWindow().Show(this);
+                break;
+            case SettingsTarget.SettingsFile:
+                SettingsService.Save(SettingsService.Load());
+                OpenWithShell(SettingsService.SettingsPath);
+                break;
+            case SettingsTarget.DefaultsFile:
+                var settingsDirectory = Path.GetDirectoryName(Path.GetFullPath(SettingsService.SettingsPath))
+                    ?? SettingsService.SettingsDirectory;
+                Directory.CreateDirectory(settingsDirectory);
+                var defaultsPath = Path.Combine(settingsDirectory, "defaults.json");
+                File.WriteAllText(defaultsPath, SettingsLoader.ReadEmbeddedDefaults());
+                OpenWithShell(defaultsPath);
+                break;
+            case SettingsTarget.Directory:
+                var directory = Path.GetDirectoryName(Path.GetFullPath(SettingsService.SettingsPath))
+                    ?? SettingsService.SettingsDirectory;
+                Directory.CreateDirectory(directory);
+                OpenWithShell(directory);
+                break;
+        }
     }
+
+    private static void OpenWithShell(string path) =>
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = path,
+            UseShellExecute = true,
+        });
 
     private (int Columns, int Rows) InitialTerminalSize()
     {

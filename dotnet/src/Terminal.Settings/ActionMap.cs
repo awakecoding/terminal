@@ -24,6 +24,17 @@ public readonly record struct KeyChord
             ["numpad_add"] = "numpad_plus",
             ["numpad_subtract"] = "numpad_minus",
             ["numpad_decimal"] = "numpad_period",
+            [","] = "comma",
+            ["."] = "period",
+            ["-"] = "minus",
+            ["="] = "plus",
+            ["/"] = "slash",
+            ["\\"] = "backslash",
+            [";"] = "semicolon",
+            ["'"] = "quote",
+            ["["] = "open_bracket",
+            ["]"] = "close_bracket",
+            ["`"] = "backtick",
         };
 
     public KeyChord(string value)
