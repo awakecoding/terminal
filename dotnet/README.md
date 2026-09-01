@@ -52,3 +52,5 @@ WindowsTerminal       Tabs, title bar, app host
 This is not a line-for-line translation of every C++ file. The engine covers the
 VT sequences needed for modern shells, editors, and TUIs (SGR including truecolor,
 cursor/erase, scroll regions, alt screen, OSC titles, mouse/bracketed-paste modes).
+
+The full phased plan for a complete port is in [PORTING.md](PORTING.md).
