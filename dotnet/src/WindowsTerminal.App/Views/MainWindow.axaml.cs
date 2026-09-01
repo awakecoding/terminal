@@ -1420,9 +1420,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
                 .ToArray()
             : string.IsNullOrWhiteSpace(query)
                 ? _paletteItems
-                : _paletteItems
-                    .Where(item => item.Name.Contains(query, StringComparison.CurrentCultureIgnoreCase))
-                    .ToArray();
+                : FuzzyMatcher.Rank(_paletteItems, query, static item => item.Name);
         CommandPaletteList.SelectedIndex = CommandPaletteList.ItemCount > 0 ? 0 : -1;
     }
 
@@ -1884,7 +1882,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         }
 
         tab.IsClosing = true;
-        _tabs.Remove(tab);
+        _tabCollection.Remove(tab);
         if (ReferenceEquals(_activeTab, tab))
         {
             _activeTab = null;
