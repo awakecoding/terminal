@@ -5,10 +5,14 @@ namespace Microsoft.Terminal.Render;
 
 public static class TerminalRenderPlanner
 {
-    public static TerminalRenderFrame Create(TerminalSnapshot snapshot, ColorScheme scheme)
+    public static TerminalRenderFrame Create(
+        TerminalSnapshot snapshot,
+        ColorScheme scheme,
+        TerminalRenderOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(scheme);
+        options ??= new TerminalRenderOptions();
 
         var rows = new TerminalRenderRow[snapshot.Buffer.Lines.Count];
         for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
@@ -30,7 +34,11 @@ public static class TerminalRenderPlanner
             snapshot.ReverseVideo ? scheme.Foreground : scheme.Background,
             scheme.Cursor,
             scheme.SelectionBackground,
-            rows);
+            rows)
+        {
+            CursorStyle = options.CursorStyle,
+            CursorHeightPercentage = Math.Clamp(options.CursorHeightPercentage, 1, 100),
+        };
     }
 
     public static ResolvedCellAttributes Resolve(
@@ -77,9 +85,35 @@ public static class TerminalRenderPlanner
             var first = cells[column];
             var resolved = Resolve(first.Attributes, first.HyperlinkUri, scheme, reverseScreen);
             var text = new StringBuilder();
+            var clusters = new List<TerminalTextCluster>();
             do
             {
-                text.Append(cells[column].Text);
+                var cell = cells[column];
+                if (!cell.IsWideContinuation)
+                {
+                    var offset = text.Length;
+                    text.Append(cell.Rune);
+                    text.Append(cell.CombiningCharacters);
+                    var cellWidth = Math.Max(1, WcWidth.Width(cell.Rune));
+                    if (clusters.Count > 0 && EndsWithJoiner(text, offset))
+                    {
+                        var previous = clusters[^1];
+                        clusters[^1] = previous with
+                        {
+                            TextLength = text.Length - previous.TextOffset,
+                            CellCount = (column + cellWidth) - previous.StartColumn,
+                        };
+                    }
+                    else
+                    {
+                        clusters.Add(new TerminalTextCluster(
+                            offset,
+                            text.Length - offset,
+                            column,
+                            cellWidth));
+                    }
+                }
+
                 column++;
             }
             while (column < cells.Count &&
@@ -89,11 +123,15 @@ public static class TerminalRenderPlanner
                 start,
                 column - start,
                 text.ToString(),
-                resolved));
+                resolved,
+                clusters.ToArray()));
         }
 
         return new TerminalRenderRow(rowIndex, runs);
     }
+
+    private static bool EndsWithJoiner(StringBuilder text, int currentOffset) =>
+        currentOffset > 0 && text[currentOffset - 1] == '\u200D';
 
     private static uint Fade(uint argb)
     {
