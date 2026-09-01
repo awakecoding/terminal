@@ -96,6 +96,8 @@ The image-overlay renderer contract and protocol limits are documented in
 [doc/advanced-vt-protocols.md](doc/advanced-vt-protocols.md).
 Azure authentication, service protocol, diagnostics, and host composition are
 documented in [doc/azure-cloud-shell.md](doc/azure-cloud-shell.md).
+Build, migration, signing, and release gates are documented in
+[doc/release.md](doc/release.md).
 
 ## Compatibility inventory
 
