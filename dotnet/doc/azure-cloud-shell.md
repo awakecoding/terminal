@@ -99,8 +99,10 @@ exit code `0`, and connection failures have no exit code.
 - Resize updates local dimensions synchronously, coalesces pending service
   updates, and reports failures through warning diagnostics without stopping
   the session.
-- The connection layer does not launch a browser, render auth UI, select a
-  tenant, register the dynamic profile, or choose a persistent token store.
-  Those remain explicit host composition responsibilities.
+- `WindowsTerminal.App` composes the connection factory, conditionally registers
+  the profile when `WT_AZURE_CLIENT_ID` is configured, opens the verification
+  browser, displays the device code, and provides accessible tenant selection.
+  A persistent token store remains intentionally absent; tokens stay in memory
+  unless a future host supplies an OS-backed `IAzureCloudShellTokenCache`.
 - No live Azure test runs by default. Protocol and lifecycle tests use
   deterministic HTTP/WebSocket mocks and require no credentials.

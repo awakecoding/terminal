@@ -6,6 +6,32 @@ namespace WindowsTerminal.Cli.Tests;
 
 public sealed class CliParserTests
 {
+    [Fact]
+    public void CommandLineTextPreservesQuotedArguments()
+    {
+        var parsed = new CliParser().ParseCommandLine(
+            "new-tab --profile \"Windows PowerShell\" pwsh.exe -NoLogo");
+
+        var invocation = Assert.IsType<CliInvocation>(parsed.Invocation);
+        var action = Assert.Single(invocation.Actions);
+        var terminal = Assert.IsType<NewTerminalArgs>(
+            Assert.IsType<NewTabArgs>(action.Args).ContentArgs);
+        Assert.Equal("Windows PowerShell", terminal.Profile);
+        Assert.Equal("pwsh.exe -NoLogo", terminal.Commandline);
+    }
+
+    [Fact]
+    public void InWindowCommandLineDoesNotBootstrapNewTab()
+    {
+        var parsed = new CliParser().ParseCommandLine(
+            "focus-tab --target 2",
+            ensureInitialTab: false);
+
+        var invocation = Assert.IsType<CliInvocation>(parsed.Invocation);
+        var action = Assert.Single(invocation.Actions);
+        Assert.Equal(ShortcutAction.SwitchToTab, action.Action);
+    }
+
     [Theory]
     [InlineData("new-tab")]
     [InlineData("nt")]

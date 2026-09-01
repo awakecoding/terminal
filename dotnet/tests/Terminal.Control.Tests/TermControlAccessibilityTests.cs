@@ -112,13 +112,38 @@ public sealed class TermControlAccessibilityTests
         control.SwitchSelectionEndpoint();
         control.MoveMarkCaret(-3, 0);
         control.ExpandSelectionToWord();
+        control.ToggleBlockSelection();
 
         Assert.True(control.IsMarkMode);
         Assert.NotEqual(beforeSwitch, control.Selection);
-        Assert.Equal(TerminalSelectionMode.Word, control.Selection?.Mode);
+        Assert.Equal(TerminalSelectionMode.Block, control.Selection?.Mode);
+        control.ToggleBlockSelection();
+        Assert.Equal(TerminalSelectionMode.Linear, control.Selection?.Mode);
         control.ExitMarkMode();
         Assert.False(control.IsMarkMode);
         Assert.True(control.HasSelection);
+    }
+
+    [Fact]
+    public void ShellSelectionNavigatesPreviousAndNextCommands()
+    {
+        var control = new TermControl();
+        control.Engine.Resize(20, 5);
+        control.Engine.Feed("\u001b]133;A\u0007P1 ");
+        control.Engine.Feed("\u001b]133;B\u0007C1");
+        control.Engine.Feed("\u001b]133;C\u0007\r\nO1");
+        control.Engine.Feed("\u001b]133;D;0\u0007\r\n");
+        control.Engine.Feed("\u001b]133;A\u0007P2 ");
+        control.Engine.Feed("\u001b]133;B\u0007C2");
+        control.Engine.Feed("\u001b]133;C\u0007\r\nO2");
+        control.Engine.Feed("\u001b]133;D;0\u0007");
+
+        Assert.True(control.SelectCommand(TerminalShellSelectionDirection.Previous));
+        Assert.Equal("C2", control.BuildCopyPayload()?.Text);
+        Assert.True(control.SelectCommand(TerminalShellSelectionDirection.Previous));
+        Assert.Equal("C1", control.BuildCopyPayload()?.Text);
+        Assert.True(control.SelectCommand(TerminalShellSelectionDirection.Next));
+        Assert.Equal("C2", control.BuildCopyPayload()?.Text);
     }
 
     [Fact]

@@ -30,9 +30,10 @@ public enum TerminalControlCapabilities
 public sealed class TermControl : Avalonia.Controls.Control
 {
     private readonly DispatcherTimer _blinkTimer;
-    private readonly DispatcherTimer _renderTimer;
     private readonly object _outputLock = new();
-    private readonly List<byte> _pendingOutput = [];
+    private readonly MemoryStream _pendingOutput = new();
+    private bool _outputDrainScheduled;
+    private bool _acceptOutput;
     private readonly SkiaTerminalRenderer _renderer = new();
     private readonly TerminalSearchSession _search;
     private IRestartableTerminalConnection? _connection;
@@ -56,7 +57,6 @@ public sealed class TermControl : Avalonia.Controls.Control
     private int _pressedMouseButton = -1;
     private long _selectionCoordinateVersion;
     private bool _selectionAlternateBuffer;
-    private bool _dirty = true;
     private bool _rendererDisposed;
 
     public TermControl()
@@ -83,12 +83,8 @@ public sealed class TermControl : Avalonia.Controls.Control
             InvalidateVisual();
         };
 
-        _renderTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(8) };
-        _renderTimer.Tick += (_, _) => DrainOutput();
-
         Engine.Invalidated += (_, _) =>
         {
-            _dirty = true;
             if (_selection is not null &&
                 (_selectionCoordinateVersion != Engine.Buffer.CoordinateVersion ||
                  _selectionAlternateBuffer != Engine.AlternateBufferActive))
@@ -177,7 +173,6 @@ public sealed class TermControl : Avalonia.Controls.Control
 
         await StartConnectionAsync(profile, columns, rows).ConfigureAwait(true);
         _blinkTimer.Start();
-        _renderTimer.Start();
         InvalidateVisual();
     }
 
@@ -188,6 +183,10 @@ public sealed class TermControl : Avalonia.Controls.Control
         connection.OutputReceived += OnOutput;
         connection.SessionExited += OnSessionExited;
         _connection = connection;
+        lock (_outputLock)
+        {
+            _acceptOutput = true;
+        }
         try
         {
             await connection.StartAsync(
@@ -207,6 +206,12 @@ public sealed class TermControl : Avalonia.Controls.Control
             connection.OutputReceived -= OnOutput;
             connection.SessionExited -= OnSessionExited;
             _connection = null;
+            lock (_outputLock)
+            {
+                _acceptOutput = false;
+                _pendingOutput.SetLength(0);
+                _outputDrainScheduled = false;
+            }
             await connection.DisposeAsync().ConfigureAwait(false);
             throw;
         }
@@ -216,22 +221,29 @@ public sealed class TermControl : Avalonia.Controls.Control
     {
         var connection = _connection
             ?? throw new InvalidOperationException("The terminal connection has not been started.");
-        _renderTimer.Stop();
         await connection.CloseAsync(cancellationToken).ConfigureAwait(true);
         ResetTerminal();
         await connection.RestartAsync(cancellationToken: cancellationToken).ConfigureAwait(true);
         _blinkTimer.Start();
-        _renderTimer.Start();
     }
 
     public async Task CloseAsync()
     {
         _blinkTimer.Stop();
-        _renderTimer.Stop();
         if (_connection is not null)
         {
-            await _connection.DisposeAsync().ConfigureAwait(false);
+            var connection = _connection;
             _connection = null;
+            connection.OutputReceived -= OnOutput;
+            connection.SessionExited -= OnSessionExited;
+            lock (_outputLock)
+            {
+                _acceptOutput = false;
+                _pendingOutput.SetLength(0);
+                _outputDrainScheduled = false;
+            }
+
+            await connection.DisposeAsync().ConfigureAwait(false);
         }
 
         _renderer.Dispose();
@@ -423,6 +435,12 @@ public sealed class TermControl : Avalonia.Controls.Control
     public void SelectOutputAt(int viewportColumn, int viewportRow) =>
         BeginAndEndSelection(viewportColumn, viewportRow, TerminalSelectionMode.Output);
 
+    public bool SelectCommand(TerminalShellSelectionDirection direction) =>
+        SelectShellRegion(direction, selectOutput: false);
+
+    public bool SelectOutput(TerminalShellSelectionDirection direction) =>
+        SelectShellRegion(direction, selectOutput: true);
+
     public void ExpandSelectionToWord()
     {
         if (_selection is null)
@@ -435,6 +453,89 @@ public sealed class TermControl : Avalonia.Controls.Control
             snapshot,
             _selection,
             InteractionOptions.WordDelimiters));
+    }
+
+    public void ToggleBlockSelection()
+    {
+        if (_selection is null)
+        {
+            return;
+        }
+
+        SetSelection(_selection with
+        {
+            Mode = _selection.Mode == TerminalSelectionMode.Block
+                ? TerminalSelectionMode.Linear
+                : TerminalSelectionMode.Block,
+        });
+    }
+
+    private bool SelectShellRegion(
+        TerminalShellSelectionDirection direction,
+        bool selectOutput)
+    {
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        var ranges = TerminalBufferExport.GetShellCommandRanges(snapshot)
+            .Select(range => selectOutput ? range.Output : range.Command)
+            .Where(static range => range is not null)
+            .Select(static range => range!.Value)
+            .ToArray();
+        if (ranges.Length == 0)
+        {
+            return false;
+        }
+
+        var current = _selection is null
+            ? new TerminalSelectionPoint(
+                snapshot.CursorX,
+                snapshot.HistoryCount + snapshot.CursorY)
+            : direction == TerminalShellSelectionDirection.Previous
+                ? Min(_selection.Anchor, _selection.Active)
+                : Max(_selection.Anchor, _selection.Active);
+        var candidates = ranges
+            .Where(range => direction == TerminalShellSelectionDirection.Previous
+                ? Compare(range.Start, current) < 0
+                : Compare(range.Start, current) > 0)
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            return false;
+        }
+
+        var range = direction == TerminalShellSelectionDirection.Previous
+            ? candidates[^1]
+            : candidates[0];
+        SetSelection(new TerminalSelection(
+            new TerminalSelectionPoint(range.Start.Column, range.Start.Line),
+            new TerminalSelectionPoint(
+                Math.Max(0, range.End.Column - 1),
+                range.End.Line),
+            selectOutput ? TerminalSelectionMode.Output : TerminalSelectionMode.Command));
+        return true;
+    }
+
+    private static TerminalSelectionPoint Min(
+        TerminalSelectionPoint left,
+        TerminalSelectionPoint right) =>
+        Compare(left, right) <= 0 ? left : right;
+
+    private static TerminalSelectionPoint Max(
+        TerminalSelectionPoint left,
+        TerminalSelectionPoint right) =>
+        Compare(left, right) >= 0 ? left : right;
+
+    private static int Compare(BufferPosition left, TerminalSelectionPoint right)
+    {
+        var line = left.Line.CompareTo(right.Line);
+        return line != 0 ? line : left.Column.CompareTo(right.Column);
+    }
+
+    private static int Compare(
+        TerminalSelectionPoint left,
+        TerminalSelectionPoint right)
+    {
+        var line = left.Line.CompareTo(right.Line);
+        return line != 0 ? line : left.Column.CompareTo(right.Column);
     }
 
     public void EnterMarkMode()
@@ -592,7 +693,8 @@ public sealed class TermControl : Avalonia.Controls.Control
     {
         lock (_outputLock)
         {
-            _pendingOutput.Clear();
+            _pendingOutput.SetLength(0);
+            _outputDrainScheduled = false;
         }
 
         Engine.Reset();
@@ -898,9 +1000,25 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     private void OnOutput(object? sender, ReadOnlyMemory<byte> data)
     {
+        var scheduleDrain = false;
         lock (_outputLock)
         {
-            _pendingOutput.AddRange(data.ToArray());
+            if (!_acceptOutput)
+            {
+                return;
+            }
+
+            _pendingOutput.Write(data.Span);
+            if (!_outputDrainScheduled)
+            {
+                _outputDrainScheduled = true;
+                scheduleDrain = true;
+            }
+        }
+
+        if (scheduleDrain)
+        {
+            Dispatcher.UIThread.Post(DrainOutput, DispatcherPriority.Render);
         }
     }
 
@@ -926,21 +1044,18 @@ public sealed class TermControl : Avalonia.Controls.Control
         byte[] chunk;
         lock (_outputLock)
         {
-            if (_pendingOutput.Count == 0)
+            if (_pendingOutput.Length == 0)
             {
+                _outputDrainScheduled = false;
                 return;
             }
 
-            chunk = [.. _pendingOutput];
-            _pendingOutput.Clear();
+            chunk = _pendingOutput.ToArray();
+            _pendingOutput.SetLength(0);
+            _outputDrainScheduled = false;
         }
 
         Engine.Feed(chunk);
-        if (_dirty)
-        {
-            InvalidateVisual();
-            _dirty = false;
-        }
     }
 
     private (int X, int Y) HitTest(Point point)

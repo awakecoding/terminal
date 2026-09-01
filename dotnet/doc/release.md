@@ -125,9 +125,11 @@ injects signing credentials.
 - The development package identity and `wt.exe` alias can conflict with an
   installed Microsoft Windows Terminal alias; Windows alias settings choose the
   active provider.
-- Default-terminal registration, shell verbs, notifications, and jumplists are
-  package/Windows-version capabilities and must degrade explicitly when running
-  unpackaged.
+- The notification-area icon and minimize-to-area behavior work packaged and
+  unpackaged. Default-terminal registration requires console delegation,
+  Explorer verbs require a native `IExplorerCommand` COM DLL, and system toast
+  activation/jump lists require WinRT or Windows App SDK integration. These
+  capabilities remain explicitly unavailable rather than partially registered.
 
 ## Versioning
 

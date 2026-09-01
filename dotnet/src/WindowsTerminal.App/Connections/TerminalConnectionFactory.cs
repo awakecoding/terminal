@@ -22,6 +22,12 @@ public sealed class TerminalConnectionFactory
         _tokenCache = tokenCache;
     }
 
+    public static bool IsAzureConfigured =>
+        Guid.TryParse(
+            Environment.GetEnvironmentVariable(AzureClientIdEnvironmentVariable),
+            out var clientId) &&
+        clientId != Guid.Empty;
+
     public IRestartableTerminalConnection Create(ProfileSettings profile)
     {
         ArgumentNullException.ThrowIfNull(profile);

@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.CommandLine.Parsing;
 using System.Globalization;
 using System.Text;
 using Microsoft.Terminal.Settings;
@@ -15,7 +16,22 @@ public sealed class CliParser
 
     private readonly RootCommand _schema = CommandLineSchema.Create();
 
-    public CliParseResult Parse(IReadOnlyList<string> args)
+    public CliParseResult ParseCommandLine(
+        string commandLine,
+        bool ensureInitialTab = true)
+    {
+        ArgumentNullException.ThrowIfNull(commandLine);
+        return Parse(
+            CommandLineParser.SplitCommandLine(commandLine).ToArray(),
+            ensureInitialTab);
+    }
+
+    public CliParseResult Parse(IReadOnlyList<string> args) =>
+        Parse(args, ensureInitialTab: true);
+
+    private CliParseResult Parse(
+        IReadOnlyList<string> args,
+        bool ensureInitialTab)
     {
         ArgumentNullException.ThrowIfNull(args);
         if (IsHelpRequest(args))
@@ -31,7 +47,7 @@ public sealed class CliParser
 
         try
         {
-            return ParseCore(args);
+            return ParseCore(args, ensureInitialTab);
         }
         catch (CliUsageException ex)
         {
@@ -87,7 +103,9 @@ public sealed class CliParser
         return commands;
     }
 
-    private static CliParseResult ParseCore(IReadOnlyList<string> args)
+    private static CliParseResult ParseCore(
+        IReadOnlyList<string> args,
+        bool ensureInitialTab)
     {
         var segments = SplitCommands(args);
         var actions = new List<ActionAndArgs>();
@@ -175,7 +193,9 @@ public sealed class CliParser
             }
         }
 
-        if (save is null && (actions.Count == 0 || actions[0].Action != ShortcutAction.NewTab))
+        if (ensureInitialTab &&
+            save is null &&
+            (actions.Count == 0 || actions[0].Action != ShortcutAction.NewTab))
         {
             actions.Insert(0, new(ShortcutAction.NewTab, new NewTabArgs()));
         }

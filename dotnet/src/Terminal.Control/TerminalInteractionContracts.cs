@@ -19,6 +19,12 @@ public enum TerminalSelectionEndpoint
     Active,
 }
 
+public enum TerminalShellSelectionDirection
+{
+    Previous,
+    Next,
+}
+
 public enum TerminalControlSequencePolicy
 {
     Strip,

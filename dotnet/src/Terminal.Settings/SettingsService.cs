@@ -22,8 +22,17 @@ public static class SettingsService
     public static AppSettings Load() =>
         LoadAsync().AsTask().GetAwaiter().GetResult();
 
-    public static async ValueTask<AppSettings> LoadAsync(CancellationToken cancellationToken = default)
+    public static AppSettings LoadWithDynamicProfiles(DynamicProfileManager dynamicProfileManager) =>
+        LoadWithDynamicProfilesAsync(dynamicProfileManager).AsTask().GetAwaiter().GetResult();
+
+    public static ValueTask<AppSettings> LoadAsync(CancellationToken cancellationToken = default) =>
+        LoadWithDynamicProfilesAsync(DynamicProfileManager.CreateDefault(), cancellationToken);
+
+    public static async ValueTask<AppSettings> LoadWithDynamicProfilesAsync(
+        DynamicProfileManager dynamicProfileManager,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(dynamicProfileManager);
         string? userJson = null;
         SettingsDiagnostic? readDiagnostic = null;
         if (File.Exists(SettingsPath))
@@ -51,7 +60,7 @@ public static class SettingsService
             SettingsLoader.ReadEmbeddedDefaults(),
             userJson,
             fragmentDiscovery.Fragments,
-            DynamicProfileManager.CreateDefault(),
+            dynamicProfileManager,
             state.Data.GeneratedProfiles,
             SettingsPath,
             cancellationToken).ConfigureAwait(false);

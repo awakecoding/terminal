@@ -18,22 +18,23 @@ The original C++ tree stays in place. All new work lives under `dotnet/`.
 
 | Project | What it covers today |
 | --- | --- |
-| `Terminal.Core` | Cell/attributes, text buffer, VT ground/CSI/OSC subset, alt screen, SGR (16/256/truecolor) |
-| `Terminal.Render` | Immutable plans, HarfBuzz shaping, fallback fonts, bounded Skia text-blob caching |
-| `Terminal.Connection` | NativeAOT-safe ConPTY via `LibraryImport`, transactional safe-handle lifecycle, cancellation, async writes, resize, and environment overrides |
+| `Terminal.Core` | Circular scrollback/reflow, grapheme-aware cells, shell marks/search/export, complete daily-driver VT plus bounded DCS/Sixel/DRCS/macros/VT52/rectangular operations |
+| `Terminal.Render` | Immutable plans, HarfBuzz shaping, fallback fonts, bounded Skia text-blob and image caching, dirty-row contracts |
+| `Terminal.Connection` | Restartable NativeAOT-safe ConPTY and Azure Cloud Shell HTTP/WebSocket connections |
 | `Terminal.Settings` | Complete MTSM projection, tri-state inheritance, migrations, fragments, profile generators, state persistence, plus the 92-action inventory, typed action arguments, normalized key chords, current/legacy binding parsing, and source-generated NativeAOT-safe JSON |
-| `Terminal.Control` | Avalonia `TermControl`: Skia text, selection, action-driven copy/paste/find/scroll/font controls, key map |
-| `WindowsTerminal.App` | Tabbed/paned window, scoped action dispatch, settings-driven key handling, find bar, and command palette |
-| `WindowsTerminal` | NativeAOT executable and composition root |
+| `Terminal.Control` | Avalonia `TermControl`: Skia rendering, search, shell-region selection, clipboard/paste policy, mouse/touch/IME, accessibility, and event-driven output draining |
+| `WindowsTerminal.App` | Persistent tabs/panes, all-action dispatch, action/command-line/history/tab palettes, settings UI, Azure auth UI, scratchpad, and notifications |
+| `WindowsTerminal` | NativeAOT executable, authenticated single-instance broker, multi-window routing, and notification-area integration |
 
 The baseline also includes dedicated settings, connection, control, app,
 compatibility, and UI test projects; x64/ARM64 NativeAOT CI; architecture
 decisions; and a generated compatibility inventory covering 120 settings keys,
 92 actions, 123 VT dispatch methods, 14 CLI commands, and 25 settings pages.
 
-What it is **not**: a daily driver. Later inventory actions remain explicit
-unsupported dispatch results; there is no Atlas-quality rendering, `wt` CLI,
-accessibility, or complete advanced protocol/package integration.
+The practical daily-driver surface is implemented. Inventory actions that need
+an upstream shell-completion/Quick Fix provider or a Windows-only native
+integration return an explicit unavailable result or notification rather than
+silently doing the wrong thing.
 
 ## Non-goals
 
@@ -45,13 +46,17 @@ Leave these in the C++ tree. Do not port them as part of this app:
 - Store submission / OneBranch / PGO of the C++ build
 - Pixel-identical AtlasEngine D3D shaders (match visually, not the HLSL)
 
-Deferred until after P1 unless a user scenario requires them:
+Platform boundaries that remain intentionally external to the C# application:
 
-- Azure Cloud Shell
-- DRCS / VT macros / VT52
-- Tab tear-off across processes
-- `Open Terminal here` Explorer COM server (AOT-hostile)
-- MSIX identity, jumplists, default-terminal handoff
+- Cross-process visual tab tear-off has versioned broker contracts but cannot
+  transfer a live ConPTY/HPCON through the public API.
+- The Windows 11 Explorer verb requires an architecture-matched native
+  `IExplorerCommand` COM DLL loaded by the shell.
+- Default-terminal delegation requires Windows console registration and handoff
+  contracts that are not exposed as a managed app-only API.
+- System toast activation and jump lists require a WinRT/Windows App SDK
+  projection. In-app accessible notifications and notification-area behavior
+  remain available without those dependencies.
 
 ## Compatibility bar
 
@@ -389,12 +394,17 @@ without hand edits; neovim and lazygit look correct.
 1. Sixel Core decoding and overlay metadata complete; renderer image slices remain
 2. Azure Cloud Shell
 3. Extension fragment discovery/merge complete; extension UI remains
-4. Quake, tray, global summon
-5. Broadcast input, suggestions, Quick Fix
-6. Scratchpad / markdown panes
-7. Default-terminal handoff
-8. MSIX, jumplist, shell extension
-9. Workspaces, shader effects
+4. Notification-area icon and minimize-to-area behavior complete; global
+   summon/quake remains explicitly unavailable without a registered OS hotkey.
+5. Broadcast input and command-history suggestions complete; provider-backed
+   shell completion and Quick Fix report unavailable when the shell supplies no data.
+6. Scratchpad window complete; markdown pane content remains outside the
+   terminal-pane persistence contract.
+7. Default-terminal handoff is a documented OS/native boundary.
+8. x64/ARM64 MSIX and bundle complete; jump lists, system toasts, and Explorer
+   shell extension remain documented native/WinRT boundaries.
+9. Workspaces parse into versioned contracts but remain explicit unsupported;
+   custom shader effects are not advertised by the Skia renderer.
 
 ## Suggested project layout (end state)
 
@@ -417,22 +427,13 @@ dotnet/
   README.md
 ```
 
-## Implementation order for the next PRs
+## Completed integration stack
 
-Keep PRs stacked and reviewable. Do not mix renderer rewrites with settings
-work.
-
-1. `settings-model` — `CascadiaSettings` load/save + `defaults.json` embed
-2. `action-map` — parse actions, default keybindings, dispatch
-3. `panes` — split tree in the Avalonia window
-4. `search-palette` — find + command palette
-5. `vt-buffer-p0` — remaining bucket A–D + tests from C++ oracles
-6. `dynamic-profiles` — pwsh / WSL / cmd
-7. `wt-cli` — `System.CommandLine` front-end
-8. `skia-atlas` — renderer replacement (largest PR; isolate it)
-
-Each PR must keep `dotnet test` and Debug `WindowsTerminal` build green.
-NativeAOT publish is required on 1, 2, 5, and 8 (AOT-sensitive).
+The settings model, ActionMap, panes/tabs, search/palette, VT/buffer,
+dynamic-profile, CLI/broker, Skia renderer, accessibility, Azure, and MSIX
+layers are integrated on the consolidated branch. Future changes must keep the
+full Release suite, x64/ARM64 NativeAOT publish, broker smoke, and package
+validation green.
 
 ## Risks
 
@@ -446,8 +447,10 @@ NativeAOT publish is required on 1, 2, 5, and 8 (AOT-sensitive).
   `ReadCommentHandling.Skip` on a serializer that still AOT-compiles.
 - **Default terminal / handoff.** Requires packaged identity. Do not block
   P0/P1 on it.
-- **Performance.** `FormattedText` per run is fine for P0. Atlas-level
-  throughput needs the Skia atlas before people live in the app.
+- **Performance.** The Skia/HarfBuzz cache and dirty-row contracts are in place.
+  Output draining is event-driven rather than a 125 Hz idle poll. Full-history
+  search and viewport snapshot reuse remain the next profiling-led optimization
+  opportunities.
 
 ## References in this repo
 

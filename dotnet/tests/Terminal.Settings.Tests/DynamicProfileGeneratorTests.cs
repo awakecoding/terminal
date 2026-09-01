@@ -72,6 +72,24 @@ public sealed class DynamicProfileGeneratorTests
     }
 
     [Fact]
+    public async Task DefaultManagerRegistersAzureWhenHostProvidesConnectionType()
+    {
+        using var fixture = new DirectoryFixture();
+        var connectionType = Guid.Parse("D9FCFDFA-A479-412C-83B7-C5640E61CD62");
+        var manager = DynamicProfileManager.CreateDefaultWithAzure(
+            connectionType,
+            fixture.Environment(),
+            new StubRunner(new DynamicProfileCommandResult(0, string.Empty, string.Empty, false)));
+
+        var result = await manager.GenerateAsync();
+
+        var azure = Assert.Single(
+            result.Profiles,
+            profile => profile.Source == DynamicProfileSource.Azure);
+        Assert.Equal(connectionType.ToString("B"), azure.ConnectionType);
+    }
+
+    [Fact]
     public async Task WslProfilesAreSortedFilteredAndUseSystemWsl()
     {
         using var fixture = new DirectoryFixture();

@@ -40,6 +40,6 @@ public sealed record PackageEnvironment(
             return $"Capability '{capability}' requires MSIX package identity.";
         }
 
-        return $"Capability '{capability}' is not wired by the initial MSIX integration.";
+        return $"Capability '{capability}' requires a native or WinRT integration component that is not included.";
     }
 }

@@ -8,10 +8,12 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Microsoft.Terminal.Connection;
 using Microsoft.Terminal.Control;
 using Microsoft.Terminal.Core;
 using Microsoft.Terminal.Settings;
 using WindowsTerminal.Actions;
+using WindowsTerminal.Connections;
 using WindowsTerminal.Models;
 using WindowsTerminal.Panes;
 using WindowsTerminal.Routing;
@@ -23,6 +25,8 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 {
     private readonly AppSettings _settings;
     private readonly ApplicationStateStore _stateStore;
+    private readonly TerminalConnectionFactory _connectionFactory;
+    private readonly DynamicProfileManager _dynamicProfileManager;
     private readonly ActionDispatcher _actionDispatcher = new();
     private readonly TabCollection<TerminalTab, TabLayoutDescriptor> _tabCollection = new();
     private readonly List<PaletteItem> _paletteItems = [];
@@ -31,13 +35,14 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     private TerminalTab? _activeTab;
     private TerminalTab? _draggedTab;
     private Point _dragStart;
-    private bool _tabSearchMode;
+    private PaletteMode _paletteMode;
     private bool _layoutPersisted;
     private ActionDispatchResult? _lastDispatchResult;
     private ProfileSettings? _initialProfile;
     private readonly TerminalWindowActivation? _initialActivation;
     private readonly Action<TerminalWindowActivation>? _newWindowRequested;
     private readonly Action<TabTearOffRequest>? _tabTearOffRequested;
+    private readonly Func<string, TerminalCommandLineParseResult>? _commandLineParser;
     private readonly TaskCompletionSource<TerminalWindowActivationResult> _initialActivationCompletion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly DispatcherTimer _notificationTimer;
@@ -51,13 +56,15 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         string windowName,
         TerminalWindowActivation? initialActivation,
         Action<TerminalWindowActivation>? newWindowRequested = null,
-        Action<TabTearOffRequest>? tabTearOffRequested = null)
+        Action<TabTearOffRequest>? tabTearOffRequested = null,
+        Func<string, TerminalCommandLineParseResult>? commandLineParser = null)
     {
         WindowId = windowId;
         WindowName = windowName;
         _initialActivation = initialActivation;
         _newWindowRequested = newWindowRequested;
         _tabTearOffRequested = tabTearOffRequested;
+        _commandLineParser = commandLineParser;
         InitializeComponent();
         _notificationTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _notificationTimer.Tick += (_, _) =>
@@ -65,7 +72,22 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             _notificationTimer.Stop();
             NotificationToast.IsVisible = false;
         };
-        _settings = SettingsService.Load();
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Windows Terminal requires Windows.");
+        }
+
+        _connectionFactory = new TerminalConnectionFactory(
+            new AzureCloudShellAuthenticationCallbacks
+            {
+                ShowDeviceCodeAsync = ShowAzureDeviceCodeAsync,
+                SelectTenantAsync = SelectAzureTenantAsync,
+            });
+        _dynamicProfileManager = TerminalConnectionFactory.IsAzureConfigured
+            ? DynamicProfileManager.CreateDefaultWithAzure(
+                AzureCloudShellConnection.ConnectionTypeGuid)
+            : DynamicProfileManager.CreateDefault();
+        _settings = SettingsService.LoadWithDynamicProfiles(_dynamicProfileManager);
         _stateStore = SettingsService.LoadApplicationState();
         Width = Math.Max(640, _settings.InitialCols * 8);
         Height = Math.Max(400, _settings.InitialRows * 16 + 80);
@@ -86,6 +108,8 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     public Task<TerminalWindowActivationResult> InitialActivation => _initialActivationCompletion.Task;
     public IReadOnlyList<TerminalTab> Tabs => _tabCollection.Items;
     public TerminalTab? ActiveTab => _activeTab;
+    public bool AlwaysShowNotificationIcon => _settings.AlwaysShowNotificationIcon;
+    public bool MinimizeToNotificationArea => _settings.MinimizeToNotificationArea;
     public string? LastPersistenceError { get; private set; }
     public event Action<TabTearOffRequest>? TabTearOffRequested;
 
@@ -286,6 +310,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         PanePresentationState? presentation = null)
     {
         var control = new TermControl();
+        control.ConnectionFactory = CreateConnection;
         control.InteractionOptions = TerminalInteractionOptions.FromSettings(_settings);
         control.Cursor = new Cursor(StandardCursorType.Ibeam);
         control.NotificationRequested += (_, notification) => ShowNotification(notification);
@@ -334,6 +359,16 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             }
         };
         return pane;
+    }
+
+    private IRestartableTerminalConnection CreateConnection(ProfileSettings profile)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Terminal connections require Windows.");
+        }
+
+        return _connectionFactory.Create(profile);
     }
 
     private async Task SplitActivePaneAsync(
@@ -812,11 +847,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         Register(ShortcutAction.SendInput, ActionScope.Control, action => ActiveControl is not null && action.Args is SendInputArgs,
             action =>
             {
-                var activePane = _activeTab!.Panes.ActiveContent!;
-                _activeTab.BroadcastInput.WriteInput(
-                    activePane,
-                    _activeTab.Panes.Leaves(),
-                    ((SendInputArgs)action.Args!).Input);
+                WriteCoordinatedInput(((SendInputArgs)action.Args!).Input);
                 return Task.CompletedTask;
             });
         Register(ShortcutAction.SelectAll, ActionScope.Control, _ => ActiveControl is not null, _ =>
@@ -1065,10 +1096,164 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
                 _activeTab!.BroadcastInput.Toggle();
                 return Task.CompletedTask;
             });
-
-        Register(ShortcutAction.ToggleCommandPalette, ActionScope.Window, _ => true, _ =>
+        Register(ShortcutAction.MarkMode, ActionScope.Control, _ => ActiveControl is not null, _ =>
         {
-            ShowCommandPalette();
+            ActiveControl!.EnterMarkMode();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ToggleBlockSelection, ActionScope.Control,
+            _ => ActiveControl?.HasSelection == true,
+            _ =>
+            {
+                ActiveControl!.ToggleBlockSelection();
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.SwitchSelectionEndpoint, ActionScope.Control,
+            _ => ActiveControl?.HasSelection == true,
+            _ =>
+            {
+                ActiveControl!.SwitchSelectionEndpoint();
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.ExpandSelectionToWord, ActionScope.Control,
+            _ => ActiveControl?.HasSelection == true,
+            _ =>
+            {
+                ActiveControl!.ExpandSelectionToWord();
+                return Task.CompletedTask;
+            });
+
+        Register(ShortcutAction.ToggleCommandPalette, ActionScope.Window, _ => true, action =>
+        {
+            ShowCommandPalette(
+                (action.Args as ToggleCommandPaletteArgs)?.LaunchMode ==
+                CommandPaletteLaunchMode.CommandLine
+                    ? PaletteMode.CommandLine
+                    : PaletteMode.Actions);
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.Suggestions, ActionScope.Control, _ => ActiveControl is not null, action =>
+        {
+            var source = (action.Args as SuggestionsArgs)?.Source ?? SuggestionsSource.Tasks;
+            if ((source & SuggestionsSource.CommandHistory) != 0 ||
+                source == SuggestionsSource.All)
+            {
+                ShowCommandPalette(PaletteMode.CommandHistory);
+            }
+            else
+            {
+                ShowNotification(new TerminalNotification(
+                    "Suggestions unavailable",
+                    "This shell did not provide completion or quick-fix suggestions."));
+            }
+
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ExportBuffer, ActionScope.Control, _ => ActiveControl is not null, action =>
+        {
+            var requestedPath = (action.Args as ExportBufferArgs)?.Path;
+            var path = string.IsNullOrWhiteSpace(requestedPath)
+                ? Path.Combine(
+                    Path.GetDirectoryName(Path.GetFullPath(SettingsService.SettingsPath))!,
+                    $"terminal-buffer-{DateTime.Now:yyyyMMdd-HHmmss}.txt")
+                : Environment.ExpandEnvironmentVariables(requestedPath);
+            var text = TerminalBufferExport.ToPlainText(
+                ActiveControl!.Engine.CreateSnapshot(includeHistory: true).Buffer);
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+            File.WriteAllText(path, text);
+            ShowNotification(new TerminalNotification("Buffer exported", path));
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.SelectCommand, ActionScope.Control, _ => ActiveControl is not null, action =>
+        {
+            ActiveControl!.SelectCommand(
+                (action.Args as SelectCommandArgs)?.Direction == SelectOutputDirection.Next
+                    ? TerminalShellSelectionDirection.Next
+                    : TerminalShellSelectionDirection.Previous);
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.SelectOutput, ActionScope.Control, _ => ActiveControl is not null, action =>
+        {
+            ActiveControl!.SelectOutput(
+                (action.Args as SelectOutputArgs)?.Direction == SelectOutputDirection.Next
+                    ? TerminalShellSelectionDirection.Next
+                    : TerminalShellSelectionDirection.Previous);
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.SearchForText, ActionScope.Control,
+            _ => ActiveControl?.BuildCopyPayload() is not null,
+            action =>
+            {
+                var text = ActiveControl!.BuildCopyPayload()!.Text;
+                var template = (action.Args as SearchForTextArgs)?.QueryUrl;
+                if (string.IsNullOrWhiteSpace(template))
+                {
+                    template = _settings.SearchWebDefaultQueryUrl;
+                }
+
+                OpenWithShell(template.Replace(
+                    "%s",
+                    Uri.EscapeDataString(text),
+                    StringComparison.Ordinal));
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.OpenCWD, ActionScope.Control,
+            action => TryGetWorkingDirectory(out var workingDirectory),
+            _ =>
+            {
+                TryGetWorkingDirectory(out var workingDirectory);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                        "explorer.exe"),
+                    UseShellExecute = false,
+                    ArgumentList = { workingDirectory! },
+                });
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.QuickFix, ActionScope.Control, _ => ActiveControl is not null, _ =>
+        {
+            ShowNotification(new TerminalNotification(
+                "Quick Fix unavailable",
+                "This shell did not provide any quick fixes."));
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.DisplayWorkingDirectory, ActionScope.Control,
+            _ => !string.IsNullOrWhiteSpace(ActiveControl?.Engine.WorkingDirectory),
+            _ =>
+            {
+                ShowNotification(new TerminalNotification(
+                    "Working directory",
+                    ActiveControl!.Engine.WorkingDirectory!));
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.AdjustOpacity, ActionScope.Window,
+            action => action.Args is AdjustOpacityArgs,
+            action =>
+            {
+                var args = (AdjustOpacityArgs)action.Args!;
+                var target = args.Relative ? (Opacity * 100) + args.Opacity : args.Opacity;
+                Opacity = Math.Clamp(target / 100d, 0.1, 1);
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.IdentifyWindow, ActionScope.Window, _ => true, _ =>
+        {
+            ShowNotification(new TerminalNotification(
+                "Window identity",
+                string.IsNullOrWhiteSpace(WindowName)
+                    ? $"Window {WindowId}"
+                    : $"{WindowName} ({WindowId})"));
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.OpenScratchpad, ActionScope.Window, _ => true, _ =>
+        {
+            ShowScratchpad();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.OpenAbout, ActionScope.Application, _ => true, _ =>
+        {
+            ShowAbout();
             return Task.CompletedTask;
         });
         Register(ShortcutAction.OpenSettings, ActionScope.Application, _ => true, action =>
@@ -1316,10 +1501,16 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         foreach (var command in _settings.ActionMap.AllCommands.Where(static command => command.ActionAndArgs is not null))
         {
             var action = command.ActionAndArgs!;
+            var shortcut = _settings.ActionMap.GetKeyBindingForAction(command.Id)?.ToString();
             _paletteItems.Add(new PaletteItem(command.Name, async () =>
             {
                 await DispatchActionAsync(action).ConfigureAwait(true);
-            }));
+            }, shortcut));
+        }
+
+        foreach (var profile in _settings.Profiles.Where(static profile => !profile.Hidden))
+        {
+            _paletteItems.Add(new PaletteItem($"New tab: {profile.Name}", () => CreateTabAsync(profile)));
         }
     }
 
@@ -1393,18 +1584,24 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private void CloseFind_OnClick(object? sender, RoutedEventArgs e) => CloseFind();
 
-    private void ShowCommandPalette()
+    private void ShowCommandPalette(PaletteMode mode = PaletteMode.Actions)
     {
-        _tabSearchMode = false;
+        _paletteMode = mode;
         CommandPalette.IsVisible = true;
         CommandPaletteQuery.Text = string.Empty;
+        CommandPaletteQuery.Watermark = mode switch
+        {
+            PaletteMode.CommandHistory => "Search command history",
+            PaletteMode.CommandLine => "Enter a wt command line",
+            _ => "Search actions",
+        };
         RefreshCommandPalette();
         CommandPaletteQuery.Focus();
     }
 
     private void ShowTabSearch()
     {
-        _tabSearchMode = true;
+        _paletteMode = PaletteMode.Tabs;
         CommandPalette.IsVisible = true;
         CommandPaletteQuery.Text = string.Empty;
         CommandPaletteQuery.Watermark = "Search tabs";
@@ -1422,18 +1619,111 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     private void RefreshCommandPalette()
     {
         var query = CommandPaletteQuery.Text;
-        CommandPaletteList.ItemsSource = _tabSearchMode
-            ? _tabCollection.Search(query, static tab => tab.Title)
+        CommandPaletteList.ItemsSource = _paletteMode switch
+        {
+            PaletteMode.Tabs => _tabCollection.Search(query, static tab => tab.Title)
                 .Select(tab => new PaletteItem(tab.Title, () =>
                 {
                     ActivateTab(tab);
                     return Task.CompletedTask;
                 }))
-                .ToArray()
-            : string.IsNullOrWhiteSpace(query)
+                .ToArray(),
+            PaletteMode.CommandHistory => CommandHistoryItems(query),
+            PaletteMode.CommandLine => CommandLineItems(query),
+            _ => string.IsNullOrWhiteSpace(query)
                 ? _paletteItems
-                : FuzzyMatcher.Rank(_paletteItems, query, static item => item.Name);
+                : FuzzyMatcher.Rank(_paletteItems, query, static item => item.Name),
+        };
         CommandPaletteList.SelectedIndex = CommandPaletteList.ItemCount > 0 ? 0 : -1;
+    }
+
+    private IReadOnlyList<PaletteItem> CommandHistoryItems(string? query)
+    {
+        if (ActiveControl is null)
+        {
+            return [];
+        }
+
+        var commands = TerminalBufferExport.GetCommandHistory(
+                ActiveControl.Engine.CreateSnapshot(includeHistory: true).Buffer)
+            .Reverse()
+            .Distinct(StringComparer.Ordinal)
+            .Select(command => new PaletteItem(command, () =>
+            {
+                WriteCoordinatedInput(command);
+                return Task.CompletedTask;
+            }))
+            .ToArray();
+        return string.IsNullOrWhiteSpace(query)
+            ? commands
+            : FuzzyMatcher.Rank(commands, query, static item => item.Name);
+    }
+
+    private IReadOnlyList<PaletteItem> CommandLineItems(string? query) =>
+        string.IsNullOrWhiteSpace(query)
+            ? []
+            : [new PaletteItem($"Run: {query}", () => ExecutePaletteCommandLineAsync(query))];
+
+    private async Task ExecutePaletteCommandLineAsync(string commandLine)
+    {
+        if (_commandLineParser is null)
+        {
+            ShowNotification(new TerminalNotification(
+                "Command line unavailable",
+                "No command-line parser was registered for this window."));
+            return;
+        }
+
+        var parsed = _commandLineParser(commandLine);
+        if (!parsed.Succeeded)
+        {
+            ShowNotification(new TerminalNotification(
+                "Invalid command line",
+                parsed.Message));
+            return;
+        }
+
+        foreach (var action in parsed.Actions)
+        {
+            var result = await DispatchActionAsync(action).ConfigureAwait(true);
+            if (result.Status != ActionDispatchStatus.Executed)
+            {
+                ShowNotification(new TerminalNotification(
+                    "Command line action failed",
+                    result.Message ?? $"Action '{result.Action}' was not executed."));
+                return;
+            }
+        }
+    }
+
+    private void WriteCoordinatedInput(string input)
+    {
+        if (_activeTab?.Panes.ActiveContent is not { } activePane)
+        {
+            return;
+        }
+
+        _activeTab.BroadcastInput.WriteInput(
+            activePane,
+            _activeTab.Panes.Leaves(),
+            input);
+    }
+
+    private bool TryGetWorkingDirectory(out string? workingDirectory)
+    {
+        workingDirectory = null;
+        if (!Uri.TryCreate(
+                ActiveControl?.Engine.WorkingDirectory,
+                UriKind.Absolute,
+                out var uri) ||
+            !uri.IsFile ||
+            !Directory.Exists(uri.LocalPath))
+        {
+            return false;
+        }
+
+        workingDirectory = uri.LocalPath;
+        return true;
     }
 
     private void CommandPaletteQuery_OnTextChanged(object? sender, TextChangedEventArgs e) =>
@@ -1585,10 +1875,13 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         {
             case SettingsTarget.SettingsUI:
             case SettingsTarget.AllFiles:
-                SettingsViewFactory.CreateWindow().Show(this);
+                SettingsViewFactory.CreateWindow(
+                    () => SettingsService.LoadWithDynamicProfiles(_dynamicProfileManager),
+                    SettingsService.Save,
+                    SettingsService.CreateDefault).Show(this);
                 break;
             case SettingsTarget.SettingsFile:
-                SettingsService.Save(SettingsService.Load());
+                SettingsService.Save(SettingsService.LoadWithDynamicProfiles(_dynamicProfileManager));
                 OpenWithShell(SettingsService.SettingsPath);
                 break;
             case SettingsTarget.DefaultsFile:
@@ -1912,6 +2205,302 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         }
     }
 
+    private void ShowScratchpad()
+    {
+        var editor = new TextBox
+        {
+            AcceptsReturn = true,
+            AcceptsTab = true,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        AutomationProperties.SetName(editor, "Scratchpad editor");
+        var scratchpad = new Window
+        {
+            Title = "Scratchpad",
+            Width = 720,
+            Height = 520,
+            Content = editor,
+        };
+        scratchpad.Show(this);
+        editor.Focus();
+    }
+
+    private void ShowAbout()
+    {
+        var close = new Button
+        {
+            Content = "Close",
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        var about = new Window
+        {
+            Title = "About Windows Terminal",
+            Width = 460,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 12,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "Windows Terminal (.NET)",
+                        FontSize = 20,
+                        FontWeight = FontWeight.SemiBold,
+                    },
+                    new TextBlock
+                    {
+                        Text = "Built with .NET 10 NativeAOT, Avalonia, Skia, and HarfBuzz.",
+                        TextWrapping = TextWrapping.Wrap,
+                    },
+                    new TextBlock
+                    {
+                        Text = typeof(MainWindow).Assembly.GetName().Version?.ToString() ?? "Development build",
+                    },
+                    close,
+                },
+            },
+        };
+        close.Click += (_, _) => about.Close();
+        about.ShowDialog(this);
+    }
+
+    private ValueTask ShowAzureDeviceCodeAsync(
+        AzureDeviceCodePrompt prompt,
+        CancellationToken cancellationToken) =>
+        RunOnUiThreadAsync(
+            () => ShowAzureDeviceCodeDialogAsync(prompt, cancellationToken),
+            cancellationToken);
+
+    private ValueTask<AzureCloudShellTenant> SelectAzureTenantAsync(
+        IReadOnlyList<AzureCloudShellTenant> tenants,
+        CancellationToken cancellationToken) =>
+        RunOnUiThreadAsync(
+            () => ShowAzureTenantDialogAsync(tenants, cancellationToken),
+            cancellationToken);
+
+    private async ValueTask ShowAzureDeviceCodeDialogAsync(
+        AzureDeviceCodePrompt prompt,
+        CancellationToken cancellationToken)
+    {
+        var openBrowser = new Button
+        {
+            Content = "Open browser",
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        var continueButton = new Button { Content = "Continue" };
+        var cancelButton = new Button { Content = "Cancel" };
+        var dialog = new Window
+        {
+            Title = "Sign in to Azure Cloud Shell",
+            Width = 560,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 14,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "Sign in to Azure Cloud Shell",
+                        FontSize = 18,
+                        FontWeight = FontWeight.SemiBold,
+                    },
+                    new TextBlock
+                    {
+                        Text = prompt.Message,
+                        TextWrapping = TextWrapping.Wrap,
+                    },
+                    new TextBlock { Text = "Device code" },
+                    new TextBox
+                    {
+                        Text = prompt.UserCode ?? string.Empty,
+                        IsReadOnly = true,
+                    },
+                    new TextBlock
+                    {
+                        Text = $"This code expires {prompt.ExpiresAt.LocalDateTime:g}.",
+                    },
+                    openBrowser,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        Spacing = 8,
+                        Children = { cancelButton, continueButton },
+                    },
+                },
+            },
+        };
+        openBrowser.Click += (_, _) => OpenAzureVerificationUri(prompt.VerificationUri);
+        continueButton.Click += (_, _) => dialog.Close(true);
+        cancelButton.Click += (_, _) => dialog.Close(false);
+        using var registration = cancellationToken.Register(
+            () => Dispatcher.UIThread.Post(() => dialog.Close(false)));
+
+        var accepted = await dialog.ShowDialog<bool>(this).ConfigureAwait(true);
+        if (!accepted)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new AzureCloudShellException(
+                AzureCloudShellStage.Authentication,
+                "AuthenticationCanceled",
+                "Azure Cloud Shell sign-in was canceled.");
+        }
+    }
+
+    private async ValueTask<AzureCloudShellTenant> ShowAzureTenantDialogAsync(
+        IReadOnlyList<AzureCloudShellTenant> tenants,
+        CancellationToken cancellationToken)
+    {
+        if (tenants.Count == 0)
+        {
+            throw new InvalidOperationException("Azure returned no accessible tenants.");
+        }
+
+        var list = new ListBox
+        {
+            ItemsSource = tenants.Select(static tenant =>
+                string.IsNullOrWhiteSpace(tenant.DisplayName)
+                    ? tenant.DefaultDomain ?? tenant.TenantId
+                    : $"{tenant.DisplayName} ({tenant.DefaultDomain ?? tenant.TenantId})"),
+            SelectedIndex = 0,
+            MinHeight = 160,
+        };
+        var connectButton = new Button { Content = "Connect" };
+        var cancelButton = new Button { Content = "Cancel" };
+        var dialog = new Window
+        {
+            Title = "Choose an Azure tenant",
+            Width = 520,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 14,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "Choose an Azure tenant",
+                        FontSize = 18,
+                        FontWeight = FontWeight.SemiBold,
+                    },
+                    list,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        Spacing = 8,
+                        Children = { cancelButton, connectButton },
+                    },
+                },
+            },
+        };
+        connectButton.Click += (_, _) =>
+        {
+            if (list.SelectedIndex >= 0 && list.SelectedIndex < tenants.Count)
+            {
+                dialog.Close(tenants[list.SelectedIndex]);
+            }
+        };
+        cancelButton.Click += (_, _) => dialog.Close(null);
+        using var registration = cancellationToken.Register(
+            () => Dispatcher.UIThread.Post(() => dialog.Close(null)));
+
+        var selected = await dialog.ShowDialog<AzureCloudShellTenant?>(this).ConfigureAwait(true);
+        if (selected is null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new AzureCloudShellException(
+                AzureCloudShellStage.Authentication,
+                "TenantSelectionCanceled",
+                "Azure tenant selection was canceled.");
+        }
+
+        return selected;
+    }
+
+    private void OpenAzureVerificationUri(Uri? verificationUri)
+    {
+        if (verificationUri is null)
+        {
+            ShowNotification(new TerminalNotification(
+                "Azure sign-in",
+                "Azure did not provide a verification address."));
+            return;
+        }
+
+        try
+        {
+            OpenWithShell(verificationUri.AbsoluteUri);
+        }
+        catch (Exception ex) when (ex is
+            System.ComponentModel.Win32Exception or
+            InvalidOperationException)
+        {
+            ShowNotification(new TerminalNotification(
+                "Unable to open browser",
+                ex.Message));
+        }
+    }
+
+    private static ValueTask RunOnUiThreadAsync(
+        Func<ValueTask> operation,
+        CancellationToken cancellationToken)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            return operation();
+        }
+
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await operation().ConfigureAwait(true);
+                completion.TrySetResult();
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(ex);
+            }
+        });
+        return new ValueTask(completion.Task);
+    }
+
+    private static ValueTask<T> RunOnUiThreadAsync<T>(
+        Func<ValueTask<T>> operation,
+        CancellationToken cancellationToken)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            return operation();
+        }
+
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                completion.TrySetResult(await operation().ConfigureAwait(true));
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(ex);
+            }
+        });
+        return new ValueTask<T>(completion.Task);
+    }
+
     private async Task ShowLaunchErrorAsync(ProfileSettings profile, Exception error)
     {
         var close = new Button
@@ -1969,6 +2558,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             ArgumentException or
             InvalidOperationException or
             PlatformNotSupportedException or
+            AzureCloudShellException or
             System.Runtime.InteropServices.COMException;
 
     private void SynchronizeTitle(TerminalTab tab)
@@ -2103,7 +2693,16 @@ internal sealed class RelayCommand(Action execute) : System.Windows.Input.IComma
     public void Execute(object? parameter) => execute();
 }
 
-internal sealed record PaletteItem(string Name, Func<Task> Execute)
+internal enum PaletteMode
 {
-    public override string ToString() => Name;
+    Actions,
+    Tabs,
+    CommandHistory,
+    CommandLine,
+}
+
+internal sealed record PaletteItem(string Name, Func<Task> Execute, string? Shortcut = null)
+{
+    public override string ToString() =>
+        string.IsNullOrWhiteSpace(Shortcut) ? Name : $"{Name}    {Shortcut}";
 }

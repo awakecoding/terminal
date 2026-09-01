@@ -2,6 +2,21 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="WindowsTerminal.App"
              RequestedThemeVariant="Dark">
+  <TrayIcon.Icons>
+    <TrayIcons>
+      <TrayIcon Icon="/Assets/terminal.ico"
+                ToolTipText="Windows Terminal"
+                IsVisible="False">
+        <TrayIcon.Menu>
+          <NativeMenu>
+            <NativeMenuItem Header="Show windows" Click="ShowWindows_OnClick" />
+            <NativeMenuItemSeparator />
+            <NativeMenuItem Header="Exit" Click="Exit_OnClick" />
+          </NativeMenu>
+        </TrayIcon.Menu>
+      </TrayIcon>
+    </TrayIcons>
+  </TrayIcon.Icons>
   <Application.Styles>
     <FluentTheme />
     <Style Selector="Window">

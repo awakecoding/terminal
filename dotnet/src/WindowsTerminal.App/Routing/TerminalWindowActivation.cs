@@ -25,6 +25,11 @@ public sealed record TerminalWindowActivationResult(
     string Message,
     IReadOnlyList<ActionDispatchResult> Actions);
 
+public sealed record TerminalCommandLineParseResult(
+    bool Succeeded,
+    string Message,
+    IReadOnlyList<ActionAndArgs> Actions);
+
 public interface ITerminalWindowActivationTarget
 {
     int WindowId { get; }

@@ -29,7 +29,9 @@ public sealed class PackageEnvironmentTests
         Assert.False(environment.Supports(PackageCapability.JumpList));
         Assert.False(environment.Supports(PackageCapability.DefaultTerminal));
         Assert.False(environment.Supports(PackageCapability.ShellVerb));
-        Assert.Contains("not wired", environment.GetUnavailableReason(PackageCapability.Notifications));
+        Assert.Contains(
+            "integration component",
+            environment.GetUnavailableReason(PackageCapability.Notifications));
     }
 
     [Fact]

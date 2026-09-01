@@ -41,6 +41,7 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
+    <AvaloniaResource Include="..\..\..\res\terminal\images\terminal_contrast-white.ico" Link="Assets\terminal.ico" />
     <AvaloniaResource Include="..\..\..\res\fonts\CascadiaMono.ttf" Link="Assets\Fonts\CascadiaMono.ttf" />
     <AvaloniaResource Include="..\..\..\res\fonts\CascadiaMonoItalic.ttf" Link="Assets\Fonts\CascadiaMonoItalic.ttf" />
   </ItemGroup>

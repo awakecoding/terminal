@@ -7,7 +7,9 @@ using WindowsTerminal.Views;
 
 namespace WindowsTerminal;
 
-internal sealed class TerminalWindowRouter(IClassicDesktopStyleApplicationLifetime desktop) : IBrokerRequestHandler
+internal sealed class TerminalWindowRouter(
+    IClassicDesktopStyleApplicationLifetime desktop,
+    Action<MainWindow>? windowCreated = null) : IBrokerRequestHandler
 {
     private readonly List<MainWindow> _windows = [];
     private int _nextWindowId = 1;
@@ -104,8 +106,10 @@ internal sealed class TerminalWindowRouter(IClassicDesktopStyleApplicationLifeti
             {
                 var child = CreateWindow(childActivation, string.Empty);
                 child.Show();
-            });
+            },
+            commandLineParser: ParseCommandLine);
         _windows.Add(window);
+        windowCreated?.Invoke(window);
         window.Closed += (_, _) =>
         {
             _windows.Remove(window);
@@ -115,6 +119,37 @@ internal sealed class TerminalWindowRouter(IClassicDesktopStyleApplicationLifeti
             }
         };
         return window;
+    }
+
+    private static TerminalCommandLineParseResult ParseCommandLine(string commandLine)
+    {
+        var parsed = new CliParser().ParseCommandLine(
+            commandLine,
+            ensureInitialTab: false);
+        if (parsed.ShouldExit || parsed.Invocation is null)
+        {
+            return new(false, parsed.Message, []);
+        }
+
+        if (parsed.Invocation.SavedLayout is not null || parsed.Invocation.SaveRequest is not null)
+        {
+            return new(false, "Saved layouts and workspace save are not available.", []);
+        }
+
+        if (!string.IsNullOrWhiteSpace(parsed.Invocation.TargetWindow) ||
+            parsed.Invocation.PositionX is not null ||
+            parsed.Invocation.PositionY is not null ||
+            parsed.Invocation.Columns is not null ||
+            parsed.Invocation.Rows is not null ||
+            parsed.Invocation.LaunchMode != CliLaunchMode.Default)
+        {
+            return new(
+                false,
+                "Window routing, position, size, and launch-mode options are not valid inside the current window's command palette.",
+                []);
+        }
+
+        return new(true, "Command line parsed.", parsed.Invocation.Actions);
     }
 
     private MainWindow? FindWindow(string target)

@@ -60,6 +60,12 @@ Visual Studio developer shells. Sources honor `disabledProfileSources`, retain
 upstream GUID/source identities, and reconcile removed generated profiles through
 `state.json`. Set `WT_RUN_MACHINE_PROFILE_TESTS=1` to opt into machine-dependent
 generator smoke coverage.
+Azure Cloud Shell is generated when `WT_AZURE_CLIENT_ID` contains the GUID of a
+host-owned Entra public-client application. The host supplies device-code and
+tenant-selection UI and never receives or persists access/refresh tokens.
+The command palette supports action, `wt` command-line, tab-search, profile-launch,
+and shell command-history flows. Settings-driven notification-area behavior is
+available for unpackaged and packaged runs.
 The compiled-XAML settings editor and host integration are documented in
 [doc/settings-editor.md](doc/settings-editor.md).
 

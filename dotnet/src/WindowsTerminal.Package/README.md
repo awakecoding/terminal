@@ -96,4 +96,12 @@ trusted certificate.
 builds currently report package identity, execution aliases, and protocol
 activation as available. Notifications, jump lists, default-terminal
 registration, and the Explorer shell verb remain explicit unavailable
-capabilities until their application-side integrations are implemented.
+capabilities. The notification-area icon and minimize-to-area behavior use
+Avalonia's native tray integration and work both packaged and unpackaged.
+
+The remaining capabilities cannot be truthfully advertised by this package
+alone: the Explorer verb requires a native `IExplorerCommand` COM DLL, default
+terminal requires the Windows console delegation contract, and system toast
+activation/jump lists require a WinRT or Windows App SDK projection. The app
+keeps in-app accessible notifications and returns explicit unavailable results
+instead of registering incomplete shell components.

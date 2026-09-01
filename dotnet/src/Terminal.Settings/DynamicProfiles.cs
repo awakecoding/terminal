@@ -152,18 +152,36 @@ public sealed class DynamicProfileManager
 
     public static DynamicProfileManager CreateDefault(
         DynamicProfileEnvironment? environment = null,
-        IDynamicProfileCommandRunner? commandRunner = null)
+        IDynamicProfileCommandRunner? commandRunner = null) =>
+        CreateDefaultCore(environment, commandRunner, null);
+
+    public static DynamicProfileManager CreateDefaultWithAzure(
+        Guid azureConnectionType,
+        DynamicProfileEnvironment? environment = null,
+        IDynamicProfileCommandRunner? commandRunner = null) =>
+        CreateDefaultCore(environment, commandRunner, azureConnectionType);
+
+    private static DynamicProfileManager CreateDefaultCore(
+        DynamicProfileEnvironment? environment,
+        IDynamicProfileCommandRunner? commandRunner,
+        Guid? azureConnectionType)
     {
         environment ??= new DynamicProfileEnvironment();
         commandRunner ??= new DynamicProfileCommandRunner();
-        return new DynamicProfileManager(
-        [
+        var generators = new List<IDynamicProfileGenerator>
+        {
             new InboxShellProfileGenerator(environment),
             new PowerShellCoreProfileGenerator(environment),
             new WslDistroProfileGenerator(commandRunner, environment),
             new SshHostProfileGenerator(environment),
             new VisualStudioProfileGenerator(commandRunner, environment),
-        ]);
+        };
+        if (azureConnectionType is not null)
+        {
+            generators.Add(new AzureCloudShellProfileGenerator(azureConnectionType));
+        }
+
+        return new DynamicProfileManager(generators);
     }
 
     public async ValueTask<DynamicProfileGenerationResult> GenerateAsync(
