@@ -21,7 +21,7 @@ The original C++ tree stays in place. All new work lives under `dotnet/`.
 | `Terminal.Core` | Cell/attributes, text buffer, VT ground/CSI/OSC subset, alt screen, SGR (16/256/truecolor) |
 | `Terminal.Render` | Renderer-neutral contracts for the future Skia glyph atlas |
 | `Terminal.Connection` | NativeAOT-safe ConPTY via `LibraryImport`, transactional safe-handle lifecycle, cancellation, async writes, resize, and environment overrides |
-| `Terminal.Settings` | Embedded defaults, modern/legacy profiles, profile-default inheritance, fragments, diagnostics, stable profile GUIDs, and atomic persistence |
+| `Terminal.Settings` | Complete MTSM global/window/profile/font/appearance/theme/scheme/media/new-tab-menu projection; tri-state inheritance, legacy migrations, fragments/origins, diagnostics, stable profile GUIDs, local-layer diff serialization, and atomic `settings.json`/`state.json` persistence |
 | `Terminal.Control` | Avalonia `TermControl`: Skia text, selection, copy/paste, key map |
 | `WindowsTerminal.App` | Tabbed window, title bar, Ctrl+Shift+T/W/N/C/V |
 | `WindowsTerminal` | NativeAOT executable and composition root |
@@ -133,27 +133,39 @@ atlas; that is the difference between “works” and “feels like Terminal”.
 
 Reimplement `TerminalSettingsModel` in C#, not WinRT projections.
 
-Load order (same as WT):
+Implemented load order:
 
 1. Embedded `defaults.json` (checked in, generated from the C++ copy)
 2. Fragment files (`%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\`,
    `%PROGRAMDATA%\...`)
 3. User `settings.json`
-4. Dynamic profile generators (PowerShell Core, WSL, Visual Studio, Azure, SSH)
-5. `state.json` for window layout
+
+Fragment `updates` are applied after profile identity is known, including to
+user-created profiles. Ordinary `null` clears an override and resumes
+inheritance; nullable color/tab settings preserve an explicit null. User profile
+order is retained before unmatched inbox/fragment profiles. Models expose
+`User`, `InBox`, `Fragment`, `Generated`, and `ProfilesDefaults` origins.
+
+`state.json` is a separate, source-generated model for settings hashes,
+generated profiles, recent commands, dismissed UI, persisted windows, and named
+workspaces. It is loaded independently (no settings layering), rejects malformed
+payloads as a whole, and is written atomically.
 
 Required types:
 
-- `CascadiaSettings` / `GlobalAppSettings` / `WindowSettings`
-- `Profile` with inheritance (`profiles.defaults`, unfocused appearance)
-- `ColorScheme`, `Theme`, `FontConfig`, `AppearanceConfig`
-- `ActionMap` + `ActionAndArgs` for every entry in `AllShortcutActions.h`
-- `NewTabMenu` entries
-- Warnings (`TerminalWarnings`) for unknown/legacy keys
+- Global/window settings from `MTSMSettings.h`
+- Profiles with `profiles.defaults`, font, focused/unfocused appearance, and
+  compatibility aliases
+- Color schemes, theme pairs and nested themes, media resources, and new-tab menu
+- Warnings for invalid defaults, profile/scheme/theme references, environment
+  names, and menu structure
 
-JSON must be source-generated (`System.Text.Json` + `JsonSerializerContext`)
-so NativeAOT can round-trip comments-stripped WT JSON. Preserve unknown
-properties via an extension-data dictionary.
+Actions and keybindings are deliberately retained as lossless raw JSON until the
+dedicated action phase adds `ActionMap` and `ActionAndArgs`.
+
+Typed JSON is source-generated (`System.Text.Json` + `JsonSerializerContext`).
+Settings layering and unknown-property preservation operate on `JsonNode`, so
+NativeAOT round-trips comments-stripped WT JSON without reflection.
 
 Default actions live in a C# copy of the `actions` block from
 `src/cascadia/TerminalSettingsModel/defaults.json`. Keep the JSON in sync;

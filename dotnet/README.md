@@ -39,6 +39,9 @@ The native executable is written to
 
 Settings are stored at `%LOCALAPPDATA%\WindowsTerminal.NET\settings.json`.
 Set `WT_DOTNET_SETTINGS_PATH` to load a specific Windows Terminal settings file.
+Runtime application state is stored atomically in `state.json` beside that file.
+The settings loader applies embedded defaults, fragments, then the user layer;
+actions and keybindings are preserved losslessly for the dedicated action phase.
 
 ## Architecture
 
