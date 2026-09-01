@@ -33,11 +33,13 @@ public enum ShellIntegrationKind : byte
 
 public sealed class ShellMark
 {
-    public ShellMark(uint? exitCode = null)
+    public ShellMark(int startColumn, uint? exitCode = null)
     {
+        StartColumn = startColumn;
         ExitCode = exitCode;
     }
 
+    public int StartColumn { get; internal set; }
     public uint? ExitCode { get; internal set; }
 }
 

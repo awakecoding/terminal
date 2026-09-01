@@ -5,7 +5,10 @@ namespace Microsoft.Terminal.Core;
 public sealed record TextBufferLineSnapshot(
     IReadOnlyList<Cell> Cells,
     bool Wrapped,
-    ShellMark? Mark = null);
+    IReadOnlyList<ShellMark> Marks)
+{
+    public ShellMark? Mark => Marks.Count > 0 ? Marks[0] : null;
+}
 
 public sealed record TextBufferSnapshot(
     int Columns,
@@ -27,7 +30,7 @@ public sealed class TextBuffer
 
         public Cell[] Cells { get; }
         public bool Wrapped { get; set; }
-        public ShellMark? Mark { get; set; }
+        public List<ShellMark> Marks { get; } = [];
     }
 
     private CircularBuffer<BufferLine> _lines;
@@ -35,7 +38,7 @@ public sealed class TextBuffer
     private bool[] _tabStops;
     private int _scrollOffset;
     private ShellIntegrationKind _shellIntegration;
-    private BufferLine? _activeMarkedLine;
+    private ShellMark? _activeMark;
     private bool _activeMarkHasOutput;
 
     public TextBuffer(int columns, int rows, int historySize, bool hasHistory)
@@ -87,7 +90,7 @@ public sealed class TextBuffer
         var oldViewport = ViewportStart;
         var cursorAbsoluteLine = oldViewport + CursorY;
         var source = _lines.ToList();
-        var activeMark = _activeMarkedLine?.Mark;
+        var activeMark = _activeMark;
 
         Columns = columns;
         Rows = rows;
@@ -104,18 +107,7 @@ public sealed class TextBuffer
         }
 
         _lines.ResetCapacity(rows + _historySize, reflowed);
-        _activeMarkedLine = null;
-        if (activeMark is not null)
-        {
-            for (var index = 0; index < _lines.Count; index++)
-            {
-                if (ReferenceEquals(_lines[index].Mark, activeMark))
-                {
-                    _activeMarkedLine = _lines[index];
-                    break;
-                }
-            }
-        }
+        _activeMark = activeMark;
         var dropped = Math.Max(0, reflowed.Count - _lines.Count);
         cursorLine = Math.Max(0, cursorLine - dropped);
 
@@ -159,7 +151,9 @@ public sealed class TextBuffer
             copies[i] = new TextBufferLineSnapshot(
                 cells,
                 _lines[sourceIndex].Wrapped,
-                _lines[sourceIndex].Mark is { } mark ? new ShellMark(mark.ExitCode) : null);
+                _lines[sourceIndex].Marks
+                    .Select(static mark => new ShellMark(mark.StartColumn, mark.ExitCode))
+                    .ToArray());
         }
 
         return new TextBufferSnapshot(Columns, Rows, CursorX, CursorY, HistoryCount, ScrollOffset, copies);
@@ -530,7 +524,7 @@ public sealed class TextBuffer
         CurrentAttributes = CellAttributes.Default;
         CurrentHyperlinkUri = null;
         _shellIntegration = ShellIntegrationKind.None;
-        _activeMarkedLine = null;
+        _activeMark = null;
         _activeMarkHasOutput = false;
         CursorX = 0;
         CursorY = 0;
@@ -588,9 +582,15 @@ public sealed class TextBuffer
 
     public void StartPrompt()
     {
+        if (_activeMark is not null)
+        {
+            _shellIntegration = ShellIntegrationKind.Prompt;
+            return;
+        }
+
         var line = GetLiveLine(CursorY);
-        line.Mark ??= new ShellMark();
-        _activeMarkedLine = line;
+        _activeMark = new ShellMark(CursorX);
+        line.Marks.Add(_activeMark);
         _activeMarkHasOutput = false;
         _shellIntegration = ShellIntegrationKind.Prompt;
     }
@@ -611,25 +611,25 @@ public sealed class TextBuffer
     public void EndCommand(uint? exitCode)
     {
         _shellIntegration = ShellIntegrationKind.None;
-        if (_activeMarkedLine?.Mark is { } mark)
+        if (_activeMark is { } mark)
         {
             mark.ExitCode = exitCode;
         }
 
-        _activeMarkedLine = null;
+        _activeMark = null;
         _activeMarkHasOutput = false;
     }
 
     private void EnsureShellMark()
     {
-        if (_activeMarkedLine is not null && !_activeMarkHasOutput)
+        if (_activeMark is not null && !_activeMarkHasOutput)
         {
             return;
         }
 
         var line = GetLiveLine(CursorY);
-        line.Mark ??= new ShellMark();
-        _activeMarkedLine = line;
+        _activeMark = new ShellMark(CursorX);
+        line.Marks.Add(_activeMark);
         _activeMarkHasOutput = false;
     }
 
@@ -819,9 +819,9 @@ public sealed class TextBuffer
         {
             var line = source[lineIndex];
             var used = line.Wrapped ? oldColumns : LastContentColumn(line.Cells) + 1;
-            if (line.Mark is not null)
+            foreach (var mark in line.Marks)
             {
-                paragraphMarks.Add((DisplayWidth(paragraphCells), line.Mark));
+                paragraphMarks.Add((DisplayWidth(paragraphCells) + mark.StartColumn, mark));
             }
 
             if (lineIndex == cursorLine)
@@ -847,7 +847,8 @@ public sealed class TextBuffer
                     var destination = paragraphStart + Math.Min(
                         offset / newColumns,
                         result.Count - paragraphStart - 1);
-                    result[destination].Mark ??= mark;
+                    mark.StartColumn = offset % newColumns;
+                    result[destination].Marks.Add(mark);
                 }
 
                 if (cursorOffset >= 0)
