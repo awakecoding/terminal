@@ -12,13 +12,23 @@ using Microsoft.Terminal.Settings;
 
 namespace Microsoft.Terminal.Control;
 
+[Flags]
+public enum TerminalControlCapabilities
+{
+    None = 0,
+    ClearBuffer = 1 << 0,
+    Reset = 1 << 1,
+    ShowHide = 1 << 2,
+    Restart = 1 << 3,
+}
+
 public sealed class TermControl : Avalonia.Controls.Control
 {
     private readonly DispatcherTimer _blinkTimer;
     private readonly DispatcherTimer _renderTimer;
     private readonly object _outputLock = new();
     private readonly List<byte> _pendingOutput = [];
-    private ITerminalConnection? _connection;
+    private IRestartableTerminalConnection? _connection;
     private Typeface _typeface = new("Cascadia Mono, Consolas, Courier New");
     private double _fontSize = 12;
     private double _cellWidth = 8;
@@ -58,9 +68,19 @@ public sealed class TermControl : Avalonia.Controls.Control
     public TerminalEngine Engine { get; }
     public ProfileSettings? Profile { get; private set; }
     public bool IsRunning => _connection?.IsRunning == true;
+    public TerminalConnectionState ConnectionState =>
+        _connection?.State ?? TerminalConnectionState.NotConnected;
+    public TerminalProcessMetadata? ProcessMetadata => _connection?.ProcessMetadata;
+    public TerminalControlCapabilities Capabilities { get; } =
+        TerminalControlCapabilities.ClearBuffer |
+        TerminalControlCapabilities.Reset |
+        TerminalControlCapabilities.ShowHide |
+        TerminalControlCapabilities.Restart;
 
     public event EventHandler<string>? TitleChanged;
     public event EventHandler<int>? ProcessExited;
+    public event EventHandler<TerminalExitInfo>? SessionExited;
+    public event EventHandler? CloseRequested;
 
     public async Task StartAsync(ProfileSettings profile, int columns, int rows)
     {
@@ -87,7 +107,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     {
         var connection = new ConPtyConnection();
         connection.OutputReceived += OnOutput;
-        connection.Exited += (_, code) => Dispatcher.UIThread.Post(() => ProcessExited?.Invoke(this, code));
+        connection.SessionExited += OnSessionExited;
         _connection = connection;
         await connection.StartAsync(
             new TerminalLaunchOptions
@@ -98,7 +118,20 @@ public sealed class TermControl : Avalonia.Controls.Control
                 Rows = rows,
                 InheritEnvironment = profile.ReloadEnvironmentVariables,
                 EnvironmentVariables = profile.Environment,
+                CloseOnExit = ToConnectionPolicy(profile.CloseOnExit),
             }).ConfigureAwait(true);
+    }
+
+    public async Task RestartAsync(CancellationToken cancellationToken = default)
+    {
+        var connection = _connection
+            ?? throw new InvalidOperationException("The terminal connection has not been started.");
+        _renderTimer.Stop();
+        await connection.CloseAsync(cancellationToken).ConfigureAwait(true);
+        ResetTerminal();
+        await connection.RestartAsync(cancellationToken: cancellationToken).ConfigureAwait(true);
+        _blinkTimer.Start();
+        _renderTimer.Start();
     }
 
     public async Task CloseAsync()
@@ -143,6 +176,35 @@ public sealed class TermControl : Avalonia.Controls.Control
 
         text = text.Replace("\r\n", "\r").Replace('\n', '\r');
         _connection.Write(Engine.WrapPaste(text));
+    }
+
+    public void ClearBuffer()
+    {
+        Engine.Feed("\u001b[3J\u001b[2J\u001b[H");
+        _hasSelection = false;
+        InvalidateVisual();
+    }
+
+    public void ResetTerminal()
+    {
+        lock (_outputLock)
+        {
+            _pendingOutput.Clear();
+        }
+
+        Engine.Reset();
+        _hasSelection = false;
+        _cursorOn = true;
+        InvalidateVisual();
+    }
+
+    public void ShowHide(bool show)
+    {
+        IsVisible = show;
+        if (show)
+        {
+            Focus();
+        }
     }
 
     protected override Size MeasureOverride(Size availableSize)
@@ -298,6 +360,23 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
     }
 
+    private void OnSessionExited(object? sender, TerminalExitInfo exit)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            SessionExited?.Invoke(this, exit);
+            if (exit.ExitCode is int exitCode)
+            {
+                ProcessExited?.Invoke(this, exitCode);
+            }
+
+            if (exit.ShouldClose)
+            {
+                CloseRequested?.Invoke(this, EventArgs.Empty);
+            }
+        });
+    }
+
     private void DrainOutput()
     {
         byte[] chunk;
@@ -433,4 +512,13 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     private static IBrush ToBrush(uint argb) =>
         new SolidColorBrush(Color.FromUInt32(argb));
+
+    private static TerminalCloseOnExitPolicy ToConnectionPolicy(CloseOnExitMode mode) =>
+        mode switch
+        {
+            CloseOnExitMode.Never => TerminalCloseOnExitPolicy.Never,
+            CloseOnExitMode.Graceful => TerminalCloseOnExitPolicy.Graceful,
+            CloseOnExitMode.Always => TerminalCloseOnExitPolicy.Always,
+            _ => TerminalCloseOnExitPolicy.Automatic,
+        };
 }

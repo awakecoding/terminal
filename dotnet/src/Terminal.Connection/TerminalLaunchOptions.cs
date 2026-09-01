@@ -14,4 +14,9 @@ public sealed record TerminalLaunchOptions
 
     public IReadOnlyDictionary<string, string?> EnvironmentVariables { get; init; } =
         new Dictionary<string, string?>();
+
+    public TerminalCloseOnExitPolicy CloseOnExit { get; init; } =
+        TerminalCloseOnExitPolicy.Automatic;
+
+    public bool IsDefaultTerminalSession { get; init; }
 }

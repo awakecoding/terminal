@@ -104,7 +104,7 @@ public partial class MainWindow : Window
                 Title = tab.Title;
             }
         };
-        control.ProcessExited += async (_, _) =>
+        control.CloseRequested += async (_, _) =>
         {
             var tab = FindTab(pane);
             if (tab is not null)
