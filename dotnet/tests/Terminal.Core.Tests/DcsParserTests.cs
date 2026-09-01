@@ -173,6 +173,33 @@ public sealed class DcsParserTests
         Assert.Equal("X", dispatch.Printed.ToString());
     }
 
+    [Fact]
+    public void ReentrantInputFromDcsDispatchRetainsParserState()
+    {
+        var dispatch = new RecordingDispatch();
+        var parser = new VtParser(dispatch);
+        dispatch.OnDcsDispatch = () => parser.Process("\u001b[3"u8);
+
+        parser.Process("\u001bP$qm\u001b\\"u8);
+        parser.Process(";4H"u8);
+
+        var csi = Assert.Single(dispatch.Csi);
+        Assert.Equal('H', csi.Final);
+        Assert.Equal([3, 4], csi.Parameters);
+    }
+
+    [Fact]
+    public void CsiIntermediateDoesNotAppendAnExtraDefaultParameter()
+    {
+        var dispatch = new RecordingDispatch();
+        var parser = new VtParser(dispatch);
+
+        parser.Process("\u001b[1;2$r"u8);
+
+        var csi = Assert.Single(dispatch.Csi);
+        Assert.Equal([1, 2], csi.Parameters);
+    }
+
     private static DcsRecord Parse(byte[] bytes)
     {
         var dispatch = new RecordingDispatch();
@@ -204,6 +231,7 @@ public sealed class DcsParserTests
         public List<CsiRecord> Csi { get; } = [];
         public List<byte> Controls { get; } = [];
         public StringBuilder Printed { get; } = new();
+        public Action? OnDcsDispatch { get; set; }
 
         public void Print(Rune rune) => Printed.Append(rune);
 
@@ -221,13 +249,16 @@ public sealed class DcsParserTests
             ReadOnlySpan<int> parameters,
             ReadOnlySpan<byte> intermediates,
             byte privateMarker,
-            ReadOnlySpan<byte> data) =>
+            ReadOnlySpan<byte> data)
+        {
             Dcs.Add(new DcsRecord(
                 final,
                 parameters.ToArray(),
                 intermediates.ToArray(),
                 privateMarker,
                 data.ToArray()));
+            OnDcsDispatch?.Invoke();
+        }
 
         public void OscDispatch(int command, ReadOnlySpan<char> data)
         {

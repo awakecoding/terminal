@@ -18,6 +18,13 @@ OSC 1337 images as renderer-neutral overlay metadata.
 | `DCS ... q data ST` | Decodes Sixel with macro aspect ratio, repeat, color registers (HLS and RGB), raster attributes, graphics CR/LF, and opaque or transparent backgrounds. |
 | `DCS $ q request ST` | Implements DECRQSS for SGR, DECSTBM, DECSLRM, DECSCUSR (default style), DECSCA (unprotected), and DECSACE (stream extent). Unknown settings return `DCS 0 $ r ST`. |
 | `DCS + q names ST` | Implements practical XTGETTCAP reports for `TN`, `Co`, `RGB`, and `Tc`, with one response per hex-encoded capability name. |
+| `DCS ... { Dscs data ST` | Implements bounded DECDLD soft-font download (one 94/96-character DRCS buffer, 16×32 maximum glyphs), SCS designation, SI/SO, LS2/LS3, LS1R/LS2R/LS3R, and SS2/SS3 invocation. Cells use `U+EF20`–`U+EF7F`; `DrcsGlyphs` exposes renderer-neutral alpha masks. |
+| `DCS Pmid;Pdel;Penc ! z data ST` / `CSI Pmid * z` | Defines, deletes, and invokes DECDMAC macros in text or hex-pair encoding, including bounded hex repeats. |
+| `CSI ? 2 l` / VT52 `ESC` commands | Implements VT52 cursor movement, home, reverse index, erase-to-end, direct cursor address, identify (`ESC / Z`), keypad mode, DEC graphics, and `ESC <` return to ANSI mode. CSI, OSC, and DCS entry are disabled while in VT52 mode. |
+| `CSI ... $ r/t/v/x/z/{` / `CSI ... * y` | Implements DECCARA, DECRARA, DECCRA, DECFRA, DECERA, DECSERA, DECSACE stream/rectangle extent, and DECRQCRA checksums. |
+| `CSI ? Ps J/K` / `CSI Ps " q` | Implements protected cells and DECSED/DECSEL selective erase. |
+| `CSI 2;Pu $ u` / `DCS 2 $ p ... ST` | Reports and restores the 256-entry terminal color table in HLS or RGB percentage form. |
+| `CSI Ps $ w` / `DCS Ps $ t ... ST` | Reports and restores cursor presentation state (`Ps=1`) and tab stops (`Ps=2`). |
 | `OSC 1337 ; File=... : base64 ST` | Parses inline iTerm2 image name, declared size, width, height, aspect-ratio preference, and bounded encoded bytes. Non-inline file transfers are ignored. |
 
 The DCS state machine handles 7-bit and C1 entry/termination, parameter and
@@ -28,7 +35,7 @@ sequence.
 
 ## Limits
 
-Limits are public constants on `TerminalImageLimits`.
+Limits are public constants on `TerminalImageLimits` and `VtResourceLimits`.
 
 | Resource | Limit |
 | --- | ---: |
@@ -39,10 +46,20 @@ Limits are public constants on `TerminalImageLimits`.
 | Sixel pixel writes per sequence | 67,108,864 |
 | Retained overlays | 64 |
 | Retained Core image data | 64 MiB |
+| DRCS buffers | 1 |
+| DRCS characters | 96 |
+| DRCS glyph dimensions | 16×32 pixels |
+| DECDMAC identifiers | 64 |
+| Shared macro storage | 256 KiB |
+| Macro invocation depth | 16 |
+| Bytes expanded by one top-level macro invocation | 256 KiB |
 
-Sequences that exceed a parser or decoder limit are discarded. A failed Sixel
-decode does not modify persistent color registers. When the retained overlay
-budget is reached, Core evicts the oldest overlay before publishing the new one.
+Sequences that exceed a parser or decoder limit are discarded. Invalid DRCS
+dimensions and malformed macro hex/repeat payloads do not publish partial state.
+Macro definitions are rejected during macro invocation, and recursion plus total
+expansion are independently bounded. A failed Sixel decode does not modify
+persistent color registers. When the retained overlay budget is reached, Core
+evicts the oldest overlay before publishing the new one.
 
 ## Renderer contract
 
@@ -72,13 +89,18 @@ identities and is a later cross-layer change.
 
 ## Intentional gaps
 
-- DRCS/downloadable character sets (`DECDLD`)
-- user-defined macros (`DECDMAC`)
-- VT52 mode
+- DECTSR terminal-state format 1 (`CSI 1 $ u` / `DCS 1 $ p`) remains
+  unsupported, matching upstream `AdaptDispatch`; color-table format 2 is
+  supported.
+- DRCS font numbers are accepted for compatibility but share one soft-font
+  buffer, matching upstream. Multi-byte DRCS designators are accepted for the
+  common intermediate-plus-final form.
+- VT52 printer commands and host keyboard encoding are outside `Terminal.Core`;
+  Core tracks cursor-key and keypad modes for input layers to consume.
 - Sixel scrolling/display-mode cursor movement and image slices tied to stable
   scrollback line identities
 - non-inline OSC 1337 file transfer and remote file access
 - ConEmu image payloads
 
-These are deferred to keep the Core parser bounded and the Sixel/DECRQSS path
-correct without introducing UI or renderer dependencies.
+These gaps avoid remote I/O and renderer/input dependencies while keeping every
+implemented parser and downloadable resource path bounded.

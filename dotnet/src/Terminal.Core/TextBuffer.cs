@@ -72,10 +72,12 @@ public sealed class TextBuffer
     public int TotalLines => _lines.Count;
     public int HistoryCount => ViewportStart;
     public CellAttributes CurrentAttributes { get; set; } = CellAttributes.Default;
+    public bool CurrentProtection { get; set; }
     public string? CurrentHyperlinkUri { get; set; }
     public int SavedCursorX { get; set; }
     public int SavedCursorY { get; set; }
     public CellAttributes SavedAttributes { get; set; } = CellAttributes.Default;
+    public bool SavedProtection { get; set; }
 
     public void Resize(int columns, int rows)
     {
@@ -212,6 +214,7 @@ public sealed class TextBuffer
         {
             Rune = rune,
             Attributes = CurrentAttributes,
+            IsProtected = CurrentProtection,
             StoredWidth = (byte)width,
             HyperlinkUri = CurrentHyperlinkUri,
             ShellIntegration = _shellIntegration,
@@ -223,6 +226,7 @@ public sealed class TextBuffer
             {
                 Rune = new Rune(' '),
                 Attributes = CurrentAttributes,
+                IsProtected = CurrentProtection,
                 IsWideContinuation = true,
                 StoredWidth = 0,
                 HyperlinkUri = CurrentHyperlinkUri,
@@ -340,6 +344,25 @@ public sealed class TextBuffer
         }
     }
 
+    public int[] GetTabStops() =>
+        _tabStops
+            .Select((isSet, index) => (isSet, index))
+            .Where(static item => item.isSet)
+            .Select(static item => item.index)
+            .ToArray();
+
+    public void ReplaceTabStops(ReadOnlySpan<int> columns)
+    {
+        Array.Clear(_tabStops);
+        foreach (var column in columns)
+        {
+            if ((uint)column < (uint)_tabStops.Length)
+            {
+                _tabStops[column] = true;
+            }
+        }
+    }
+
     public void SetCursor(int row, int col, bool relativeToOrigin = true)
     {
         WrapPending = false;
@@ -394,6 +417,24 @@ public sealed class TextBuffer
         }
     }
 
+    public void SelectiveEraseInDisplay(int mode)
+    {
+        switch (mode)
+        {
+            case 1:
+                EraseLineRange(0, CursorY - 1, selective: true);
+                SelectiveEraseInLine(1);
+                break;
+            case 2:
+                EraseLineRange(0, Rows - 1, selective: true);
+                break;
+            default:
+                SelectiveEraseInLine(0);
+                EraseLineRange(CursorY + 1, Rows - 1, selective: true);
+                break;
+        }
+    }
+
     public void EraseInLine(int mode)
     {
         var row = GetLiveLine(CursorY).Cells;
@@ -410,6 +451,194 @@ public sealed class TextBuffer
                 break;
         }
     }
+
+    public void SelectiveEraseInLine(int mode)
+    {
+        var row = GetLiveLine(CursorY).Cells;
+        switch (mode)
+        {
+            case 1:
+                EraseCells(row, 0, CursorX + 1, selective: true);
+                break;
+            case 2:
+                EraseCells(row, 0, Columns, selective: true);
+                break;
+            default:
+                EraseCells(row, CursorX, Columns, selective: true);
+                break;
+        }
+    }
+
+    public void FillRectangle(Rune rune, int top, int left, int bottom, int right)
+    {
+        if (!TryNormalizeRectangle(ref top, ref left, ref bottom, ref right))
+        {
+            return;
+        }
+
+        for (var y = top; y <= bottom; y++)
+        {
+            var row = GetLiveLine(y).Cells;
+            ClearGlyphAt(row, left);
+            ClearGlyphAt(row, right);
+            for (var x = left; x <= right; x++)
+            {
+                row[x] = new Cell
+                {
+                    Rune = rune,
+                    Attributes = CurrentAttributes,
+                    IsProtected = CurrentProtection,
+                    StoredWidth = 1,
+                };
+            }
+        }
+    }
+
+    public void EraseRectangle(int top, int left, int bottom, int right, bool selective)
+    {
+        if (!TryNormalizeRectangle(ref top, ref left, ref bottom, ref right))
+        {
+            return;
+        }
+
+        for (var y = top; y <= bottom; y++)
+        {
+            EraseCells(GetLiveLine(y).Cells, left, right + 1, selective);
+        }
+    }
+
+    public void CopyRectangle(
+        int top,
+        int left,
+        int bottom,
+        int right,
+        int destinationTop,
+        int destinationLeft)
+    {
+        if (!TryNormalizeRectangle(ref top, ref left, ref bottom, ref right) ||
+            destinationTop >= Rows ||
+            destinationLeft >= Columns)
+        {
+            return;
+        }
+
+        destinationTop = Math.Max(0, destinationTop);
+        destinationLeft = Math.Max(0, destinationLeft);
+        var height = Math.Min(bottom - top + 1, Rows - destinationTop);
+        var width = Math.Min(right - left + 1, Columns - destinationLeft);
+        var copy = new Cell[height, width];
+        for (var y = 0; y < height; y++)
+        {
+            var source = GetLiveLine(top + y).Cells;
+            for (var x = 0; x < width; x++)
+            {
+                copy[y, x] = source[left + x];
+            }
+
+            if (copy[y, 0].IsWideContinuation)
+            {
+                copy[y, 0] = BlankPreservingAttributes(copy[y, 0]);
+            }
+
+            if (copy[y, width - 1].DisplayWidth == 2)
+            {
+                copy[y, width - 1] = BlankPreservingAttributes(copy[y, width - 1]);
+            }
+        }
+
+        for (var y = 0; y < height; y++)
+        {
+            var destination = GetLiveLine(destinationTop + y).Cells;
+            ClearGlyphAt(destination, destinationLeft);
+            ClearGlyphAt(destination, destinationLeft + width - 1);
+            for (var x = 0; x < width; x++)
+            {
+                destination[destinationLeft + x] = copy[y, x];
+            }
+
+            RepairWideCells(destination);
+        }
+    }
+
+    public void ChangeAttributesRectangle(
+        int top,
+        int left,
+        int bottom,
+        int right,
+        ReadOnlySpan<int> attributes,
+        bool reverse,
+        bool rectangular)
+    {
+        if (!TryNormalizeRectangle(ref top, ref left, ref bottom, ref right))
+        {
+            return;
+        }
+
+        if (!rectangular && top != bottom)
+        {
+            if (right <= left)
+            {
+                return;
+            }
+
+            ChangeAttributesArea(top, left, top, Columns - 1, attributes, reverse);
+            if (bottom - top > 1)
+            {
+                ChangeAttributesArea(top + 1, 0, bottom - 1, Columns - 1, attributes, reverse);
+            }
+
+            ChangeAttributesArea(bottom, 0, bottom, right, attributes, reverse);
+            return;
+        }
+
+        ChangeAttributesArea(top, left, bottom, right, attributes, reverse);
+    }
+
+    public ushort ChecksumRectangle(int top, int left, int bottom, int right)
+    {
+        if (!TryNormalizeRectangle(ref top, ref left, ref bottom, ref right))
+        {
+            return 0;
+        }
+
+        ushort checksum = 0;
+        for (var y = top; y <= bottom; y++)
+        {
+            var row = GetLiveLine(y).Cells;
+            for (var x = left; x <= right; x++)
+            {
+                ref readonly var cell = ref row[x];
+                if (!cell.IsWideContinuation)
+                {
+                    checksum = SubtractChecksum(checksum, cell.Rune.Value == 0x2426 ? 0x1B : cell.Rune.Value);
+                    if (cell.CombiningCharacters is { } combining)
+                    {
+                        foreach (var rune in combining.EnumerateRunes())
+                        {
+                            checksum = SubtractChecksum(checksum, rune.Value == 0x2426 ? 0x1B : rune.Value);
+                        }
+                    }
+                }
+
+                checksum = SubtractChecksum(checksum, cell.IsProtected ? 0x04 : 0);
+                checksum = SubtractChecksum(checksum, (cell.Attributes.Flags & CellFlags.Invisible) != 0 ? 0x08 : 0);
+                checksum = SubtractChecksum(checksum, (cell.Attributes.Flags & CellFlags.Underline) != 0 ? 0x10 : 0);
+                checksum = SubtractChecksum(checksum, (cell.Attributes.Flags & CellFlags.Inverse) != 0 ? 0x20 : 0);
+                checksum = SubtractChecksum(checksum, (cell.Attributes.Flags & CellFlags.Blink) != 0 ? 0x40 : 0);
+                checksum = SubtractChecksum(checksum, (cell.Attributes.Flags & CellFlags.Bold) != 0 ? 0x80 : 0);
+                checksum = SubtractChecksum(checksum, LegacyColorIndex(cell.Attributes.Foreground, 7) << 4);
+                checksum = SubtractChecksum(checksum, LegacyColorIndex(cell.Attributes.Background, 0));
+            }
+        }
+
+        return checksum;
+    }
+
+    private static ushort SubtractChecksum(ushort checksum, int value) =>
+        unchecked((ushort)(checksum - value));
+
+    private static int LegacyColorIndex(TermColor color, int defaultIndex) =>
+        color.Kind == ColorKind.Indexed && color.Index < 16 ? color.Index : defaultIndex;
 
     public void InsertLines(int count)
     {
@@ -530,6 +759,7 @@ public sealed class TextBuffer
         SavedCursorX = CursorX;
         SavedCursorY = CursorY;
         SavedAttributes = CurrentAttributes;
+        SavedProtection = CurrentProtection;
     }
 
     public void RestoreCursor()
@@ -537,12 +767,16 @@ public sealed class TextBuffer
         CursorX = Math.Clamp(SavedCursorX, 0, Columns - 1);
         CursorY = Math.Clamp(SavedCursorY, 0, Rows - 1);
         CurrentAttributes = SavedAttributes;
+        CurrentProtection = SavedProtection;
         WrapPending = false;
     }
 
     public void Reset(bool keepHistory)
     {
         CurrentAttributes = CellAttributes.Default;
+        CurrentProtection = false;
+        SavedAttributes = CellAttributes.Default;
+        SavedProtection = false;
         CurrentHyperlinkUri = null;
         _shellIntegration = ShellIntegrationKind.None;
         _activeMark = null;
@@ -705,19 +939,40 @@ public sealed class TextBuffer
         StoredWidth = 1,
     };
 
-    private void EraseLineRange(int fromY, int toY)
+    private static Cell BlankPreservingAttributes(Cell cell)
+    {
+        cell.Rune = new Rune(' ');
+        cell.IsWideContinuation = false;
+        cell.StoredWidth = 1;
+        cell.CombiningCharacters = null;
+        cell.HyperlinkUri = null;
+        cell.ShellIntegration = ShellIntegrationKind.None;
+        return cell;
+    }
+
+    private void EraseLineRange(int fromY, int toY, bool selective = false)
     {
         for (var y = Math.Max(0, fromY); y <= Math.Min(toY, Rows - 1); y++)
         {
-            EraseCells(GetLiveLine(y).Cells, 0, Columns);
+            EraseCells(GetLiveLine(y).Cells, 0, Columns, selective);
             GetLiveLine(y).Wrapped = false;
         }
     }
 
-    private void EraseCells(Cell[] row, int from, int to)
+    private void EraseCells(Cell[] row, int from, int to, bool selective = false)
     {
         from = Math.Clamp(from, 0, row.Length);
         to = Math.Clamp(to, 0, row.Length);
+        if (selective)
+        {
+            for (var x = from; x < to; x++)
+            {
+                SelectivelyEraseGlyphAt(row, x);
+            }
+
+            return;
+        }
+
         if (from < to)
         {
             ClearGlyphAt(row, from);
@@ -729,6 +984,234 @@ public sealed class TextBuffer
             row[x] = BlankWith(CurrentAttributes);
         }
     }
+
+    private static void SelectivelyEraseGlyphAt(Cell[] row, int x)
+    {
+        var first = row[x].IsWideContinuation ? x - 1 : x;
+        var last = row[x].DisplayWidth == 2 ? x + 1 : x;
+        if (first < 0 || last >= row.Length)
+        {
+            first = last = x;
+        }
+
+        if (row[first].IsProtected || row[last].IsProtected)
+        {
+            return;
+        }
+
+        for (var column = first; column <= last; column++)
+        {
+            var cell = row[column];
+            cell.Rune = new Rune(' ');
+            cell.IsProtected = false;
+            cell.IsWideContinuation = false;
+            cell.StoredWidth = 1;
+            cell.CombiningCharacters = null;
+            cell.HyperlinkUri = null;
+            cell.ShellIntegration = ShellIntegrationKind.None;
+            row[column] = cell;
+        }
+    }
+
+    private bool TryNormalizeRectangle(ref int top, ref int left, ref int bottom, ref int right)
+    {
+        if (bottom < top || right < left || bottom < 0 || right < 0 || top >= Rows || left >= Columns)
+        {
+            return false;
+        }
+
+        top = Math.Clamp(top, 0, Rows - 1);
+        left = Math.Clamp(left, 0, Columns - 1);
+        bottom = Math.Clamp(bottom, 0, Rows - 1);
+        right = Math.Clamp(right, 0, Columns - 1);
+        return true;
+    }
+
+    private void ChangeAttributesArea(
+        int top,
+        int left,
+        int bottom,
+        int right,
+        ReadOnlySpan<int> attributes,
+        bool reverse)
+    {
+        for (var y = top; y <= bottom; y++)
+        {
+            var row = GetLiveLine(y).Cells;
+            for (var x = left; x <= right; x++)
+            {
+                ApplyRectangularAttributes(ref row[x].Attributes, attributes, reverse);
+            }
+        }
+    }
+
+    private static void ApplyRectangularAttributes(
+        ref CellAttributes attributes,
+        ReadOnlySpan<int> parameters,
+        bool reverse)
+    {
+        if (reverse)
+        {
+            var mask = CellFlags.None;
+            for (var index = 0; index < parameters.Length;)
+            {
+                var parameter = Parameter(parameters, index);
+                if (parameter == 0)
+                {
+                    mask ^= CellFlags.Bold | CellFlags.Faint | CellFlags.Italic |
+                        CellFlags.Underline | CellFlags.Blink | CellFlags.Inverse |
+                        CellFlags.Invisible | CellFlags.Strikethrough;
+                    index++;
+                    continue;
+                }
+
+                var sample = CellAttributes.Default;
+                index += ApplyRectangularSgr(ref sample, parameters, index);
+                mask ^= sample.Flags;
+            }
+
+            attributes.Flags ^= mask;
+            return;
+        }
+
+        for (var index = 0; index < parameters.Length;)
+        {
+            index += ApplyRectangularSgr(ref attributes, parameters, index);
+        }
+    }
+
+    private static int ApplyRectangularSgr(
+        ref CellAttributes attributes,
+        ReadOnlySpan<int> parameters,
+        int index)
+    {
+        var value = Parameter(parameters, index);
+        switch (value)
+        {
+            case 0:
+                attributes = CellAttributes.Default;
+                break;
+            case 1:
+                attributes.Flags = (attributes.Flags | CellFlags.Bold) & ~CellFlags.Faint;
+                break;
+            case 2:
+                attributes.Flags |= CellFlags.Faint;
+                break;
+            case 3:
+                attributes.Flags |= CellFlags.Italic;
+                break;
+            case 4:
+            case 21:
+                attributes.Flags |= CellFlags.Underline;
+                break;
+            case 5:
+            case 6:
+                attributes.Flags |= CellFlags.Blink;
+                break;
+            case 7:
+                attributes.Flags |= CellFlags.Inverse;
+                break;
+            case 8:
+                attributes.Flags |= CellFlags.Invisible;
+                break;
+            case 9:
+                attributes.Flags |= CellFlags.Strikethrough;
+                break;
+            case 22:
+                attributes.Flags &= ~(CellFlags.Bold | CellFlags.Faint);
+                break;
+            case 23:
+                attributes.Flags &= ~CellFlags.Italic;
+                break;
+            case 24:
+                attributes.Flags &= ~CellFlags.Underline;
+                break;
+            case 25:
+                attributes.Flags &= ~CellFlags.Blink;
+                break;
+            case 27:
+                attributes.Flags &= ~CellFlags.Inverse;
+                break;
+            case 28:
+                attributes.Flags &= ~CellFlags.Invisible;
+                break;
+            case 29:
+                attributes.Flags &= ~CellFlags.Strikethrough;
+                break;
+            case 38:
+            case 48:
+                return ApplyRectangularExtendedColor(ref attributes, parameters, index, value == 38);
+            case 39:
+                attributes.Foreground = TermColor.Default;
+                break;
+            case 49:
+                attributes.Background = TermColor.Default;
+                break;
+            case >= 30 and <= 37:
+                attributes.Foreground = TermColor.FromIndex(value - 30);
+                break;
+            case >= 40 and <= 47:
+                attributes.Background = TermColor.FromIndex(value - 40);
+                break;
+            case >= 90 and <= 97:
+                attributes.Foreground = TermColor.FromIndex(value - 90 + 8);
+                break;
+            case >= 100 and <= 107:
+                attributes.Background = TermColor.FromIndex(value - 100 + 8);
+                break;
+        }
+
+        return 1;
+    }
+
+    private static int ApplyRectangularExtendedColor(
+        ref CellAttributes attributes,
+        ReadOnlySpan<int> parameters,
+        int index,
+        bool foreground)
+    {
+        var mode = Parameter(parameters, index + 1);
+        if (mode == 5 && index + 2 < parameters.Length)
+        {
+            SetRectangularColor(
+                ref attributes,
+                TermColor.FromIndex(Parameter(parameters, index + 2)),
+                foreground);
+            return 3;
+        }
+
+        if (mode == 2 && index + 4 < parameters.Length)
+        {
+            SetRectangularColor(
+                ref attributes,
+                TermColor.FromRgb(
+                    (byte)Math.Clamp(Parameter(parameters, index + 2), 0, 255),
+                    (byte)Math.Clamp(Parameter(parameters, index + 3), 0, 255),
+                    (byte)Math.Clamp(Parameter(parameters, index + 4), 0, 255)),
+                foreground);
+            return 5;
+        }
+
+        return 1;
+    }
+
+    private static void SetRectangularColor(
+        ref CellAttributes attributes,
+        TermColor color,
+        bool foreground)
+    {
+        if (foreground)
+        {
+            attributes.Foreground = color;
+        }
+        else
+        {
+            attributes.Background = color;
+        }
+    }
+
+    private static int Parameter(ReadOnlySpan<int> parameters, int index) =>
+        (uint)index < (uint)parameters.Length && parameters[index] >= 0 ? parameters[index] : 0;
 
     private void AppendCombining(Rune rune)
     {
@@ -904,6 +1387,7 @@ public sealed class TextBuffer
                     {
                         Rune = new Rune(' '),
                         Attributes = row[x].Attributes,
+                        IsProtected = row[x].IsProtected,
                         IsWideContinuation = true,
                         StoredWidth = 0,
                         HyperlinkUri = row[x].HyperlinkUri,
@@ -1031,6 +1515,7 @@ public sealed class TextBuffer
                 {
                     Rune = new Rune(' '),
                     Attributes = cell.Attributes,
+                    IsProtected = cell.IsProtected,
                     IsWideContinuation = true,
                     StoredWidth = 0,
                     HyperlinkUri = cell.HyperlinkUri,
