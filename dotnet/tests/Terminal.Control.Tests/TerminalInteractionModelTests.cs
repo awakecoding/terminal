@@ -122,9 +122,11 @@ public sealed class TerminalInteractionModelTests
         Assert.StartsWith(@"{\rtf1", payload.Rtf);
         Assert.Contains(@"\u30028?", payload.Rtf);
 
-        var data = TermControl.CreateClipboardDataObject(payload);
-        Assert.IsType<byte[]>(data.Get("HTML Format"));
-        Assert.IsType<byte[]>(data.Get("Rich Text Format"));
+        var data = TermControl.CreateClipboardDataTransfer(payload);
+        Assert.IsType<byte[]>(
+            data.TryGetValue(DataFormat.CreateBytesPlatformFormat("HTML Format")));
+        Assert.IsType<byte[]>(
+            data.TryGetValue(DataFormat.CreateBytesPlatformFormat("Rich Text Format")));
     }
 
     [Fact]

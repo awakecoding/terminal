@@ -28,25 +28,22 @@ licensed; substantial copied code would require its notice.
 ## Adopted here
 
 `WindowsTerminal.Settings/SettingsTheme.axaml` implements a focused,
-independently maintained subset of the same visual grammar on Avalonia 11.3:
+independently maintained subset of the same visual grammar on Avalonia 12:
 
 - theme-aware WinUI-like page, card, footer, navigation, control, and secondary
   text resources;
-- Mica-first settings window with an opaque fallback;
-- rounded settings cards and diagnostics surface;
+- opaque neutral settings surfaces matching Windows Terminal's dark palette;
+- compact settings cards and a collapsible diagnostics surface;
 - subtle navigation hover/selection with an accent pill;
-- constrained right-side form controls and an accent Apply action;
-- card-like standalone boolean settings.
+- native-sized right-side controls, labeled switches, and an accent Save action;
+- grouped profile navigation and a compact Open JSON/Save/Discard footer.
 
-The existing settings view models, compiled bindings, data-loss guards, and
-atomic persistence remain unchanged.
+Compiled bindings, data-loss guards, and atomic persistence remain intact.
 
-## Avalonia 12 migration boundary
+## Avalonia 12 migration
 
-Moving the terminal to Avalonia 12 should be a separate compatibility change.
-It requires upgrading all Avalonia packages together and addressing removed
-Diagnostics APIs, `Watermark` to `PlaceholderText`, window-decoration changes,
-and the new asynchronous clipboard data-transfer APIs. The migration must keep
-reflection-free compiled bindings and pass both win-x64 and win-arm64 NativeAOT
-publishes. The WinUI resource/card layer is deliberately compatible with the
-current Avalonia version so visual progress does not depend on that migration.
+The terminal now uses Avalonia 12.1.1 across the application, renderer, Fluent
+theme, and headless tests. Developer Tools use
+`AvaloniaUI.DiagnosticsSupport`; text input placeholders, window decoration,
+and clipboard integration use the Avalonia 12 APIs. The migration preserves
+reflection-free compiled bindings and the WinUI resource/card layer.

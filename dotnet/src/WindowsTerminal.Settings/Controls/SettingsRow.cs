@@ -31,8 +31,9 @@ public sealed class SettingsRow : UserControl
         };
         _value = new ContentControl
         {
-            MinWidth = 200,
-            MaxWidth = 460,
+            Width = 248,
+            MinWidth = 248,
+            MaxWidth = 248,
             Margin = new Thickness(24, 0, 0, 0),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
@@ -46,15 +47,15 @@ public sealed class SettingsRow : UserControl
         var layout = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            MinHeight = 60,
-            Margin = new Thickness(16, 8),
+            MinHeight = 44,
+            Margin = new Thickness(16, 6),
         };
         layout.Children.Add(labels);
         Grid.SetColumn(_value, 1);
         layout.Children.Add(_value);
         var border = new Border
         {
-            CornerRadius = new CornerRadius(8),
+            CornerRadius = new CornerRadius(4),
             BorderThickness = new Thickness(1),
             Child = layout,
         };

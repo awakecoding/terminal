@@ -10,22 +10,72 @@ public abstract class SettingsPageViewModel(string title, string description) : 
     public string Description { get; } = description;
 }
 
+public sealed record StartupProfileOption(string Value, string Name)
+{
+    public override string ToString() => Name;
+}
+
 public sealed class StartupSettingsViewModel(AppSettings settings, Action changed)
-    : SettingsPageViewModel("Startup and launch", "Choose the default profile and initial window behavior.")
+    : SettingsPageViewModel("Startup", "Choose the default profile and initial window behavior.")
 {
     public IReadOnlyList<LaunchMode> LaunchModes { get; } = Enum.GetValues<LaunchMode>();
+    public IReadOnlyList<StartupProfileOption> Profiles { get; } = settings.Profiles
+        .Where(static profile => !profile.Hidden)
+        .Select(static profile => new StartupProfileOption(profile.Guid ?? profile.Name, profile.Name))
+        .ToArray();
 
     public string? DefaultProfile { get => settings.DefaultProfile; set => Change(settings.DefaultProfile, value, v => settings.DefaultProfile = v); }
+    public StartupProfileOption? SelectedProfile
+    {
+        get => Profiles.FirstOrDefault(profile =>
+            string.Equals(profile.Value, settings.DefaultProfile, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(profile.Name, settings.DefaultProfile, StringComparison.OrdinalIgnoreCase)) ??
+            Profiles.FirstOrDefault();
+        set
+        {
+            if (value is not null)
+            {
+                DefaultProfile = value.Value;
+            }
+        }
+    }
     public int InitialColumns { get => settings.InitialCols; set => Change(settings.InitialCols, Math.Max(1, value), v => settings.InitialCols = v); }
     public int InitialRows { get => settings.InitialRows; set => Change(settings.InitialRows, Math.Max(1, value), v => settings.InitialRows = v); }
     public string? InitialPosition { get => settings.InitialPosition; set => Change(settings.InitialPosition, value, v => settings.InitialPosition = v); }
-    public bool CenterOnLaunch { get => settings.CenterOnLaunch; set => Change(settings.CenterOnLaunch, value, v => settings.CenterOnLaunch = v); }
+    public bool CenterOnLaunch
+    {
+        get => settings.CenterOnLaunch;
+        set
+        {
+            Change(settings.CenterOnLaunch, value, v => settings.CenterOnLaunch = v);
+            OnPropertyChanged(nameof(CenterOnLaunchState));
+        }
+    }
+    public string CenterOnLaunchState => CenterOnLaunch ? "On" : "Off";
     public LaunchMode LaunchMode { get => settings.LaunchMode; set => Change(settings.LaunchMode, value, v => settings.LaunchMode = v); }
     public string FirstWindowPreference { get => settings.FirstWindowPreference; set => Change(settings.FirstWindowPreference, value, v => settings.FirstWindowPreference = v); }
     public string WindowingBehavior { get => settings.WindowingBehavior; set => Change(settings.WindowingBehavior, value, v => settings.WindowingBehavior = v); }
     public string StartupActions { get => settings.StartupActions; set => Change(settings.StartupActions, value, v => settings.StartupActions = v); }
-    public bool AlwaysOnTop { get => settings.AlwaysOnTop; set => Change(settings.AlwaysOnTop, value, v => settings.AlwaysOnTop = v); }
-    public bool AutoHideWindow { get => settings.AutoHideWindow; set => Change(settings.AutoHideWindow, value, v => settings.AutoHideWindow = v); }
+    public bool AlwaysOnTop
+    {
+        get => settings.AlwaysOnTop;
+        set
+        {
+            Change(settings.AlwaysOnTop, value, v => settings.AlwaysOnTop = v);
+            OnPropertyChanged(nameof(AlwaysOnTopState));
+        }
+    }
+    public string AlwaysOnTopState => AlwaysOnTop ? "On" : "Off";
+    public bool AutoHideWindow
+    {
+        get => settings.AutoHideWindow;
+        set
+        {
+            Change(settings.AutoHideWindow, value, v => settings.AutoHideWindow = v);
+            OnPropertyChanged(nameof(AutoHideWindowState));
+        }
+    }
+    public string AutoHideWindowState => AutoHideWindow ? "On" : "Off";
 
     private void Change<T>(T oldValue, T newValue, Action<T> update)
     {

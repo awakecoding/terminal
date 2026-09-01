@@ -10,7 +10,6 @@
         Background="#0C0C0C"
         TransparencyLevelHint="Mica,AcrylicBlur,None"
         ExtendClientAreaToDecorationsHint="True"
-        ExtendClientAreaChromeHints="PreferSystemChrome"
         ExtendClientAreaTitleBarHeightHint="40"
         SizeChanged="MainWindow_OnSizeChanged">
   <DockPanel>
@@ -77,7 +76,7 @@
         <StackPanel Orientation="Horizontal" Spacing="6">
           <TextBox x:Name="FindBox"
                    Width="260"
-                   Watermark="Find"
+                   PlaceholderText="Find"
                    KeyDown="FindBox_OnKeyDown" />
           <Button Content="Previous" Click="FindPrevious_OnClick" />
           <Button Content="Next" Click="FindNext_OnClick" />
@@ -96,7 +95,7 @@
               Background="#F02B2B2B">
         <Grid RowDefinitions="Auto,*" RowSpacing="8">
           <TextBox x:Name="CommandPaletteQuery"
-                   Watermark="Search actions"
+                   PlaceholderText="Search actions"
                    TextChanged="CommandPaletteQuery_OnTextChanged"
                    KeyDown="CommandPaletteQuery_OnKeyDown" />
           <ListBox x:Name="CommandPaletteList"

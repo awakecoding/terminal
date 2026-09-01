@@ -7,6 +7,8 @@
     <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
     <PublishAot>true</PublishAot>
     <PublishTrimmed>true</PublishTrimmed>
+    <PublishAot Condition="'$(Configuration)' == 'Debug'">false</PublishAot>
+    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">false</PublishTrimmed>
     <InvariantGlobalization>false</InvariantGlobalization>
     <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
     <DebugType>embedded</DebugType>
@@ -19,7 +21,7 @@
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
-    <PackageReference Include="Avalonia.Diagnostics" Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" />
   </ItemGroup>
 
   <Target Name="PublishWtCli" AfterTargets="Publish">

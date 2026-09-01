@@ -1,4 +1,6 @@
 using Microsoft.Terminal.Settings;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Security.Cryptography;
 
 namespace WindowsTerminal.Settings;
@@ -10,6 +12,8 @@ public sealed class SettingsNavigationItem
     public required SettingsPage Page { get; init; }
     public required string Icon { get; init; }
     public required string Title { get; init; }
+    public string GroupHeader { get; init; } = string.Empty;
+    public bool HasGroupHeader => !string.IsNullOrEmpty(GroupHeader);
     public required string Keywords { get; init; }
     public required object ViewModel { get; init; }
 
@@ -29,6 +33,7 @@ public sealed class SettingsEditorViewModel : ObservableObject
     private IReadOnlyList<ProfileItemViewModel> _profiles = [];
     private SettingsNavigationItem? _selectedNavigationItem;
     private string _searchText = string.Empty;
+    private bool _isSearchOpen;
     private bool _isDirty;
     private string _statusMessage = "Settings loaded.";
     private IReadOnlyList<SettingsDiagnosticViewModel> _diagnostics = [];
@@ -59,6 +64,7 @@ public sealed class SettingsEditorViewModel : ObservableObject
         ApplyCommand = new(Apply, () => IsDirty);
         RevertCommand = new(Revert, () => IsDirty);
         ResetCommand = new(ResetToDefaults);
+        OpenJsonCommand = new(OpenJsonFile);
         BuildPages(SettingsPage.Startup);
     }
 
@@ -70,6 +76,18 @@ public sealed class SettingsEditorViewModel : ObservableObject
             if (SetProperty(ref _searchText, value))
             {
                 FilterNavigation();
+            }
+        }
+    }
+
+    public bool IsSearchOpen
+    {
+        get => _isSearchOpen;
+        set
+        {
+            if (SetProperty(ref _isSearchOpen, value) && !value)
+            {
+                SearchText = string.Empty;
             }
         }
     }
@@ -111,6 +129,7 @@ public sealed class SettingsEditorViewModel : ObservableObject
     public RelayCommand ApplyCommand { get; }
     public RelayCommand RevertCommand { get; }
     public RelayCommand ResetCommand { get; }
+    public RelayCommand OpenJsonCommand { get; }
 
     public void SelectPage(SettingsPage page)
     {
@@ -170,6 +189,29 @@ public sealed class SettingsEditorViewModel : ObservableObject
         StatusMessage = "Factory defaults loaded. Apply to save them.";
     }
 
+    private void OpenJsonFile()
+    {
+        try
+        {
+            if (!File.Exists(SettingsPath))
+            {
+                _save(_load());
+                _loadedRevision = _getRevision();
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = SettingsPath,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or InvalidOperationException or Win32Exception)
+        {
+            StatusMessage = $"Could not open settings.json: {ex.Message}";
+        }
+    }
+
     private bool TryCommitEditors(out string? error)
     {
         if (!_actions!.TryCommit(out error) || !_newTabMenu!.TryCommit(out error))
@@ -201,16 +243,16 @@ public sealed class SettingsEditorViewModel : ObservableObject
             Item(SettingsPage.Startup, "Startup", "launch default profile window position startup actions", new StartupSettingsViewModel(_settings, MarkDirty)),
             Item(SettingsPage.Interaction, "Interaction", "copy paste selection mouse urls focus", new InteractionSettingsViewModel(_settings, MarkDirty)),
             Item(SettingsPage.Appearance, "Appearance", "global themes tabs acrylic mica visual", new AppearanceSettingsViewModel(_settings, MarkDirty)),
-            Item(SettingsPage.Profiles, "Profiles: base", "profile commandline directory icon tab title hidden", new ProfilesSettingsViewModel(_profiles)),
-            Item(SettingsPage.ProfileAppearance, "Profiles: appearance", "profile font colors opacity background image", new ProfileAppearanceSettingsViewModel(_profiles)),
-            Item(SettingsPage.ProfileTerminal, "Profiles: terminal", "profile scrollback cursor close antialiasing", new ProfileTerminalSettingsViewModel(_profiles)),
-            Item(SettingsPage.ProfileAdvanced, "Profiles: advanced", "profile vt environment kitty osc compatibility", new ProfileAdvancedSettingsViewModel(_profiles)),
             Item(SettingsPage.ColorSchemes, "Color schemes", "palette ansi foreground background cursor selection", new ColorSchemesSettingsViewModel(_settings, MarkDirty)),
-            Item(SettingsPage.Actions, "Actions", "keybindings key chord command json", _actions),
-            Item(SettingsPage.NewTabMenu, "New tab menu", "menu folder separator profile action json", _newTabMenu),
             Item(SettingsPage.Rendering, "Rendering", "graphics api software invalidation", new RenderingSettingsViewModel(_settings, MarkDirty)),
             Item(SettingsPage.Compatibility, "Compatibility", "text measurement width input headless acrylic", new CompatibilitySettingsViewModel(_settings, MarkDirty)),
+            Item(SettingsPage.Actions, "Actions", "keybindings key chord command json", _actions),
+            Item(SettingsPage.NewTabMenu, "New tab menu", "menu folder separator profile action json", _newTabMenu),
             Item(SettingsPage.Extensions, "Extensions", "sources fragments experimental language notification", new ExtensionsSettingsViewModel(_settings, MarkDirty)),
+            Item(SettingsPage.Profiles, "Defaults", "profile commandline directory icon tab title hidden", new ProfilesSettingsViewModel(_profiles), "Profiles"),
+            Item(SettingsPage.ProfileAppearance, "Profile appearance", "profile font colors opacity background image", new ProfileAppearanceSettingsViewModel(_profiles)),
+            Item(SettingsPage.ProfileTerminal, "Profile terminal", "profile scrollback cursor close antialiasing", new ProfileTerminalSettingsViewModel(_profiles)),
+            Item(SettingsPage.ProfileAdvanced, "Profile advanced", "profile vt environment kitty osc compatibility", new ProfileAdvancedSettingsViewModel(_profiles)),
         ];
         Diagnostics = _settings.Diagnostics
             .Select(diagnostic => new SettingsDiagnosticViewModel(
@@ -230,7 +272,8 @@ public sealed class SettingsEditorViewModel : ObservableObject
         SettingsPage page,
         string title,
         string keywords,
-        object viewModel) =>
+        object viewModel,
+        string groupHeader = "") =>
         new()
         {
             Page = page,
@@ -252,6 +295,7 @@ public sealed class SettingsEditorViewModel : ObservableObject
                 _ => "\uE946",
             },
             Title = title,
+            GroupHeader = groupHeader,
             Keywords = keywords,
             ViewModel = viewModel,
         };

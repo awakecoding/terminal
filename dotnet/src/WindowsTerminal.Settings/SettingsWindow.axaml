@@ -5,17 +5,18 @@
         x:Class="WindowsTerminal.Settings.SettingsWindow"
         x:DataType="vm:SettingsEditorViewModel"
         x:CompileBindings="True"
-        Title="Windows Terminal Settings"
-        Width="1120"
-        Height="760"
-        MinWidth="820"
-        MinHeight="560"
+        Title="Settings"
+        Width="1400"
+        Height="800"
+        MinWidth="960"
+        MinHeight="600"
+        FontFamily="Segoe UI Variable Text, Segoe UI"
         Classes="settings-window"
-        TransparencyLevelHint="Mica,AcrylicBlur,None">
+        TransparencyLevelHint="None">
   <Window.Styles>
     <StyleInclude Source="avares://WindowsTerminal.Settings/SettingsTheme.axaml" />
     <Style Selector="TextBlock.pageTitle">
-      <Setter Property="FontSize" Value="26" />
+      <Setter Property="FontSize" Value="20" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Margin" Value="0,0,0,4" />
     </Style>
@@ -48,6 +49,14 @@
       <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
       <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
     </Style>
+    <Style Selector="ToggleButton.navigationMenu">
+      <Setter Property="Width" Value="40" />
+      <Setter Property="Height" Value="40" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="HorizontalAlignment" Value="Left" />
+    </Style>
   </Window.Styles>
 
   <Window.DataTemplates>
@@ -56,72 +65,103 @@
         <TextBlock Classes="pageTitle" Text="{Binding Title}" />
         <TextBlock Classes="pageDescription" Text="{Binding Description}" />
         <controls:SettingsRow Header="Default profile"
-                              Description="The profile opened when Windows Terminal starts.">
+                              Description="Profile that opens when clicking the '+' icon or using the new tab key binding.">
           <controls:SettingsRow.Value>
-            <TextBox Classes="field" Text="{Binding DefaultProfile}" />
-          </controls:SettingsRow.Value>
-        </controls:SettingsRow>
-        <TextBlock Classes="sectionTitle" Text="Launch parameters" />
-        <controls:SettingsRow Header="Initial columns"
-                              Description="The width of a newly created terminal window.">
-          <controls:SettingsRow.Value>
-            <TextBox Classes="field" Text="{Binding InitialColumns}" />
-          </controls:SettingsRow.Value>
-        </controls:SettingsRow>
-        <controls:SettingsRow Header="Initial rows"
-                              Description="The height of a newly created terminal window.">
-          <controls:SettingsRow.Value>
-            <TextBox Classes="field" Text="{Binding InitialRows}" />
-          </controls:SettingsRow.Value>
-        </controls:SettingsRow>
-        <controls:SettingsRow Header="Initial position"
-                              Description="Optional X,Y desktop coordinates for the first window.">
-          <controls:SettingsRow.Value>
-            <TextBox Classes="field" Text="{Binding InitialPosition}" />
+            <ComboBox Classes="field"
+                      ItemsSource="{Binding Profiles}"
+                      SelectedItem="{Binding SelectedProfile}" />
           </controls:SettingsRow.Value>
         </controls:SettingsRow>
         <controls:SettingsRow Header="Launch mode"
-                              Description="Choose the initial window state.">
+                              Description="Choose how new terminal windows are displayed.">
           <controls:SettingsRow.Value>
             <ComboBox Classes="field" ItemsSource="{Binding LaunchModes}" SelectedItem="{Binding LaunchMode}" />
-          </controls:SettingsRow.Value>
-        </controls:SettingsRow>
-        <controls:SettingsRow Header="First window preference"
-                              Description="Controls how the first terminal window is selected.">
-          <controls:SettingsRow.Value>
-            <TextBox Classes="field" Text="{Binding FirstWindowPreference}" />
-          </controls:SettingsRow.Value>
-        </controls:SettingsRow>
-        <controls:SettingsRow Header="Windowing behavior"
-                              Description="Controls whether commands reuse or create windows.">
-          <controls:SettingsRow.Value>
-            <TextBox Classes="field" Text="{Binding WindowingBehavior}" />
-          </controls:SettingsRow.Value>
-        </controls:SettingsRow>
-        <controls:SettingsRow Header="Startup actions"
-                              Description="Commands executed when the terminal starts.">
-          <controls:SettingsRow.Value>
-            <TextBox Classes="field" Text="{Binding StartupActions}" />
           </controls:SettingsRow.Value>
         </controls:SettingsRow>
         <controls:SettingsRow Header="Center on launch"
                               Description="Center newly created windows on the selected display.">
           <controls:SettingsRow.Value>
-            <ToggleSwitch OnContent="On" OffContent="Off" IsChecked="{Binding CenterOnLaunch}" />
+            <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
+              <TextBlock Text="{Binding CenterOnLaunchState}" VerticalAlignment="Center" />
+              <ToggleSwitch AutomationProperties.Name="Center on launch"
+                            OnContent=""
+                            OffContent=""
+                            IsChecked="{Binding CenterOnLaunch}" />
+            </StackPanel>
           </controls:SettingsRow.Value>
         </controls:SettingsRow>
         <controls:SettingsRow Header="Always on top"
                               Description="Keep terminal windows above other windows.">
           <controls:SettingsRow.Value>
-            <ToggleSwitch OnContent="On" OffContent="Off" IsChecked="{Binding AlwaysOnTop}" />
+            <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
+              <TextBlock Text="{Binding AlwaysOnTopState}" VerticalAlignment="Center" />
+              <ToggleSwitch AutomationProperties.Name="Always on top"
+                            OnContent=""
+                            OffContent=""
+                            IsChecked="{Binding AlwaysOnTop}" />
+            </StackPanel>
           </controls:SettingsRow.Value>
         </controls:SettingsRow>
         <controls:SettingsRow Header="Automatically hide window"
                               Description="Hide the window when it loses focus.">
           <controls:SettingsRow.Value>
-            <ToggleSwitch OnContent="On" OffContent="Off" IsChecked="{Binding AutoHideWindow}" />
+            <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
+              <TextBlock Text="{Binding AutoHideWindowState}" VerticalAlignment="Center" />
+              <ToggleSwitch AutomationProperties.Name="Automatically hide window"
+                            OnContent=""
+                            OffContent=""
+                            IsChecked="{Binding AutoHideWindow}" />
+            </StackPanel>
           </controls:SettingsRow.Value>
         </controls:SettingsRow>
+        <controls:SettingsRow Header="Launch size"
+                              Description="The number of rows and columns displayed in a new window.">
+          <controls:SettingsRow.Value>
+            <Grid ColumnDefinitions="*,Auto,*" ColumnSpacing="8">
+              <TextBox AutomationProperties.Name="Initial columns"
+                       Text="{Binding InitialColumns}"
+                       HorizontalContentAlignment="Right" />
+              <TextBlock Grid.Column="1" Text="×" VerticalAlignment="Center" />
+              <TextBox Grid.Column="2"
+                       AutomationProperties.Name="Initial rows"
+                       Text="{Binding InitialRows}"
+                       HorizontalContentAlignment="Right" />
+            </Grid>
+          </controls:SettingsRow.Value>
+        </controls:SettingsRow>
+        <Border Classes="settings-card">
+          <Expander Classes="settings-expander"
+                    Header="Launch parameters"
+                    Background="Transparent"
+                    HorizontalAlignment="Stretch">
+            <StackPanel Margin="0,8,0,0">
+            <controls:SettingsRow Header="Initial position"
+                                  Description="Optional X,Y desktop coordinates for the first window.">
+              <controls:SettingsRow.Value>
+                <TextBox Classes="field" Text="{Binding InitialPosition}" />
+              </controls:SettingsRow.Value>
+            </controls:SettingsRow>
+            <controls:SettingsRow Header="First window preference"
+                                  Description="Controls how the first terminal window is selected.">
+              <controls:SettingsRow.Value>
+                <TextBox Classes="field" Text="{Binding FirstWindowPreference}" />
+              </controls:SettingsRow.Value>
+            </controls:SettingsRow>
+            <controls:SettingsRow Header="Windowing behavior"
+                                  Description="Controls whether commands reuse or create windows.">
+              <controls:SettingsRow.Value>
+                <TextBox Classes="field" Text="{Binding WindowingBehavior}" />
+              </controls:SettingsRow.Value>
+            </controls:SettingsRow>
+            <controls:SettingsRow Header="Startup actions"
+                                  Description="Commands executed when the terminal starts.">
+              <controls:SettingsRow.Value>
+                <TextBox Classes="field" Text="{Binding StartupActions}" />
+              </controls:SettingsRow.Value>
+            </controls:SettingsRow>
+            </StackPanel>
+          </Expander>
+        </Border>
       </StackPanel>
     </DataTemplate>
 
@@ -530,55 +570,21 @@
 
   <DockPanel>
     <Border DockPanel.Dock="Bottom" Classes="settings-footer" Padding="16,10">
-      <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
-        <StackPanel>
-          <TextBlock Text="{Binding StatusMessage}" />
-          <TextBlock FontSize="11" Opacity="0.65" Text="{Binding SettingsPath}" />
-        </StackPanel>
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="8">
+        <Button Classes="settings-secondary" Content="Open JSON file" Command="{Binding OpenJsonCommand}" />
         <Button Grid.Column="1" Classes="settings-secondary" Content="Reset defaults" Command="{Binding ResetCommand}" />
-        <Button Grid.Column="2" Classes="settings-secondary" Content="Discard changes" Command="{Binding RevertCommand}" />
-        <Button Grid.Column="3" Classes="accent" Content="Save" Command="{Binding ApplyCommand}" />
-      </Grid>
-    </Border>
-
-    <Grid ColumnDefinitions="250,*">
-      <Border Grid.Column="0" Classes="settings-navigation" Padding="12">
-        <DockPanel>
-          <TextBox DockPanel.Dock="Top"
-                   Margin="0,0,0,10"
-                   Watermark="Search settings"
-                   Text="{Binding SearchText}" />
-          <ListBox Classes="settings-navigation-list"
-                   ItemsSource="{Binding VisibleNavigationItems}"
-                   SelectedItem="{Binding SelectedNavigationItem}">
-            <ListBox.ItemTemplate>
-              <DataTemplate x:DataType="vm:SettingsNavigationItem">
-                <Grid ColumnDefinitions="24,*" ColumnSpacing="8">
-                  <TextBlock Text="{Binding Icon}"
-                             FontFamily="Segoe Fluent Icons"
-                             FontSize="16"
-                             HorizontalAlignment="Center"
-                             VerticalAlignment="Center" />
-                  <TextBlock Grid.Column="1"
-                             Text="{Binding Title}"
-                             VerticalAlignment="Center" />
-                </Grid>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
-        </DockPanel>
-      </Border>
-
-      <DockPanel Grid.Column="1">
-        <Border DockPanel.Dock="Top"
-                Classes="settings-diagnostics"
-                Margin="40,12,40,0"
-                HorizontalAlignment="Left">
-          <Expander>
-            <Expander.Header>
-              <TextBlock Text="{Binding Diagnostics.Count, StringFormat='Diagnostics ({0})'}" />
-            </Expander.Header>
-            <ItemsControl ItemsSource="{Binding Diagnostics}" MaxHeight="150">
+        <StackPanel Grid.Column="2"
+                    Margin="12,0"
+                    Orientation="Horizontal"
+                    Spacing="12"
+                    VerticalAlignment="Center">
+          <TextBlock Opacity="0.65"
+                     VerticalAlignment="Center"
+                     Text="{Binding StatusMessage}" />
+          <Expander Classes="settings-expander"
+                    Background="Transparent"
+                    Header="{Binding Diagnostics.Count, StringFormat='Diagnostics ({0})'}">
+            <ItemsControl Width="600" MaxHeight="150" ItemsSource="{Binding Diagnostics}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="vm:SettingsDiagnosticViewModel">
                   <Grid ColumnDefinitions="80,150,*" Margin="0,3">
@@ -590,8 +596,60 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
           </Expander>
-        </Border>
-        <ScrollViewer Padding="40,16" HorizontalScrollBarVisibility="Auto">
+        </StackPanel>
+        <Button Grid.Column="3" Classes="accent" Content="Save" Command="{Binding ApplyCommand}" />
+        <Button Grid.Column="4" Classes="settings-secondary" Content="Discard changes" Command="{Binding RevertCommand}" />
+      </Grid>
+    </Border>
+
+    <Grid ColumnDefinitions="320,*">
+      <Border Grid.Column="0" Classes="settings-navigation" Padding="4,0">
+        <DockPanel>
+          <StackPanel DockPanel.Dock="Top">
+            <ToggleButton Name="NavigationMenuButton"
+                          Classes="navigationMenu"
+                          AutomationProperties.Name="Search settings"
+                          IsChecked="{Binding IsSearchOpen}">
+              <TextBlock Text="&#xE700;"
+                         FontFamily="Segoe Fluent Icons"
+                         FontSize="16" />
+            </ToggleButton>
+            <TextBox Margin="8,0,8,8"
+                     IsVisible="{Binding IsSearchOpen}"
+                     PlaceholderText="Search settings"
+                     Text="{Binding SearchText}" />
+          </StackPanel>
+          <ListBox Classes="settings-navigation-list"
+                   ItemsSource="{Binding VisibleNavigationItems}"
+                   SelectedItem="{Binding SelectedNavigationItem}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:SettingsNavigationItem">
+                <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="32,*" ColumnSpacing="8">
+                  <TextBlock Grid.ColumnSpan="2"
+                             Margin="11,12,0,6"
+                             FontSize="13"
+                             Foreground="{DynamicResource SettingsTextSecondary}"
+                             IsVisible="{Binding HasGroupHeader}"
+                             Text="{Binding GroupHeader}" />
+                  <TextBlock Text="{Binding Icon}"
+                             Grid.Row="1"
+                             FontFamily="Segoe Fluent Icons"
+                             FontSize="16"
+                             HorizontalAlignment="Center"
+                             VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="1"
+                             Grid.Column="1"
+                             Text="{Binding Title}"
+                             VerticalAlignment="Center" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
+
+      <DockPanel Grid.Column="1">
+        <ScrollViewer Padding="88,12,84,24" HorizontalScrollBarVisibility="Auto">
           <ContentControl Content="{Binding CurrentPage}" />
         </ScrollViewer>
       </DockPanel>

@@ -159,9 +159,9 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
         var left = padding + (composition.Column * (float)CellSize.Width);
         var top = padding + (composition.Row * (float)CellSize.Height);
         _paint.Color = SKColors.White;
-        _paint.TextSize = _settings.FontSize;
-        _paint.Typeface = _fonts.Resolve(composition.Text.AsSpan(), CellFlags.None);
-        canvas.DrawText(composition.Text, left, top + _baseline, _paint);
+        var typeface = _fonts.Resolve(composition.Text.AsSpan(), CellFlags.None);
+        using var font = CreateFont(typeface, CellFlags.None, enhancePrimaryContrast: false);
+        canvas.DrawText(composition.Text, left, top + _baseline, SKTextAlign.Left, font, _paint);
 
         _strokePaint.Color = SKColors.White;
         _strokePaint.StrokeWidth = PhysicalPixel;
@@ -772,26 +772,13 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
     {
         var typeface = _fonts.Resolve(key.Text.AsSpan(key.Offset, key.Length), key.Flags);
         LastResolvedFontFamily = typeface.FamilyName;
-        using var shapingPaint = CreateFontPaint(typeface, key.Flags);
+        using var shapingFont = CreateFont(typeface, key.Flags, enhancePrimaryContrast: false);
         using var shaper = new SKShaper(typeface);
         using var buffer = new HarfBuzzBuffer();
         buffer.AddUtf16(key.Text, key.Offset, key.Length);
         buffer.GuessSegmentProperties();
-        var result = shaper.Shape(buffer, shapingPaint);
-        using var font = new SKFont(typeface, key.FontSize)
-        {
-            // DirectWrite's grayscale enhanced contrast produces a slightly heavier
-            // stem than Skia's default antialiasing for the same Cascadia face.
-            Embolden = ShouldEmbolden(typeface, key.Flags) ||
-                       (!typeface.IsBold &&
-                        _settings.FontWeight >= 400 &&
-                        IsPrimaryCascadia(typeface)),
-            Edging = SKFontEdging.Antialias,
-            ForceAutoHinting = true,
-            Hinting = SKFontHinting.Full,
-            SkewX = ShouldSkew(typeface, key.Flags) ? -0.25f : 0,
-            Subpixel = false,
-        };
+        var result = shaper.Shape(buffer, shapingFont);
+        using var font = CreateFont(typeface, key.Flags, enhancePrimaryContrast: true);
         var glyphData = new byte[result.Codepoints.Length * sizeof(ushort)];
         for (var index = 0; index < result.Codepoints.Length; index++)
         {
@@ -804,30 +791,36 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
             glyphData,
             SKTextEncoding.GlyphId,
             font,
-            result.Points);
+            result.Points) ?? throw new InvalidOperationException("Skia could not create a shaped glyph run.");
         return new CachedGlyph(blob, result.Width, typeface.FamilyName);
     }
 
-    private SKPaint CreateFontPaint(SKTypeface typeface, CellFlags flags) =>
-        new()
+    private SKFont CreateFont(
+        SKTypeface typeface,
+        CellFlags flags,
+        bool enhancePrimaryContrast) =>
+        new(typeface, _settings.FontSize)
         {
-            IsAntialias = true,
-            IsAutohinted = true,
-            HintingLevel = SKPaintHinting.Full,
-            LcdRenderText = false,
-            SubpixelText = false,
-            Typeface = typeface,
-            TextSize = _settings.FontSize,
-            FakeBoldText = ShouldEmbolden(typeface, flags),
-            TextSkewX = ShouldSkew(typeface, flags) ? -0.25f : 0,
+            // DirectWrite's grayscale enhanced contrast produces a slightly heavier
+            // stem than Skia's default antialiasing for the same Cascadia face.
+            Embolden = ShouldEmbolden(typeface, flags) ||
+                       (enhancePrimaryContrast &&
+                        !typeface.IsBold &&
+                        _settings.FontWeight >= 400 &&
+                        IsPrimaryCascadia(typeface)),
+            Edging = SKFontEdging.Antialias,
+            ForceAutoHinting = true,
+            Hinting = SKFontHinting.Full,
+            SkewX = ShouldSkew(typeface, flags) ? -0.25f : 0,
+            Subpixel = false,
         };
 
     private void MeasureCell()
     {
         var typeface = _fonts.Resolve("M".AsSpan(), CellFlags.None);
-        using var paint = CreateFontPaint(typeface, CellFlags.None);
-        paint.GetFontMetrics(out var metrics);
-        var width = Math.Max(1, paint.MeasureText("0"));
+        using var font = CreateFont(typeface, CellFlags.None, enhancePrimaryContrast: false);
+        font.GetFontMetrics(out var metrics);
+        var width = Math.Max(1, font.MeasureText("0"));
         var height = Math.Max(1, metrics.Descent - metrics.Ascent + metrics.Leading);
         var scale = Math.Max(0.1, _viewport.Scale == 0 ? 1 : _viewport.Scale);
         CellSize = new CellSize(

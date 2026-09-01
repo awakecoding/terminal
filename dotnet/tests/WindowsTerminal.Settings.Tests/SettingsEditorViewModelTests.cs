@@ -50,6 +50,40 @@ public sealed class SettingsEditorViewModelTests
     }
 
     [Fact]
+    public void ClosingSearchClearsHiddenNavigationFilter()
+    {
+        var viewModel = CreateEditor();
+        viewModel.IsSearchOpen = true;
+        viewModel.SearchText = "kitty";
+
+        Assert.Single(viewModel.VisibleNavigationItems);
+
+        viewModel.IsSearchOpen = false;
+
+        Assert.Empty(viewModel.SearchText);
+        Assert.Equal(13, viewModel.VisibleNavigationItems.Count);
+    }
+
+    [Fact]
+    public void StartupUsesFriendlyProfileChoicesAndStateLabels()
+    {
+        var viewModel = CreateEditor();
+        var startup = Assert.IsType<StartupSettingsViewModel>(viewModel.CurrentPage);
+
+        var profile = Assert.Single(startup.Profiles);
+        Assert.Equal("PowerShell", profile.Name);
+        Assert.Same(profile, startup.SelectedProfile);
+        Assert.Equal("Off", startup.CenterOnLaunchState);
+
+        startup.SelectedProfile = profile;
+        startup.CenterOnLaunch = true;
+
+        Assert.Equal("{11111111-1111-1111-1111-111111111111}", startup.DefaultProfile);
+        Assert.Equal("On", startup.CenterOnLaunchState);
+        Assert.True(viewModel.IsDirty);
+    }
+
+    [Fact]
     public void ApplyPersistsTypedChangeAndUnknownUserProperties()
     {
         var persisted = """

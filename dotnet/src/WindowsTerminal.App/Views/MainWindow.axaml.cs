@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -1918,7 +1919,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         _paletteMode = mode;
         CommandPalette.IsVisible = true;
         CommandPaletteQuery.Text = string.Empty;
-        CommandPaletteQuery.Watermark = mode switch
+        CommandPaletteQuery.PlaceholderText = mode switch
         {
             PaletteMode.CommandHistory => "Search command history",
             PaletteMode.CommandLine => "Enter a wt command line",
@@ -1933,7 +1934,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         _paletteMode = PaletteMode.Tabs;
         CommandPalette.IsVisible = true;
         CommandPaletteQuery.Text = string.Empty;
-        CommandPaletteQuery.Watermark = "Search tabs";
+        CommandPaletteQuery.PlaceholderText = "Search tabs";
         RefreshCommandPalette();
         CommandPaletteQuery.Focus();
     }
@@ -1941,7 +1942,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     private void CloseCommandPalette()
     {
         CommandPalette.IsVisible = false;
-        CommandPaletteQuery.Watermark = "Search actions";
+        CommandPaletteQuery.PlaceholderText = "Search actions";
         _activeTab?.Panes.ActiveContent?.Control.Focus();
     }
 
@@ -2208,7 +2209,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         var tab = _activeTab;
         var activePane = tab?.Panes.ActiveContent;
         var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-        var text = clipboard is null ? null : await clipboard.GetTextAsync().ConfigureAwait(true);
+        var text = clipboard is null ? null : await clipboard.TryGetTextAsync().ConfigureAwait(true);
         if (tab is null ||
             activePane is null ||
             !_tabs.Contains(tab) ||

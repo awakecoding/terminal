@@ -5,6 +5,7 @@ using Avalonia;
 using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Input.TextInput;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -29,6 +30,10 @@ public enum TerminalControlCapabilities
 
 public sealed class TermControl : Avalonia.Controls.Control
 {
+    private static readonly DataFormat<byte[]> HtmlClipboardFormat =
+        DataFormat.CreateBytesPlatformFormat("HTML Format");
+    private static readonly DataFormat<byte[]> RtfClipboardFormat =
+        DataFormat.CreateBytesPlatformFormat("Rich Text Format");
     private readonly DispatcherTimer _blinkTimer;
     private readonly object _outputLock = new();
     private readonly MemoryStream _pendingOutput = new();
@@ -287,8 +292,8 @@ public sealed class TermControl : Avalonia.Controls.Control
             return payload;
         }
 
-        var data = CreateClipboardDataObject(payload);
-        await clipboard.SetDataObjectAsync(data).ConfigureAwait(true);
+        var data = CreateClipboardDataTransfer(payload);
+        await clipboard.SetDataAsync(data).ConfigureAwait(true);
         await clipboard.FlushAsync().ConfigureAwait(true);
         return payload;
     }
@@ -311,21 +316,22 @@ public sealed class TermControl : Avalonia.Controls.Control
             : TerminalInteractionModel.BuildClipboardPayload(selected, options);
     }
 
-    internal static DataObject CreateClipboardDataObject(TerminalClipboardPayload payload)
+    internal static DataTransfer CreateClipboardDataTransfer(TerminalClipboardPayload payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
-        var data = new DataObject();
-        data.Set(DataFormats.Text, payload.Text);
+        var item = DataTransferItem.CreateText(payload.Text);
         if (payload.Html is not null)
         {
-            data.Set("HTML Format", Encoding.UTF8.GetBytes(payload.Html));
+            item.Set(HtmlClipboardFormat, Encoding.UTF8.GetBytes(payload.Html));
         }
 
         if (payload.Rtf is not null)
         {
-            data.Set("Rich Text Format", Encoding.ASCII.GetBytes(payload.Rtf));
+            item.Set(RtfClipboardFormat, Encoding.ASCII.GetBytes(payload.Rtf));
         }
 
+        var data = new DataTransfer();
+        data.Add(item);
         return data;
     }
 
@@ -338,7 +344,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     {
         ArgumentNullException.ThrowIfNull(options);
         var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-        var text = clipboard is null ? null : await clipboard.GetTextAsync().ConfigureAwait(true);
+        var text = clipboard is null ? null : await clipboard.TryGetTextAsync().ConfigureAwait(true);
         return PasteText(text, options);
     }
 
