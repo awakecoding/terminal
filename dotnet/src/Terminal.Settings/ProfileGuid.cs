@@ -7,6 +7,8 @@ public static class ProfileGuid
 {
     private static readonly Guid RuntimeGeneratedNamespace =
         new("f65ddb7e-706b-4499-8a50-40313caf510a");
+    private static readonly Guid DynamicProfileNamespace =
+        new("2bde4a90-d05f-401c-9492-e40884ead1d8");
 
     public static Guid Create(string name, string? source = null)
     {
@@ -15,6 +17,12 @@ public static class ProfileGuid
             ? RuntimeGeneratedNamespace
             : CreateV5(RuntimeGeneratedNamespace, Encoding.Unicode.GetBytes(source));
         return CreateV5(profileNamespace, Encoding.Unicode.GetBytes(name));
+    }
+
+    public static Guid CreateDynamic(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return CreateV5(DynamicProfileNamespace, Encoding.Unicode.GetBytes(name));
     }
 
     public static Guid CreateV5(Guid namespaceId, ReadOnlySpan<byte> name)

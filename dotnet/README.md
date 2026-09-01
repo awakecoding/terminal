@@ -40,8 +40,14 @@ The native executable is written to
 Settings are stored at `%LOCALAPPDATA%\WindowsTerminal.NET\settings.json`.
 Set `WT_DOTNET_SETTINGS_PATH` to load a specific Windows Terminal settings file.
 Runtime application state is stored atomically in `state.json` beside that file.
-The settings loader applies embedded defaults, fragments, then the user layer;
-actions and keybindings are preserved losslessly for the dedicated action phase.
+The settings loader applies embedded defaults, generated profiles, extension
+fragments, then the user layer; actions and keybindings are preserved losslessly
+for the dedicated action phase. Dynamic discovery covers installed PowerShell,
+Windows PowerShell, Command Prompt, WSL distributions, OpenSSH config hosts, and
+Visual Studio developer shells. Sources honor `disabledProfileSources`, retain
+upstream GUID/source identities, and reconcile removed generated profiles through
+`state.json`. Set `WT_RUN_MACHINE_PROFILE_TESTS=1` to opt into machine-dependent
+generator smoke coverage.
 
 ## Architecture
 

@@ -8,6 +8,7 @@ namespace Microsoft.Terminal.Settings;
 public enum SettingsLayerKind
 {
     Defaults,
+    Generated,
     Fragment,
     User,
 }
@@ -64,7 +65,11 @@ public static class SettingsLoader
                 if (fragmentObject is not null)
                 {
                     MigrateLegacyAliases(fragmentObject);
-                    if (fragment.Kind == SettingsLayerKind.Fragment)
+                    if (fragment.Kind == SettingsLayerKind.Generated)
+                    {
+                        PrepareGeneratedProfiles(fragmentObject, fragment.Source);
+                    }
+                    else if (fragment.Kind == SettingsLayerKind.Fragment)
                     {
                         PrepareFragment(fragmentObject, FragmentProvider(fragment.Source));
                         pendingFragmentUpdates.AddRange(ExtractFragmentUpdates(fragmentObject));
@@ -830,6 +835,22 @@ public static class SettingsLoader
         }
     }
 
+    private static void PrepareGeneratedProfiles(JsonObject layer, string source)
+    {
+        var profiles = NormalizeProfiles(layer["profiles"]);
+        layer["profiles"] = profiles;
+        if (profiles["list"] is not JsonArray list)
+        {
+            return;
+        }
+
+        foreach (var profile in list.OfType<JsonObject>())
+        {
+            profile[OriginKey] ??= SettingsOrigin.Generated.ToString();
+            profile[SourceKey] = source;
+        }
+    }
+
     private static void TagNamedEntries(
         JsonArray? entries,
         SettingsOrigin origin,
@@ -890,6 +911,9 @@ public static class SettingsLoader
 
             var layer = (JsonObject)update.DeepClone();
             layer.Remove("updates");
+            layer.Remove("source");
+            layer.Remove(OriginKey);
+            layer.Remove(SourceKey);
             MergeObject(target, layer);
         }
     }
