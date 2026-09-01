@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Microsoft.Terminal.Settings</RootNamespace>
+    <Description>JSON settings model compatible with a Windows Terminal subset.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Terminal.Core\Terminal.Core.csproj" />
+  </ItemGroup>
+</Project>

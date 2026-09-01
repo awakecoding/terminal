@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Microsoft.Terminal.Control</RootNamespace>
+    <Description>Avalonia terminal control that renders Microsoft.Terminal.Core.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Terminal.Core\Terminal.Core.csproj" />
+    <ProjectReference Include="..\Terminal.Connection\Terminal.Connection.csproj" />
+    <ProjectReference Include="..\Terminal.Settings\Terminal.Settings.csproj" />
+  </ItemGroup>
+</Project>

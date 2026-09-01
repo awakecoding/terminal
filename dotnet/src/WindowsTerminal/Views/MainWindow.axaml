@@ -1,0 +1,44 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="WindowsTerminal.Views.MainWindow"
+        x:CompileBindings="True"
+        Title="Windows Terminal"
+        Width="1100"
+        Height="700"
+        MinWidth="480"
+        MinHeight="320"
+        Background="#0C0C0C"
+        TransparencyLevelHint="Mica,AcrylicBlur,None"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaChromeHints="PreferSystemChrome"
+        ExtendClientAreaTitleBarHeightHint="40">
+  <DockPanel>
+    <Border DockPanel.Dock="Top"
+            Height="40"
+            Background="#2B2B2B"
+            PointerPressed="TitleBar_OnPointerPressed">
+      <Grid ColumnDefinitions="Auto,*,Auto" Margin="8,0,140,0">
+        <Button Grid.Column="0"
+                Classes="icon"
+                Click="Menu_OnClick"
+                ToolTip.Tip="Menu">
+          <TextBlock Text="☰" FontSize="16" />
+        </Button>
+        <ScrollViewer Grid.Column="1"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Disabled">
+          <StackPanel x:Name="TabStrip"
+                      Orientation="Horizontal"
+                      Spacing="0" />
+        </ScrollViewer>
+        <Button Grid.Column="2"
+                Classes="icon"
+                Click="NewTab_OnClick"
+                ToolTip.Tip="New tab (Ctrl+Shift+T)">
+          <TextBlock Text="+" FontSize="18" />
+        </Button>
+      </Grid>
+    </Border>
+    <Panel x:Name="TerminalHost" Background="#0C0C0C" />
+  </DockPanel>
+</Window>

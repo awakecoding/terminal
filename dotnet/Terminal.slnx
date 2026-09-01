@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Terminal.Connection/Terminal.Connection.csproj" />
+    <Project Path="src/Terminal.Control/Terminal.Control.csproj" />
+    <Project Path="src/Terminal.Core/Terminal.Core.csproj" />
+    <Project Path="src/Terminal.Settings/Terminal.Settings.csproj" />
+    <Project Path="src/WindowsTerminal/WindowsTerminal.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Terminal.Core.Tests/Terminal.Core.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,37 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="WindowsTerminal.App"
+             RequestedThemeVariant="Dark">
+  <Application.Styles>
+    <FluentTheme />
+    <Style Selector="Window">
+      <Setter Property="FontFamily" Value="Cascadia Mono, Consolas" />
+    </Style>
+    <Style Selector="Button.tab">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#CCCCCC" />
+      <Setter Property="Padding" Value="12,6" />
+      <Setter Property="Margin" Value="2,4,2,0" />
+      <Setter Property="CornerRadius" Value="6,6,0,0" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="Button.tab:pointerover">
+      <Setter Property="Background" Value="#333333" />
+    </Style>
+    <Style Selector="Button.tab.active">
+      <Setter Property="Background" Value="#0C0C0C" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="Button.icon">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#CCCCCC" />
+      <Setter Property="Width" Value="32" />
+      <Setter Property="Height" Value="32" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="Button.icon:pointerover">
+      <Setter Property="Background" Value="#333333" />
+    </Style>
+  </Application.Styles>
+</Application>

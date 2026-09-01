@@ -48,6 +48,7 @@ This repository contains the source code for:
 * [ColorTool](./src/tools/ColorTool)
 * [Sample projects](./samples)
   that show how to consume the Windows Console APIs
+* A [.NET 10 NativeAOT + Avalonia port](./dotnet) of the Windows Terminal UI (`dotnet/`)
 
 Related repositories include:
 

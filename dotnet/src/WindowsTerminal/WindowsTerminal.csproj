@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>WindowsTerminal</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
+    <PublishAot>true</PublishAot>
+    <PublishTrimmed>true</PublishTrimmed>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
+    <DebugType>embedded</DebugType>
+    <AssemblyName>WindowsTerminal</AssemblyName>
+    <Product>Windows Terminal (.NET)</Product>
+    <Description>NativeAOT Avalonia port of Windows Terminal.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Diagnostics" Condition="'$(Configuration)' == 'Debug'" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Terminal.Control\Terminal.Control.csproj" />
+    <ProjectReference Include="..\Terminal.Settings\Terminal.Settings.csproj" />
+    <ProjectReference Include="..\Terminal.Connection\Terminal.Connection.csproj" />
+    <ProjectReference Include="..\Terminal.Core\Terminal.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+    <AvaloniaResource Include="..\..\..\res\fonts\CascadiaMono.ttf" Link="Assets\Fonts\CascadiaMono.ttf" />
+    <AvaloniaResource Include="..\..\..\res\fonts\CascadiaMonoItalic.ttf" Link="Assets\Fonts\CascadiaMonoItalic.ttf" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <TrimmerRootAssembly Include="Avalonia.Themes.Fluent" />
+    <TrimmerRootAssembly Include="WindowsTerminal" />
+  </ItemGroup>
+</Project>

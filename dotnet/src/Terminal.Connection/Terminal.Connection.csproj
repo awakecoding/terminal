@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Microsoft.Terminal.Connection</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Description>ConPTY process hosting for the .NET Windows Terminal port.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Terminal.Core\Terminal.Core.csproj" />
+  </ItemGroup>
+</Project>
