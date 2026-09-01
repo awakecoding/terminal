@@ -54,7 +54,7 @@ The compiled-XAML settings editor and host integration are documented in
 
 ```
 Terminal.Core         VT parser + text buffer + terminal engine
-Terminal.Render       Renderer-neutral contracts; Skia atlas lands in P1
+Terminal.Render       Immutable plans + HarfBuzz/Skia glyph renderer
 Terminal.Connection   ConPTY (safe handles, cancellation, NativeAOT)
 Terminal.Settings     Layered Windows Terminal-compatible JSON settings
 Terminal.Control      Avalonia TermControl renderer
@@ -73,6 +73,8 @@ read-only cell snapshots for render and test consumers; the existing live
 
 The full phased plan for a complete port is in [PORTING.md](PORTING.md).
 Architecture decisions are recorded in [doc/decisions](doc/decisions).
+Renderer contracts, cache ownership, and integration details are documented in
+[doc/renderer.md](doc/renderer.md).
 
 ## Compatibility inventory
 

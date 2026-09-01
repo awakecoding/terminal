@@ -1,9 +1,9 @@
-using System.Globalization;
 using System.Runtime.Versioning;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using Microsoft.Terminal.Connection;
 using Microsoft.Terminal.Core;
@@ -28,10 +28,14 @@ public sealed class TermControl : Avalonia.Controls.Control
     private readonly DispatcherTimer _renderTimer;
     private readonly object _outputLock = new();
     private readonly List<byte> _pendingOutput = [];
+    private readonly SkiaTerminalRenderer _renderer = new();
     private IRestartableTerminalConnection? _connection;
-    private Typeface _typeface = new("Cascadia Mono, Consolas, Courier New");
     private double _fontSize = 12;
     private double _defaultFontSize = 12;
+    private IReadOnlyList<TerminalCellRange> _searchHighlights = [];
+    private IReadOnlyList<TerminalCellRange> _hoveredHyperlink = [];
+    private TerminalRenderFrame? _lastFrame;
+    private IReadOnlyList<int> _lastDirtyRows = [];
     private double _cellWidth = 8;
     private double _cellHeight = 16;
     private bool _cursorOn = true;
@@ -39,6 +43,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     private int _selX1, _selY1, _selX2, _selY2;
     private bool _hasSelection;
     private bool _dirty = true;
+    private bool _rendererDisposed;
 
     public TermControl()
     {
@@ -89,7 +94,7 @@ public sealed class TermControl : Avalonia.Controls.Control
         Profile = profile;
         _defaultFontSize = profile.FontSize <= 0 ? 12 : profile.FontSize;
         _fontSize = _defaultFontSize;
-        _typeface = new Typeface($"{profile.FontFace}, Cascadia Mono, Consolas, Courier New");
+        ConfigureRenderer(profile);
         Engine.Scheme = profile.ResolveScheme();
         Engine.Resize(columns, rows);
         MeasureGlyph();
@@ -146,6 +151,9 @@ public sealed class TermControl : Avalonia.Controls.Control
             await _connection.DisposeAsync().ConfigureAwait(false);
             _connection = null;
         }
+
+        _renderer.Dispose();
+        _rendererDisposed = true;
     }
 
     public async Task CopyAsync(bool singleLine = false)
@@ -219,6 +227,11 @@ public sealed class TermControl : Avalonia.Controls.Control
     public void AdjustFontSize(double delta)
     {
         _fontSize = Math.Clamp(_fontSize + delta, 1, 72);
+        if (Profile is not null)
+        {
+            ConfigureRenderer(Profile);
+        }
+
         if (VisualRoot is not null)
         {
             MeasureGlyph();
@@ -231,6 +244,11 @@ public sealed class TermControl : Avalonia.Controls.Control
     public void ResetFontSize()
     {
         _fontSize = _defaultFontSize;
+        if (Profile is not null)
+        {
+            ConfigureRenderer(Profile);
+        }
+
         if (VisualRoot is not null)
         {
             MeasureGlyph();
@@ -346,28 +364,57 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     public override void Render(DrawingContext context)
     {
-        var frame = TerminalRenderPlanner.Create(Engine.CreateSnapshot(), Engine.Scheme);
-        var bg = ToBrush(frame.Background);
-        context.FillRectangle(bg, new Rect(Bounds.Size));
-
-        var padding = 8.0;
-        foreach (var row in frame.RowsData)
+        if (_rendererDisposed)
         {
-            DrawRow(context, row, frame.Background, padding);
+            return;
         }
 
-        if (_hasSelection)
-        {
-            DrawSelection(context, frame.SelectionColor, frame.Columns, padding);
-        }
+        var profile = Profile;
+        var frame = TerminalRenderPlanner.Create(
+            Engine.CreateSnapshot(),
+            Engine.Scheme,
+            new TerminalRenderOptions
+            {
+                CursorStyle = ParseCursorStyle(profile?.CursorShape),
+                CursorHeightPercentage = profile?.CursorHeight ?? 25,
+            });
+        var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
+        _renderer.Resize(new RenderViewport(frame.Columns, frame.Rows, scale));
+        MeasureGlyph();
 
-        if (frame.CursorVisible && _cursorOn && IsFocused)
-        {
-            var x = padding + (frame.CursorX * _cellWidth);
-            var y = padding + (frame.CursorY * _cellHeight);
-            context.FillRectangle(ToBrush(frame.CursorColor), new Rect(x, y, 2, _cellHeight));
-        }
+        var selection = _hasSelection
+            ? TerminalOverlayPlanner.CreateSelection(
+                _selX1,
+                _selY1,
+                _selX2,
+                _selY2,
+                frame.Columns,
+                frame.Rows,
+                frame.SelectionColor)
+            : [];
+        var overlays = new TerminalRenderOverlays(
+            selection,
+            _searchHighlights,
+            _hoveredHyperlink);
+        _lastDirtyRows = TerminalFrameDiffer.GetDirtyRows(_lastFrame, frame);
+        _lastFrame = frame;
+        context.Custom(new TerminalSkiaDrawOperation(
+            new Rect(Bounds.Size),
+            _renderer,
+            frame,
+            overlays,
+            padding: 8,
+            drawCursor: _cursorOn && IsFocused));
     }
+
+    public void SetSearchHighlights(IReadOnlyList<TerminalCellRange> highlights)
+    {
+        ArgumentNullException.ThrowIfNull(highlights);
+        _searchHighlights = highlights.ToArray();
+        InvalidateVisual();
+    }
+
+    internal IReadOnlyList<int> LastDirtyRows => _lastDirtyRows;
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -414,6 +461,7 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
+        UpdateHoveredHyperlink(e.GetPosition(this));
         if (_selecting)
         {
             var (x, y) = HitTest(e.GetPosition(this));
@@ -423,6 +471,17 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
 
         base.OnPointerMoved(e);
+    }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        if (_hoveredHyperlink.Count != 0)
+        {
+            _hoveredHyperlink = [];
+            InvalidateVisual();
+        }
+
+        base.OnPointerExited(e);
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -495,96 +554,6 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
     }
 
-    private void DrawRow(
-        DrawingContext context,
-        TerminalRenderRow row,
-        uint defaultBackground,
-        double padding)
-    {
-        foreach (var run in row.Runs)
-        {
-            var rect = new Rect(
-                padding + (run.StartColumn * _cellWidth),
-                padding + (row.RowIndex * _cellHeight),
-                run.CellCount * _cellWidth,
-                _cellHeight);
-            if (run.Attributes.Background != defaultBackground)
-            {
-                context.FillRectangle(ToBrush(run.Attributes.Background), rect);
-            }
-
-            if ((run.Attributes.Flags & CellFlags.Invisible) != 0)
-            {
-                continue;
-            }
-
-            var text = run.Text.TrimEnd();
-            if (text.Length == 0)
-            {
-                continue;
-            }
-
-            var typeface = new Typeface(
-                _typeface.FontFamily,
-                (run.Attributes.Flags & CellFlags.Italic) != 0 ? FontStyle.Italic : FontStyle.Normal,
-                (run.Attributes.Flags & CellFlags.Bold) != 0 ? FontWeight.Bold : FontWeight.Normal);
-
-            var formatted = new FormattedText(
-                text,
-                CultureInfo.CurrentCulture,
-                FlowDirection.LeftToRight,
-                typeface,
-                _fontSize,
-                ToBrush(run.Attributes.Foreground));
-
-            context.DrawText(formatted, new Point(rect.X, rect.Y));
-
-            if ((run.Attributes.Flags & CellFlags.Underline) != 0 || run.Attributes.HyperlinkUri is not null)
-            {
-                var yPos = rect.Bottom - 2;
-                context.DrawLine(
-                    new Pen(ToBrush(run.Attributes.Foreground), 1),
-                    new Point(rect.X, yPos),
-                    new Point(rect.Right, yPos));
-            }
-
-            if ((run.Attributes.Flags & CellFlags.Strikethrough) != 0)
-            {
-                var yPos = rect.Y + (rect.Height / 2);
-                context.DrawLine(
-                    new Pen(ToBrush(run.Attributes.Foreground), 1),
-                    new Point(rect.X, yPos),
-                    new Point(rect.Right, yPos));
-            }
-        }
-    }
-
-    private void DrawSelection(DrawingContext context, uint selectionColor, int columns, double padding)
-    {
-        var x1 = _selX1;
-        var y1 = _selY1;
-        var x2 = _selX2;
-        var y2 = _selY2;
-        if (y1 > y2 || (y1 == y2 && x1 > x2))
-        {
-            (x1, x2) = (x2, x1);
-            (y1, y2) = (y2, y1);
-        }
-
-        var brush = ToBrush(selectionColor);
-        for (var y = y1; y <= y2; y++)
-        {
-            var from = y == y1 ? x1 : 0;
-            var to = y == y2 ? x2 : columns - 1;
-            var rect = new Rect(
-                padding + (from * _cellWidth),
-                padding + (y * _cellHeight),
-                Math.Max(1, to - from + 1) * _cellWidth,
-                _cellHeight);
-            context.FillRectangle(brush, rect);
-        }
-    }
-
     private (int X, int Y) HitTest(Point point)
     {
         const double padding = 8;
@@ -595,19 +564,74 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     private void MeasureGlyph()
     {
-        var formatted = new FormattedText(
-            "M",
-            CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight,
-            _typeface,
-            _fontSize,
-            Brushes.White);
-        _cellWidth = Math.Max(1, formatted.Width);
-        _cellHeight = Math.Max(1, Math.Ceiling(formatted.Height * 1.2));
+        _cellWidth = _renderer.CellSize.Width;
+        _cellHeight = _renderer.CellSize.Height;
     }
 
-    private static IBrush ToBrush(uint argb) =>
-        new SolidColorBrush(Color.FromUInt32(argb));
+    private void ConfigureRenderer(ProfileSettings profile)
+    {
+        _renderer.Configure(new TerminalRendererSettings
+        {
+            FontFamily = profile.FontFace,
+            FontSize = (float)_fontSize,
+            FontWeight = profile.FontWeight,
+            FontSources =
+            [
+                new TerminalFontSource("Cascadia Mono", false, OpenCascadiaMono),
+                new TerminalFontSource("Cascadia Mono", true, OpenCascadiaMonoItalic),
+            ],
+        });
+    }
+
+    private void UpdateHoveredHyperlink(Point position)
+    {
+        var (x, y) = HitTest(position);
+        var row = Engine.Buffer.GetRow(y);
+        var uri = row[x].HyperlinkUri;
+        IReadOnlyList<TerminalCellRange> next = [];
+        if (uri is not null)
+        {
+            var start = x;
+            var end = x;
+            while (start > 0 && string.Equals(row[start - 1].HyperlinkUri, uri, StringComparison.Ordinal))
+            {
+                start--;
+            }
+
+            while (end + 1 < row.Length &&
+                   string.Equals(row[end + 1].HyperlinkUri, uri, StringComparison.Ordinal))
+            {
+                end++;
+            }
+
+            next = [new TerminalCellRange(y, start, end, 0x202080FF)];
+        }
+
+        if (!_hoveredHyperlink.SequenceEqual(next))
+        {
+            _hoveredHyperlink = next;
+            InvalidateVisual();
+        }
+    }
+
+    internal static TerminalCursorStyle ParseCursorStyle(string? value) =>
+        value is not null && value.Equals("underscore", StringComparison.OrdinalIgnoreCase)
+            ? TerminalCursorStyle.Underscore
+            : value is not null && value.Equals("doubleUnderscore", StringComparison.OrdinalIgnoreCase)
+                ? TerminalCursorStyle.DoubleUnderscore
+                : value is not null && value.Equals("vintage", StringComparison.OrdinalIgnoreCase)
+                    ? TerminalCursorStyle.Vintage
+                    : value is not null && value.Equals("filledBox", StringComparison.OrdinalIgnoreCase)
+                        ? TerminalCursorStyle.FilledBox
+                        : value is not null && value.Equals("emptyBox", StringComparison.OrdinalIgnoreCase)
+                            ? TerminalCursorStyle.EmptyBox
+                            : TerminalCursorStyle.Bar;
+
+    private static Stream OpenCascadiaMono() =>
+        AssetLoader.Open(new Uri("avares://WindowsTerminal/Assets/Fonts/CascadiaMono.ttf"));
+
+    private static Stream OpenCascadiaMonoItalic() =>
+        AssetLoader.Open(new Uri("avares://WindowsTerminal/Assets/Fonts/CascadiaMonoItalic.ttf"));
 
     private static TerminalCloseOnExitPolicy ToConnectionPolicy(CloseOnExitMode mode) =>
         mode switch

@@ -49,6 +49,25 @@ public sealed class TerminalRenderPlannerTests
 
         Assert.StartsWith("e\u0301界", run.Text, StringComparison.Ordinal);
         Assert.Equal(8, run.CellCount);
+        Assert.True(run.Clusters.Count >= 2);
+        Assert.Equal(0, run.Clusters[0].StartColumn);
+        Assert.Equal(1, run.Clusters[0].CellCount);
+        Assert.Equal(1, run.Clusters[1].StartColumn);
+        Assert.Equal(2, run.Clusters[1].CellCount);
+    }
+
+    [Fact]
+    public void KeepsEmojiJoinerSequenceInOneShapingCluster()
+    {
+        var engine = new TerminalEngine(8, 2);
+        engine.Feed("\U0001F469\u200D\U0001F4BB");
+
+        var frame = TerminalRenderPlanner.Create(engine.CreateSnapshot(), engine.Scheme);
+        var clusters = frame.RowsData[0].Runs[0].Clusters;
+
+        Assert.Equal("\U0001F469\u200D\U0001F4BB", frame.RowsData[0].Runs[0].Text[..5]);
+        Assert.Equal(1, clusters.Count(cluster => cluster.TextLength > 1));
+        Assert.Equal(4, clusters[0].CellCount);
     }
 
     [Fact]

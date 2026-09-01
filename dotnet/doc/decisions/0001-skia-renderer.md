@@ -24,3 +24,17 @@ Do not attempt a line-for-line port of Atlas internals or shaders.
 - Visual and performance parity require dedicated golden tests and benchmarks.
 - Windows-specific effects are optional capabilities rather than core renderer
   dependencies.
+
+## Implementation
+
+`Terminal.Render` shapes one terminal cell cluster at a time with HarfBuzz while
+supplying the complete same-style run as shaping context. This prevents
+proportional-font advances from moving text across cell boundaries while
+retaining contextual forms, combining text, and emoji joiner sequences.
+Resolved Skia text blobs are held in a bounded LRU cache. Avalonia integration is
+one `ICustomDrawOperation`; it leases the active Skia canvas and owns no graphics
+device, so DPI changes and device recreation only invalidate CPU-side caches.
+
+The supported fallback order is the profile face, Cascadia Mono, Consolas, Segoe
+UI Emoji, then the platform font manager. Common Powerline separators have
+geometry fallbacks when no font supplies them.

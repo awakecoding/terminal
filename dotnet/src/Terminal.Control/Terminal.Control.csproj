@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Skia" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Terminal.Core\Terminal.Core.csproj" />

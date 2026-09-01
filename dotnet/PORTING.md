@@ -19,7 +19,7 @@ The original C++ tree stays in place. All new work lives under `dotnet/`.
 | Project | What it covers today |
 | --- | --- |
 | `Terminal.Core` | Cell/attributes, text buffer, VT ground/CSI/OSC subset, alt screen, SGR (16/256/truecolor) |
-| `Terminal.Render` | Renderer-neutral contracts for the future Skia glyph atlas |
+| `Terminal.Render` | Immutable plans, HarfBuzz shaping, fallback fonts, bounded Skia text-blob caching |
 | `Terminal.Connection` | NativeAOT-safe ConPTY via `LibraryImport`, transactional safe-handle lifecycle, cancellation, async writes, resize, and environment overrides |
 | `Terminal.Settings` | Complete MTSM projection, tri-state inheritance, migrations, fragments, profile generators, state persistence, plus the 92-action inventory, typed action arguments, normalized key chords, current/legacy binding parsing, and source-generated NativeAOT-safe JSON |
 | `Terminal.Control` | Avalonia `TermControl`: Skia text, selection, action-driven copy/paste/find/scroll/font controls, key map |
@@ -126,8 +126,9 @@ Match Atlas *behavior*:
 - Selection overlay and hyperlink underline
 - Optional background image / acrylic later
 
-P0 can keep the current `FormattedText` path. P1 replaces it with a glyph
-atlas; that is the difference between “works” and “feels like Terminal”.
+P1 now uses a retained Skia custom draw operation, HarfBuzz-shaped cell
+clusters, bounded text-blob/typeface caches, and dirty-row contracts. Images
+and double-width/double-height line rendition remain later renderer work.
 
 ## Settings model
 
@@ -402,7 +403,7 @@ dotnet/
   Terminal.slnx
   src/
     Terminal.Core/          # buffer, VT, input encoding
-    Terminal.Render/        # Skia atlas (extracted from Control in P1)
+    Terminal.Render/        # HarfBuzz shaping, Skia text-blob cache, render plans
     Terminal.Connection/    # ConPTY, later Azure
     Terminal.Settings/      # CascadiaSettings, ActionMap, generators
     Terminal.Control/       # TermControl, search, scrollbar
