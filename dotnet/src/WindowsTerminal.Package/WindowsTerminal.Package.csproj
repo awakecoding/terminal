@@ -2,6 +2,10 @@
   <PropertyGroup>
     <RootNamespace>WindowsTerminal.Package</RootNamespace>
     <AssemblyName>WindowsTerminal.Package</AssemblyName>
-    <Description>Package capability model and future MSIX build integration.</Description>
+    <Description>MSIX identity metadata and packaged capability detection.</Description>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WindowsTerminal.Interop\WindowsTerminal.Interop.csproj" />
+  </ItemGroup>
 </Project>
