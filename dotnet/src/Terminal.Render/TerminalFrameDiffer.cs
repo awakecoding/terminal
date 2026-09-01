@@ -1,3 +1,5 @@
+using Microsoft.Terminal.Core;
+
 namespace Microsoft.Terminal.Render;
 
 public static class TerminalFrameDiffer
@@ -10,7 +12,8 @@ public static class TerminalFrameDiffer
         if (previous is null ||
             previous.Columns != current.Columns ||
             previous.Rows != current.Rows ||
-            previous.Background != current.Background)
+            previous.Background != current.Background ||
+            !ImagesEqual(previous.Images, current.Images))
         {
             return Enumerable.Range(0, current.Rows).ToArray();
         }
@@ -29,6 +32,32 @@ public static class TerminalFrameDiffer
         AddCursorRow(previous, current, current.CursorY, dirty);
         dirty.Sort();
         return dirty;
+    }
+
+    private static bool ImagesEqual(
+        IReadOnlyList<TerminalImageOverlay> left,
+        IReadOnlyList<TerminalImageOverlay> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < left.Count; index++)
+        {
+            var a = left[index];
+            var b = right[index];
+            if (a.Id != b.Id ||
+                a.Protocol != b.Protocol ||
+                a.AlternateBuffer != b.AlternateBuffer ||
+                a.AnchorColumn != b.AnchorColumn ||
+                a.AnchorRow != b.AnchorRow)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static void AddCursorRow(

@@ -20,6 +20,8 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
     private TerminalRendererSettings _settings;
     private FontResolver _fonts;
     private BoundedResourceCache<GlyphKey, CachedGlyph> _glyphs;
+    private readonly Dictionary<long, SKBitmap> _images = [];
+    private readonly HashSet<long> _invalidImages = [];
     private readonly Func<GlyphKey, CachedGlyph> _shapeFactory;
     private RenderViewport _viewport;
     private float _baseline;
@@ -120,6 +122,7 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
             _paint.Style = SKPaintStyle.Fill;
             _paint.Color = ToColor(frame.Background);
             canvas.DrawRect(bounds, _paint);
+            DrawImages(canvas, frame, bounds, padding);
 
             for (var rowIndex = 0; rowIndex < frame.RowsData.Count; rowIndex++)
             {
@@ -181,6 +184,179 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
             DrawDecorations(canvas, run, top, padding);
         }
     }
+
+    private void DrawImages(
+        SKCanvas canvas,
+        TerminalRenderFrame frame,
+        SKRect bounds,
+        float padding)
+    {
+        if (frame.Images.Count == 0)
+        {
+            if (_images.Count > 0)
+            {
+                foreach (var image in _images.Values)
+                {
+                    image.Dispose();
+                }
+
+                _images.Clear();
+            }
+
+            return;
+        }
+
+        var activeIds = frame.Images.Select(static image => image.Id).ToHashSet();
+        foreach (var staleId in _images.Keys.Where(id => !activeIds.Contains(id)).ToArray())
+        {
+            _images[staleId].Dispose();
+            _images.Remove(staleId);
+        }
+
+        _invalidImages.RemoveWhere(id => !activeIds.Contains(id));
+        var viewport = new SKRect(
+            bounds.Left + padding,
+            bounds.Top + padding,
+            Math.Max(bounds.Left + padding, bounds.Right - padding),
+            Math.Max(bounds.Top + padding, bounds.Bottom - padding));
+        canvas.Save();
+        canvas.ClipRect(viewport);
+        _paint.Color = SKColors.White;
+        foreach (var image in frame.Images)
+        {
+            if (_invalidImages.Contains(image.Id))
+            {
+                continue;
+            }
+
+            if (!_images.TryGetValue(image.Id, out var bitmap))
+            {
+                bitmap = DecodeImage(image);
+                if (bitmap is null)
+                {
+                    _invalidImages.Add(image.Id);
+                    continue;
+                }
+
+                _images.Add(image.Id, bitmap);
+            }
+
+            var left = padding + (image.AnchorColumn * (float)CellSize.Width);
+            var top = padding + (image.AnchorRow * (float)CellSize.Height);
+            var destination = ImageDestination(image, bitmap, left, top, viewport);
+            canvas.DrawBitmap(bitmap, destination, _paint);
+        }
+
+        canvas.Restore();
+    }
+
+    private static SKBitmap? DecodeImage(TerminalImageOverlay image)
+    {
+        if (image.Sixel is { } sixel)
+        {
+            var bitmap = new SKBitmap(
+                sixel.Width,
+                sixel.Height,
+                SKColorType.Bgra8888,
+                SKAlphaType.Premul);
+            var indices = sixel.PixelIndices.Span;
+            var palette = sixel.Palette.Span;
+            var colors = new SKColor[indices.Length];
+            for (var index = 0; index < colors.Length; index++)
+            {
+                var colorIndex = indices[index];
+                colors[index] = colorIndex == SixelImage.TransparentColorIndex
+                    ? SKColors.Transparent
+                    : new SKColor(palette[colorIndex]);
+            }
+
+            bitmap.Pixels = colors;
+            return bitmap;
+        }
+
+        if (image.InlineImage is not { } inline)
+        {
+            return null;
+        }
+
+        using var data = SKData.CreateCopy(inline.Data.ToArray());
+        using var codec = SKCodec.Create(data);
+        if (codec is null ||
+            codec.Info.Width is <= 0 or > TerminalImageLimits.MaximumPixelDimension ||
+            codec.Info.Height is <= 0 or > TerminalImageLimits.MaximumPixelDimension ||
+            (long)codec.Info.Width * codec.Info.Height > TerminalImageLimits.MaximumPixelCount)
+        {
+            return null;
+        }
+
+        var decoded = new SKBitmap(codec.Info.Width, codec.Info.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        var decodeResult = codec.GetPixels(decoded.Info, decoded.GetPixels());
+        if (decodeResult is SKCodecResult.Success or SKCodecResult.IncompleteInput)
+        {
+            return decoded;
+        }
+
+        decoded.Dispose();
+        return null;
+    }
+
+    private SKRect ImageDestination(
+        TerminalImageOverlay image,
+        SKBitmap bitmap,
+        float left,
+        float top,
+        SKRect bounds)
+    {
+        var naturalWidth = (float)bitmap.Width;
+        var naturalHeight = (float)bitmap.Height;
+        if (image.InlineImage is not { } inline)
+        {
+            return SKRect.Create(left, top, naturalWidth, naturalHeight);
+        }
+
+        var width = ResolveDimension(
+            inline.Metadata.Width,
+            naturalWidth,
+            (float)CellSize.Width,
+            bounds.Width);
+        var height = ResolveDimension(
+            inline.Metadata.Height,
+            naturalHeight,
+            (float)CellSize.Height,
+            bounds.Height);
+        if (inline.Metadata.PreserveAspectRatio)
+        {
+            var scale = Math.Min(width / naturalWidth, height / naturalHeight);
+            if (inline.Metadata.Width.Kind == TerminalImageDimensionKind.Auto)
+            {
+                width = naturalWidth * (height / naturalHeight);
+            }
+            else if (inline.Metadata.Height.Kind == TerminalImageDimensionKind.Auto)
+            {
+                height = naturalHeight * (width / naturalWidth);
+            }
+            else
+            {
+                width = naturalWidth * scale;
+                height = naturalHeight * scale;
+            }
+        }
+
+        return SKRect.Create(left, top, width, height);
+    }
+
+    private static float ResolveDimension(
+        TerminalImageDimension dimension,
+        float natural,
+        float cell,
+        float available) =>
+        dimension.Kind switch
+        {
+            TerminalImageDimensionKind.Cells => (float)dimension.Value * cell,
+            TerminalImageDimensionKind.Pixels => (float)dimension.Value,
+            TerminalImageDimensionKind.Percent => (float)(dimension.Value / 100) * available,
+            _ => natural,
+        };
 
     private void DrawClusters(
         SKCanvas canvas,
@@ -567,6 +743,13 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
     {
         _glyphs.Dispose();
         _fonts.Dispose();
+        foreach (var image in _images.Values)
+        {
+            image.Dispose();
+        }
+
+        _images.Clear();
+        _invalidImages.Clear();
     }
 
     private BoundedResourceCache<GlyphKey, CachedGlyph> CreateGlyphCache() =>

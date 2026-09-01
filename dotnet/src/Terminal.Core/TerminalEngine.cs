@@ -130,7 +130,6 @@ public sealed class TerminalEngine : IVtDispatch
         _hasLastPrintedRune = false;
         _sixelDecoder.Reset();
         _images.Clear();
-        _nextImageId = 0;
         _retainedImageBytes = 0;
         _primary.Reset(keepHistory: false);
         _alternate.Reset(keepHistory: false);
@@ -157,7 +156,12 @@ public sealed class TerminalEngine : IVtDispatch
             InsertMode,
             ReverseVideo)
     {
-        Images = _images.ToArray(),
+        Images = _images
+            .Select(image => image with
+            {
+                AnchorRow = image.AnchorRow - (Buffer.ViewportStart - Buffer.ScrollOffset),
+            })
+            .ToArray(),
     };
 
     public string CopySelection(int x1, int y1, int x2, int y2) => Buffer.GetText(x1, y1, x2, y2);
@@ -337,7 +341,7 @@ public sealed class TerminalEngine : IVtDispatch
             TerminalImageProtocol.Sixel,
             AlternateBufferActive,
             Buffer.CursorX,
-            Buffer.CursorY,
+            Buffer.ViewportStart + Buffer.CursorY,
             image,
             null));
     }
@@ -574,7 +578,7 @@ public sealed class TerminalEngine : IVtDispatch
             TerminalImageProtocol.Iterm2Inline,
             AlternateBufferActive,
             Buffer.CursorX,
-            Buffer.CursorY,
+            Buffer.ViewportStart + Buffer.CursorY,
             null,
             inlineImage));
     }

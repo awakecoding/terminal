@@ -249,6 +249,29 @@ public sealed class SkiaTerminalRendererTests
     }
 
     [Fact]
+    public void RendersSixelOverlayAtTerminalAnchor()
+    {
+        var engine = new TerminalEngine(16, 2);
+        engine.Feed("\u001bPq#2;2;100;0;0~\u001b\\");
+        var frame = TerminalRenderPlanner.Create(engine.CreateSnapshot(), engine.Scheme);
+        using var renderer = new SkiaTerminalRenderer();
+        using var bitmap = NewBitmap(renderer, frame);
+        using var canvas = new SKCanvas(bitmap);
+
+        renderer.Render(
+            canvas,
+            frame,
+            TerminalRenderOverlays.Empty,
+            new SKRect(0, 0, bitmap.Width, bitmap.Height),
+            8,
+            drawCursor: false);
+
+        Assert.Single(frame.Images);
+        var pixel = bitmap.GetPixel(8, 8);
+        Assert.True(pixel.Red > 200 && pixel.Green < 30 && pixel.Blue < 30);
+    }
+
+    [Fact]
     public void WarmRenderDoesNotAllocatePerCell()
     {
         using var renderer = new SkiaTerminalRenderer();

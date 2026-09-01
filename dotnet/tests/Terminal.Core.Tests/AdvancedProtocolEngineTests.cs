@@ -160,4 +160,29 @@ public sealed class AdvancedProtocolEngineTests
         Assert.Equal(2, engine.Images[0].Id);
         Assert.Equal(TerminalImageLimits.MaximumRetainedImages + 1, engine.Images[^1].Id);
     }
+
+    [Fact]
+    public void ImageIdsRemainMonotonicAcrossReset()
+    {
+        var engine = new TerminalEngine();
+        engine.Feed("\u001bP7q~\u001b\\");
+        var firstId = Assert.Single(engine.Images).Id;
+
+        engine.Reset();
+        engine.Feed("\u001bP7q~\u001b\\");
+
+        Assert.True(Assert.Single(engine.Images).Id > firstId);
+    }
+
+    [Fact]
+    public void SnapshotImageAnchorTracksBufferScroll()
+    {
+        var engine = new TerminalEngine(10, 2, historySize: 10);
+        engine.Feed("\u001b[2;1H\u001bP7q~\u001b\\");
+        Assert.Equal(1, Assert.Single(engine.CreateSnapshot().Images).AnchorRow);
+
+        engine.Feed("\r\n");
+
+        Assert.Equal(0, Assert.Single(engine.CreateSnapshot().Images).AnchorRow);
+    }
 }

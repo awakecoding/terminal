@@ -53,6 +53,7 @@ public sealed record TerminalRenderFrame(
 {
     public TerminalCursorStyle CursorStyle { get; init; } = TerminalCursorStyle.Bar;
     public int CursorHeightPercentage { get; init; } = 25;
+    public IReadOnlyList<TerminalImageOverlay> Images { get; init; } = [];
 }
 
 public readonly record struct TerminalCellRange(

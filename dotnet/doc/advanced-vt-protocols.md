@@ -1,5 +1,12 @@
 # Advanced VT protocols
 
+> [!NOTE]
+> The public out-of-process Windows ConPTY may filter DCS payloads before they
+> reach a terminal client on some Windows builds. The Core parser and renderer
+> support Sixel when a connection transports DCS bytes unchanged (for example,
+> remote/Azure transports); local ConPTY support is limited by the installed
+> Windows pseudoconsole implementation.
+
 `Terminal.Core` parses advanced string protocols without depending on Avalonia,
 Skia, Win32, or an image codec. It exposes decoded Sixel pixels and encoded
 OSC 1337 images as renderer-neutral overlay metadata.

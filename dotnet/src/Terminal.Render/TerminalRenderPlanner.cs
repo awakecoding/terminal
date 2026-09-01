@@ -38,6 +38,9 @@ public static class TerminalRenderPlanner
         {
             CursorStyle = options.CursorStyle,
             CursorHeightPercentage = Math.Clamp(options.CursorHeightPercentage, 1, 100),
+            Images = snapshot.Images
+                .Where(image => image.AlternateBuffer == snapshot.AlternateBufferActive)
+                .ToArray(),
         };
     }
 

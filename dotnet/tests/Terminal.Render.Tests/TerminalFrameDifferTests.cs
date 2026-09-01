@@ -39,4 +39,27 @@ public sealed class TerminalFrameDifferTests
         Assert.Equal(new TerminalCellRange(0, 1, 5, 0x80FFFFFF), ranges[0]);
         Assert.Equal(new TerminalCellRange(2, 0, 4, 0x80FFFFFF), ranges[2]);
     }
+
+    [Fact]
+    public void ImageIdentityChangeInvalidatesFullViewport()
+    {
+        var engine = new TerminalEngine(4, 2);
+        var before = TerminalRenderPlanner.Create(engine.CreateSnapshot(), engine.Scheme);
+        var after = before with
+        {
+            Images =
+            [
+                new TerminalImageOverlay(
+                    1,
+                    TerminalImageProtocol.Sixel,
+                    false,
+                    0,
+                    0,
+                    null,
+                    null),
+            ],
+        };
+
+        Assert.Equal([0, 1], TerminalFrameDiffer.GetDirtyRows(before, after));
+    }
 }
