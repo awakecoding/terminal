@@ -4,6 +4,9 @@ namespace Microsoft.Terminal.Core;
 
 public sealed class VtParser
 {
+    private const int MaxParameters = 32;
+    private const int MaxStringBytes = 1024 * 1024;
+
     private enum State
     {
         Ground,
@@ -11,22 +14,25 @@ public sealed class VtParser
         EscapeIntermediate,
         CsiEntry,
         CsiParam,
+        CsiIntermediate,
         CsiIgnore,
         OscString,
-        SosPmApcString,
-        DcsIgnore,
+        OscEscape,
+        StringIgnore,
+        StringEscape,
     }
 
     private readonly IVtDispatch _dispatch;
-    private readonly int[] _params = new int[32];
-    private readonly StringBuilder _osc = new();
-    private State _state = State.Ground;
-    private int _paramCount;
-    private int _currentParam = -1;
+    private readonly int[] _parameters = new int[MaxParameters];
+    private readonly List<byte> _osc = [];
+    private State _state;
+    private int _parameterCount;
+    private int _currentParameter = -1;
     private byte _intermediate;
-    private bool _privateMarker;
+    private byte _privateMarker;
     private int _utf8Needed;
-    private int _utf8Acc;
+    private int _utf8Accumulator;
+    private int _utf8Minimum;
 
     public VtParser(IVtDispatch dispatch)
     {
@@ -35,78 +41,115 @@ public sealed class VtParser
 
     public void Process(ReadOnlySpan<byte> data)
     {
-        foreach (var b in data)
+        foreach (var value in data)
         {
-            ProcessByte(b);
+            ProcessByte(value);
         }
     }
 
     public void Reset()
     {
         _state = State.Ground;
-        ClearParams();
+        ClearSequence();
         _osc.Clear();
-        _utf8Needed = 0;
-        _utf8Acc = 0;
+        ResetUtf8();
     }
 
-    private void ProcessByte(byte b)
+    private void ProcessByte(byte value)
     {
-        if (b == 0x18 || b == 0x1A)
+        if (_state == State.OscString)
         {
-            _state = State.Ground;
-            _utf8Needed = 0;
+            ProcessOsc(value);
             return;
         }
 
-        if (b == 0x1B)
+        if (_state == State.OscEscape)
         {
-            _state = State.Escape;
-            ClearParams();
-            _utf8Needed = 0;
-            return;
-        }
-
-        if (b < 0x20 && _state is not (State.OscString or State.SosPmApcString))
-        {
-            if (_state == State.Ground)
+            if (value == (byte)'\\')
             {
-                _dispatch.ExecuteC0(b);
+                FinishOsc();
+            }
+            else
+            {
+                AppendOsc(0x1B);
+                _state = State.OscString;
+                ProcessOsc(value);
             }
 
+            return;
+        }
+
+        if (_state == State.StringIgnore)
+        {
+            if (value == 0x1B)
+            {
+                _state = State.StringEscape;
+            }
+            else if (value is 0x07 or 0x9C)
+            {
+                _state = State.Ground;
+            }
+
+            return;
+        }
+
+        if (_state == State.StringEscape)
+        {
+            _state = value == (byte)'\\' ? State.Ground : State.StringIgnore;
+            return;
+        }
+
+        if (value is 0x18 or 0x1A)
+        {
+            _state = State.Ground;
+            ClearSequence();
+            ResetUtf8();
+            return;
+        }
+
+        if (value == 0x1B)
+        {
+            EmitIncompleteUtf8();
+            _state = State.Escape;
+            ClearSequence();
+            return;
+        }
+
+        if (value < 0x20)
+        {
+            EmitIncompleteUtf8();
+            _dispatch.ExecuteC0(value);
+            return;
+        }
+
+        if (value == 0x7F)
+        {
+            EmitIncompleteUtf8();
             return;
         }
 
         switch (_state)
         {
             case State.Ground:
-                Ground(b);
+                ProcessGround(value);
                 break;
             case State.Escape:
-                Escape(b);
+                ProcessEscape(value);
                 break;
             case State.EscapeIntermediate:
-                EscapeIntermediate(b);
+                ProcessEscapeIntermediate(value);
                 break;
             case State.CsiEntry:
-                CsiEntry(b);
+                ProcessCsiEntry(value);
                 break;
             case State.CsiParam:
-                CsiParam(b);
+                ProcessCsiParam(value);
+                break;
+            case State.CsiIntermediate:
+                ProcessCsiIntermediate(value);
                 break;
             case State.CsiIgnore:
-                if (b is >= 0x40 and <= 0x7E)
-                {
-                    _state = State.Ground;
-                }
-
-                break;
-            case State.OscString:
-                Osc(b);
-                break;
-            case State.SosPmApcString:
-            case State.DcsIgnore:
-                if (b is 0x07)
+                if (IsFinal(value))
                 {
                     _state = State.Ground;
                 }
@@ -115,203 +158,253 @@ public sealed class VtParser
         }
     }
 
-    private void Ground(byte b)
+    private void ProcessGround(byte value)
     {
         if (_utf8Needed > 0)
         {
-            if ((b & 0xC0) != 0x80)
+            if ((value & 0xC0) != 0x80)
             {
-                _utf8Needed = 0;
-                Ground(b);
+                EmitReplacement();
+                ResetUtf8();
+                ProcessGround(value);
                 return;
             }
 
-            _utf8Acc = (_utf8Acc << 6) | (b & 0x3F);
+            _utf8Accumulator = (_utf8Accumulator << 6) | (value & 0x3F);
             _utf8Needed--;
-            if (_utf8Needed == 0 && Rune.IsValid(_utf8Acc))
+            if (_utf8Needed == 0)
             {
-                _dispatch.Print(new Rune(_utf8Acc));
+                var scalar = _utf8Accumulator;
+                if (scalar >= _utf8Minimum && Rune.IsValid(scalar))
+                {
+                    _dispatch.Print(new Rune(scalar));
+                }
+                else
+                {
+                    EmitReplacement();
+                }
+
+                ResetUtf8();
             }
 
             return;
         }
 
-        if (b < 0x80)
+        if (value < 0x80)
         {
-            if (b >= 0x20)
-            {
-                _dispatch.Print(new Rune(b));
-            }
-
+            _dispatch.Print(new Rune(value));
             return;
         }
 
-        if (b <= 0x9F)
+        if (value is 0x9B)
         {
-            if (b == 0x9B)
-            {
-                EnterCsi();
-            }
-            else if (b == 0x9D)
-            {
-                EnterOsc();
-            }
-
+            EnterCsi();
             return;
         }
 
-        if ((b & 0xE0) == 0xC0)
+        if (value is 0x9D)
         {
-            _utf8Needed = 1;
-            _utf8Acc = b & 0x1F;
+            EnterOsc();
+            return;
         }
-        else if ((b & 0xF0) == 0xE0)
+
+        if (value is 0x90 or 0x98 or 0x9E or 0x9F)
         {
-            _utf8Needed = 2;
-            _utf8Acc = b & 0x0F;
+            _state = State.StringIgnore;
+            return;
         }
-        else if ((b & 0xF8) == 0xF0)
+
+        if (value is >= 0xC2 and <= 0xDF)
         {
-            _utf8Needed = 3;
-            _utf8Acc = b & 0x07;
+            StartUtf8(value & 0x1F, 1, 0x80);
+        }
+        else if (value is >= 0xE0 and <= 0xEF)
+        {
+            StartUtf8(value & 0x0F, 2, 0x800);
+        }
+        else if (value is >= 0xF0 and <= 0xF4)
+        {
+            StartUtf8(value & 0x07, 3, 0x10000);
+        }
+        else
+        {
+            EmitReplacement();
         }
     }
 
-    private void Escape(byte b)
+    private void ProcessEscape(byte value)
     {
-        switch (b)
+        switch (value)
         {
             case (byte)'[':
                 EnterCsi();
-                return;
+                break;
             case (byte)']':
                 EnterOsc();
-                return;
-            case (byte)'P' or (byte)'X' or (byte)'^' or (byte)'_':
-                _state = b == (byte)'P' ? State.DcsIgnore : State.SosPmApcString;
-                return;
+                break;
+            case (byte)'P':
+            case (byte)'X':
+            case (byte)'^':
+            case (byte)'_':
+                _state = State.StringIgnore;
+                break;
             case >= 0x20 and <= 0x2F:
-                _intermediate = b;
+                _intermediate = value;
                 _state = State.EscapeIntermediate;
-                return;
+                break;
             case >= 0x30 and <= 0x7E:
-                _dispatch.EscDispatch((char)b, 0);
+                _dispatch.EscDispatch((char)value, 0);
                 _state = State.Ground;
-                return;
+                break;
+            default:
+                _state = State.Ground;
+                break;
         }
     }
 
-    private void EscapeIntermediate(byte b)
+    private void ProcessEscapeIntermediate(byte value)
     {
-        if (b is >= 0x20 and <= 0x2F)
+        if (value is >= 0x20 and <= 0x2F)
         {
-            _intermediate = b;
-            return;
+            _intermediate = value;
         }
-
-        if (b is >= 0x30 and <= 0x7E)
+        else if (IsFinal(value))
         {
-            _dispatch.EscDispatch((char)b, _intermediate);
+            _dispatch.EscDispatch((char)value, _intermediate);
+            _state = State.Ground;
+        }
+        else
+        {
             _state = State.Ground;
         }
     }
 
-    private void CsiEntry(byte b)
+    private void ProcessCsiEntry(byte value)
     {
-        if (b is (byte)'?' or (byte)'>' or (byte)'=')
+        if (value is >= 0x3C and <= 0x3F)
         {
-            _privateMarker = true;
+            _privateMarker = value;
             _state = State.CsiParam;
-            return;
         }
-
-        CsiParam(b);
+        else
+        {
+            ProcessCsiParam(value);
+        }
     }
 
-    private void CsiParam(byte b)
+    private void ProcessCsiParam(byte value)
     {
-        if (b is >= (byte)'0' and <= (byte)'9')
+        if (value is >= (byte)'0' and <= (byte)'9')
         {
-            if (_currentParam < 0)
-            {
-                _currentParam = 0;
-            }
-
-            _currentParam = Math.Min((_currentParam * 10) + (b - '0'), 65535);
+            _currentParameter = _currentParameter < 0 ? 0 : _currentParameter;
+            _currentParameter = Math.Min((_currentParameter * 10) + (value - '0'), 65535);
             _state = State.CsiParam;
-            return;
         }
-
-        if (b is (byte)';' or (byte)':')
+        else if (value is (byte)';' or (byte)':')
         {
-            PushParam();
-            _state = State.CsiParam;
-            return;
+            PushParameter();
         }
-
-        if (b is >= 0x20 and <= 0x2F)
+        else if (value is >= 0x20 and <= 0x2F)
         {
-            _intermediate = b;
-            _state = State.CsiParam;
-            return;
+            PushParameterIfNeeded();
+            _intermediate = value;
+            _state = State.CsiIntermediate;
         }
-
-        if (b is >= 0x40 and <= 0x7E)
+        else if (IsFinal(value))
         {
-            PushParam();
-            var count = _paramCount;
-            _dispatch.CsiDispatch((char)b, _params.AsSpan(0, count), _intermediate, _privateMarker);
-            _state = State.Ground;
-            return;
+            DispatchCsi(value);
         }
-
-        if (b is >= 0x3C and <= 0x3F && _state == State.CsiParam)
+        else if (value is >= 0x3C and <= 0x3F)
         {
             _state = State.CsiIgnore;
         }
     }
 
-    private void Osc(byte b)
+    private void ProcessCsiIntermediate(byte value)
     {
-        if (b is 0x07)
+        if (value is >= 0x20 and <= 0x2F)
+        {
+            _intermediate = value;
+        }
+        else if (IsFinal(value))
+        {
+            DispatchCsi(value);
+        }
+        else
+        {
+            _state = State.CsiIgnore;
+        }
+    }
+
+    private void DispatchCsi(byte final)
+    {
+        PushParameterIfNeeded();
+        _dispatch.CsiDispatch(
+            (char)final,
+            _parameters.AsSpan(0, _parameterCount),
+            _intermediate,
+            _privateMarker);
+        _state = State.Ground;
+        ClearSequence();
+    }
+
+    private void ProcessOsc(byte value)
+    {
+        if (value is 0x07 or 0x9C)
         {
             FinishOsc();
-            return;
         }
-
-        if (b == 0x5C && _osc.Length > 0 && _osc[^1] == '\u001b')
+        else if (value == 0x1B)
         {
-            _osc.Length--;
-            FinishOsc();
-            return;
+            _state = State.OscEscape;
         }
-
-        if (b >= 0x20 || b == 0x09)
+        else if (value >= 0x20 || value == 0x09)
         {
-            _osc.Append((char)b);
+            AppendOsc(value);
+        }
+    }
+
+    private void AppendOsc(byte value)
+    {
+        if (_osc.Count < MaxStringBytes)
+        {
+            _osc.Add(value);
+        }
+        else
+        {
+            _osc.Clear();
+            _state = State.StringIgnore;
         }
     }
 
     private void FinishOsc()
     {
-        var text = _osc.ToString();
-        var split = text.IndexOf(';');
+        var text = Encoding.UTF8.GetString(_osc.ToArray());
+        var separator = text.IndexOf(';');
         var command = 0;
         ReadOnlySpan<char> data = text;
-        if (split >= 0)
+        if (separator >= 0)
         {
-            _ = int.TryParse(text.AsSpan(0, split), out command);
-            data = text.AsSpan(split + 1);
+            if (!int.TryParse(text.AsSpan(0, separator), out command))
+            {
+                command = -1;
+            }
+
+            data = text.AsSpan(separator + 1);
         }
 
-        _dispatch.OscDispatch(command, data);
+        if (command >= 0)
+        {
+            _dispatch.OscDispatch(command, data);
+        }
+
         _osc.Clear();
         _state = State.Ground;
     }
 
     private void EnterCsi()
     {
-        ClearParams();
+        ClearSequence();
         _state = State.CsiEntry;
     }
 
@@ -321,23 +414,58 @@ public sealed class VtParser
         _state = State.OscString;
     }
 
-    private void PushParam()
+    private void PushParameter()
     {
-        if (_paramCount >= _params.Length)
+        if (_parameterCount >= _parameters.Length)
         {
-            _currentParam = -1;
+            _state = State.CsiIgnore;
             return;
         }
 
-        _params[_paramCount++] = _currentParam < 0 ? -1 : _currentParam;
-        _currentParam = -1;
+        _parameters[_parameterCount++] = _currentParameter;
+        _currentParameter = -1;
     }
 
-    private void ClearParams()
+    private void PushParameterIfNeeded()
     {
-        _paramCount = 0;
-        _currentParam = -1;
-        _intermediate = 0;
-        _privateMarker = false;
+        if (_currentParameter >= 0 || _parameterCount > 0)
+        {
+            PushParameter();
+        }
     }
+
+    private void ClearSequence()
+    {
+        _parameterCount = 0;
+        _currentParameter = -1;
+        _intermediate = 0;
+        _privateMarker = 0;
+    }
+
+    private void StartUtf8(int accumulator, int needed, int minimum)
+    {
+        _utf8Accumulator = accumulator;
+        _utf8Needed = needed;
+        _utf8Minimum = minimum;
+    }
+
+    private void EmitIncompleteUtf8()
+    {
+        if (_utf8Needed > 0)
+        {
+            EmitReplacement();
+            ResetUtf8();
+        }
+    }
+
+    private void EmitReplacement() => _dispatch.Print(Rune.ReplacementChar);
+
+    private void ResetUtf8()
+    {
+        _utf8Needed = 0;
+        _utf8Accumulator = 0;
+        _utf8Minimum = 0;
+    }
+
+    private static bool IsFinal(byte value) => value is >= 0x40 and <= 0x7E;
 }

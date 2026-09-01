@@ -2,10 +2,34 @@ using System.Text;
 
 namespace Microsoft.Terminal.Core;
 
+public sealed record TextBufferLineSnapshot(IReadOnlyList<Cell> Cells, bool Wrapped);
+
+public sealed record TextBufferSnapshot(
+    int Columns,
+    int Rows,
+    int CursorX,
+    int CursorY,
+    int HistoryCount,
+    int ScrollOffset,
+    IReadOnlyList<TextBufferLineSnapshot> Lines);
+
 public sealed class TextBuffer
 {
-    private readonly List<Cell[]> _lines = [];
+    private sealed class BufferLine
+    {
+        public BufferLine(Cell[] cells)
+        {
+            Cells = cells;
+        }
+
+        public Cell[] Cells { get; }
+        public bool Wrapped { get; set; }
+    }
+
+    private CircularBuffer<BufferLine> _lines;
     private readonly int _historySize;
+    private bool[] _tabStops;
+    private int _scrollOffset;
 
     public TextBuffer(int columns, int rows, int historySize, bool hasHistory)
     {
@@ -13,7 +37,8 @@ public sealed class TextBuffer
         Rows = Math.Max(1, rows);
         _historySize = hasHistory ? Math.Max(0, historySize) : 0;
         HasHistory = hasHistory;
-        ScrollTop = 0;
+        _lines = new CircularBuffer<BufferLine>(Rows + _historySize);
+        _tabStops = CreateDefaultTabStops(Columns);
         ScrollBottom = Rows - 1;
         EnsureViewportLines();
     }
@@ -25,16 +50,19 @@ public sealed class TextBuffer
     public int CursorY { get; set; }
     public int ScrollTop { get; private set; }
     public int ScrollBottom { get; private set; }
-    public int ViewportStart { get; private set; }
-    public int ScrollOffset { get; set; }
+    public int ViewportStart => Math.Max(0, _lines.Count - Rows);
+    public int ScrollOffset
+    {
+        get => _scrollOffset;
+        set => _scrollOffset = Math.Clamp(value, 0, HistoryCount);
+    }
+
     public bool OriginMode { get; set; }
     public bool WrapPending { get; set; }
-
     public int TotalLines => _lines.Count;
-    public int HistoryCount => Math.Max(0, ViewportStart);
-
+    public int HistoryCount => ViewportStart;
     public CellAttributes CurrentAttributes { get; set; } = CellAttributes.Default;
-
+    public string? CurrentHyperlinkUri { get; set; }
     public int SavedCursorX { get; set; }
     public int SavedCursorY { get; set; }
     public CellAttributes SavedAttributes { get; set; } = CellAttributes.Default;
@@ -48,33 +76,50 @@ public sealed class TextBuffer
             return;
         }
 
-        var oldCols = Columns;
+        var oldColumns = Columns;
+        var oldViewport = ViewportStart;
+        var cursorAbsoluteLine = oldViewport + CursorY;
+        var source = _lines.ToList();
+
         Columns = columns;
         Rows = rows;
+        _tabStops = ResizeTabStops(_tabStops, columns);
         ScrollTop = 0;
-        ScrollBottom = Rows - 1;
-
-        for (var i = 0; i < _lines.Count; i++)
-        {
-            _lines[i] = ResizeRow(_lines[i], oldCols, columns);
-        }
-
-        EnsureViewportLines();
-        CursorX = Math.Clamp(CursorX, 0, Columns - 1);
-        CursorY = Math.Clamp(CursorY, 0, Rows - 1);
+        ScrollBottom = rows - 1;
         WrapPending = false;
         ScrollOffset = 0;
+
+        var reflowed = Reflow(source, oldColumns, columns, cursorAbsoluteLine, CursorX, out var cursorLine, out var cursorColumn);
+        while (reflowed.Count < rows)
+        {
+            reflowed.Add(NewBlankLine(CellAttributes.Default));
+        }
+
+        _lines.ResetCapacity(rows + _historySize, reflowed);
+        var dropped = Math.Max(0, reflowed.Count - _lines.Count);
+        cursorLine = Math.Max(0, cursorLine - dropped);
+
+        EnsureViewportLines();
+        var viewport = ViewportStart;
+        if (cursorLine < viewport)
+        {
+            cursorLine = viewport;
+        }
+        else if (cursorLine >= viewport + rows)
+        {
+            cursorLine = viewport + rows - 1;
+        }
+
+        CursorY = Math.Clamp(cursorLine - viewport, 0, rows - 1);
+        CursorX = Math.Clamp(cursorColumn, 0, columns - 1);
+
     }
 
-    public Cell[] GetRow(int viewportY)
-    {
-        var index = VisibleIndex(viewportY);
-        return _lines[index];
-    }
+    public Cell[] GetRow(int viewportY) => GetVisibleLine(viewportY).Cells;
 
     public Cell GetCell(int x, int y)
     {
-        if ((uint)x >= (uint)Columns)
+        if ((uint)x >= (uint)Columns || (uint)y >= (uint)Rows)
         {
             return Cell.Blank;
         }
@@ -82,32 +127,56 @@ public sealed class TextBuffer
         return GetRow(y)[x];
     }
 
+    public TextBufferSnapshot CreateSnapshot(bool includeHistory = false)
+    {
+        var first = includeHistory ? 0 : Math.Max(0, ViewportStart - ScrollOffset);
+        var count = includeHistory ? _lines.Count : Rows;
+        var copies = new TextBufferLineSnapshot[count];
+        for (var i = 0; i < count; i++)
+        {
+            var sourceIndex = Math.Min(first + i, _lines.Count - 1);
+            var cells = Array.AsReadOnly((Cell[])_lines[sourceIndex].Cells.Clone());
+            copies[i] = new TextBufferLineSnapshot(cells, _lines[sourceIndex].Wrapped);
+        }
+
+        return new TextBufferSnapshot(Columns, Rows, CursorX, CursorY, HistoryCount, ScrollOffset, copies);
+    }
+
     public void Print(Rune rune)
     {
         var width = WcWidth.Width(rune);
-        if (width <= 0)
+        if (width == 0)
         {
+            AppendCombining(rune);
             return;
         }
 
         if (WrapPending)
         {
+            GetLiveLine(CursorY).Wrapped = true;
             CarriageReturn();
             LineFeed();
-            WrapPending = false;
         }
 
         if (CursorX + width > Columns)
         {
+            GetLiveLine(CursorY).Wrapped = true;
             CarriageReturn();
             LineFeed();
         }
 
-        var row = GetRow(CursorY);
+        var row = GetLiveLine(CursorY).Cells;
+        ClearGlyphAt(row, CursorX);
+        if (width == 2 && CursorX + 1 < Columns)
+        {
+            ClearGlyphAt(row, CursorX + 1);
+        }
+
         row[CursorX] = new Cell
         {
             Rune = rune,
             Attributes = CurrentAttributes,
+            HyperlinkUri = CurrentHyperlinkUri,
         };
 
         if (width == 2 && CursorX + 1 < Columns)
@@ -117,6 +186,7 @@ public sealed class TextBuffer
                 Rune = new Rune(' '),
                 Attributes = CurrentAttributes,
                 IsWideContinuation = true,
+                HyperlinkUri = CurrentHyperlinkUri,
             };
         }
 
@@ -171,13 +241,63 @@ public sealed class TextBuffer
         if (CursorX > 0)
         {
             CursorX--;
+            if (GetLiveLine(CursorY).Cells[CursorX].IsWideContinuation && CursorX > 0)
+            {
+                CursorX--;
+            }
         }
     }
 
-    public void Tab()
+    public void Tab(int count = 1)
     {
         WrapPending = false;
-        CursorX = Math.Min(Columns - 1, (CursorX + 8) & ~7);
+        for (var n = 0; n < Math.Max(1, count); n++)
+        {
+            var next = Columns - 1;
+            for (var x = CursorX + 1; x < Columns; x++)
+            {
+                if (_tabStops[x])
+                {
+                    next = x;
+                    break;
+                }
+            }
+
+            CursorX = next;
+        }
+    }
+
+    public void BackTab(int count = 1)
+    {
+        WrapPending = false;
+        for (var n = 0; n < Math.Max(1, count); n++)
+        {
+            var previous = 0;
+            for (var x = CursorX - 1; x > 0; x--)
+            {
+                if (_tabStops[x])
+                {
+                    previous = x;
+                    break;
+                }
+            }
+
+            CursorX = previous;
+        }
+    }
+
+    public void SetTabStop() => _tabStops[CursorX] = true;
+
+    public void ClearTabStop(bool all)
+    {
+        if (all)
+        {
+            Array.Clear(_tabStops);
+        }
+        else
+        {
+            _tabStops[CursorX] = false;
+        }
     }
 
     public void SetCursor(int row, int col, bool relativeToOrigin = true)
@@ -189,11 +309,14 @@ public sealed class TextBuffer
         CursorX = Math.Clamp(col, 0, Columns - 1);
     }
 
-    public void MoveCursor(int dx, int dy)
+    public void MoveCursor(int dx, int dy, bool respectMargins = false)
     {
         WrapPending = false;
         CursorX = Math.Clamp(CursorX + dx, 0, Columns - 1);
-        CursorY = Math.Clamp(CursorY + dy, 0, Rows - 1);
+        var withinMargins = CursorY >= ScrollTop && CursorY <= ScrollBottom;
+        var top = OriginMode || (respectMargins && withinMargins) ? ScrollTop : 0;
+        var bottom = OriginMode || (respectMargins && withinMargins) ? ScrollBottom : Rows - 1;
+        CursorY = Math.Clamp(CursorY + dy, top, bottom);
     }
 
     public void SetScrollRegion(int top, int bottom)
@@ -207,9 +330,7 @@ public sealed class TextBuffer
 
         ScrollTop = top;
         ScrollBottom = bottom;
-        CursorX = 0;
-        CursorY = OriginMode ? ScrollTop : 0;
-        WrapPending = false;
+        SetCursor(0, 0);
     }
 
     public void EraseInDisplay(int mode)
@@ -235,7 +356,7 @@ public sealed class TextBuffer
 
     public void EraseInLine(int mode)
     {
-        var row = GetRow(CursorY);
+        var row = GetLiveLine(CursorY).Cells;
         switch (mode)
         {
             case 1:
@@ -252,107 +373,115 @@ public sealed class TextBuffer
 
     public void InsertLines(int count)
     {
-        count = Math.Max(1, count);
-        var start = ViewportStart + CursorY;
-        var end = ViewportStart + ScrollBottom;
-        for (var i = 0; i < count; i++)
+        if (CursorY < ScrollTop || CursorY > ScrollBottom)
         {
-            if (end >= start)
-            {
-                _lines.RemoveAt(end);
-                _lines.Insert(start, BlankRow());
-            }
+            return;
+        }
+
+        count = Math.Min(Math.Max(1, count), ScrollBottom - CursorY + 1);
+        var start = ViewportStart + CursorY;
+        var bottom = ViewportStart + ScrollBottom;
+        for (var y = bottom; y >= start + count; y--)
+        {
+            _lines[y] = _lines[y - count];
+        }
+
+        for (var y = start; y < start + count; y++)
+        {
+            _lines[y] = NewBlankLine(CurrentAttributes);
         }
     }
 
     public void DeleteLines(int count)
     {
-        count = Math.Max(1, count);
-        var start = ViewportStart + CursorY;
-        var end = ViewportStart + ScrollBottom;
-        for (var i = 0; i < count; i++)
+        if (CursorY < ScrollTop || CursorY > ScrollBottom)
         {
-            if (end >= start)
-            {
-                _lines.RemoveAt(start);
-                _lines.Insert(end, BlankRow());
-            }
+            return;
+        }
+
+        count = Math.Min(Math.Max(1, count), ScrollBottom - CursorY + 1);
+        var start = ViewportStart + CursorY;
+        var bottom = ViewportStart + ScrollBottom;
+        for (var y = start; y <= bottom - count; y++)
+        {
+            _lines[y] = _lines[y + count];
+        }
+
+        for (var y = bottom - count + 1; y <= bottom; y++)
+        {
+            _lines[y] = NewBlankLine(CurrentAttributes);
         }
     }
 
     public void InsertCharacters(int count)
     {
-        count = Math.Max(1, count);
-        var row = GetRow(CursorY);
-        for (var i = 0; i < count; i++)
+        var row = GetLiveLine(CursorY).Cells;
+        count = Math.Min(Math.Max(1, count), Columns - CursorX);
+        Array.Copy(row, CursorX, row, CursorX + count, Columns - CursorX - count);
+        for (var x = CursorX; x < CursorX + count; x++)
         {
-            Array.Copy(row, CursorX, row, CursorX + 1, Columns - CursorX - 1);
-            row[CursorX] = BlankWithCurrent();
+            row[x] = BlankWith(CurrentAttributes);
         }
+
+        RepairWideCells(row);
     }
 
     public void DeleteCharacters(int count)
     {
-        count = Math.Max(1, count);
-        var row = GetRow(CursorY);
-        var remaining = Math.Max(0, Columns - CursorX - count);
-        if (remaining > 0)
-        {
-            Array.Copy(row, CursorX + count, row, CursorX, remaining);
-        }
-
+        var row = GetLiveLine(CursorY).Cells;
+        count = Math.Min(Math.Max(1, count), Columns - CursorX);
+        Array.Copy(row, CursorX + count, row, CursorX, Columns - CursorX - count);
         for (var x = Columns - count; x < Columns; x++)
         {
-            if (x >= CursorX)
-            {
-                row[Math.Max(x, CursorX)] = BlankWithCurrent();
-            }
+            row[x] = BlankWith(CurrentAttributes);
         }
 
-        for (var x = Math.Max(CursorX, Columns - count); x < Columns; x++)
-        {
-            row[x] = BlankWithCurrent();
-        }
+        RepairWideCells(row);
     }
 
     public void EraseCharacters(int count)
     {
-        count = Math.Max(1, count);
-        var row = GetRow(CursorY);
-        var end = Math.Min(Columns, CursorX + count);
-        EraseCells(row, CursorX, end);
+        var row = GetLiveLine(CursorY).Cells;
+        EraseCells(row, CursorX, Math.Min(Columns, CursorX + Math.Max(1, count)));
     }
 
     public void ScrollUp(int count)
     {
-        count = Math.Max(1, count);
+        count = Math.Min(Math.Max(1, count), ScrollBottom - ScrollTop + 1);
         for (var i = 0; i < count; i++)
         {
             if (ScrollTop == 0 && ScrollBottom == Rows - 1 && HasHistory)
             {
-                _lines.Add(BlankRow());
-                ViewportStart++;
-                TrimHistoryOverflow();
+                _lines.AddLast(NewBlankLine(CurrentAttributes));
+                ScrollOffset = 0;
             }
             else
             {
                 var top = ViewportStart + ScrollTop;
                 var bottom = ViewportStart + ScrollBottom;
-                _lines.RemoveAt(top);
-                _lines.Insert(bottom, BlankRow());
+                for (var y = top; y < bottom; y++)
+                {
+                    _lines[y] = _lines[y + 1];
+                }
+
+                _lines[bottom] = NewBlankLine(CurrentAttributes);
             }
         }
     }
 
     public void ScrollDown(int count)
     {
-        count = Math.Max(1, count);
+        count = Math.Min(Math.Max(1, count), ScrollBottom - ScrollTop + 1);
         for (var i = 0; i < count; i++)
         {
             var top = ViewportStart + ScrollTop;
             var bottom = ViewportStart + ScrollBottom;
-            _lines.RemoveAt(bottom);
-            _lines.Insert(top, BlankRow());
+            for (var y = bottom; y > top; y--)
+            {
+                _lines[y] = _lines[y - 1];
+            }
+
+            _lines[top] = NewBlankLine(CurrentAttributes);
         }
     }
 
@@ -374,6 +503,7 @@ public sealed class TextBuffer
     public void Reset(bool keepHistory)
     {
         CurrentAttributes = CellAttributes.Default;
+        CurrentHyperlinkUri = null;
         CursorX = 0;
         CursorY = 0;
         WrapPending = false;
@@ -381,10 +511,10 @@ public sealed class TextBuffer
         ScrollTop = 0;
         ScrollBottom = Rows - 1;
         ScrollOffset = 0;
+        _tabStops = CreateDefaultTabStops(Columns);
         if (!keepHistory)
         {
             _lines.Clear();
-            ViewportStart = 0;
         }
 
         EnsureViewportLines();
@@ -403,12 +533,7 @@ public sealed class TextBuffer
             var last = from - 1;
             for (var x = from; x <= to && x < Columns; x++)
             {
-                if (row[x].IsWideContinuation)
-                {
-                    continue;
-                }
-
-                if (!row[x].IsBlank)
+                if (!row[x].IsWideContinuation && !row[x].IsBlank)
                 {
                     last = x;
                 }
@@ -418,11 +543,11 @@ public sealed class TextBuffer
             {
                 if (!row[x].IsWideContinuation)
                 {
-                    sb.Append(row[x].Rune.ToString());
+                    sb.Append(row[x].Text);
                 }
             }
 
-            if (y != endY)
+            if (y != endY && !GetVisibleLine(y).Wrapped)
             {
                 sb.Append('\n');
             }
@@ -433,83 +558,62 @@ public sealed class TextBuffer
 
     public string GetVisibleText() => GetText(0, 0, Columns - 1, Rows - 1);
 
-    private void EnsureViewportLines()
+    private BufferLine GetVisibleLine(int viewportY)
     {
-        var needed = ViewportStart + Rows;
-        while (_lines.Count < needed)
-        {
-            _lines.Add(BlankRow());
-        }
+        EnsureViewportLines();
+        viewportY = Math.Clamp(viewportY, 0, Rows - 1);
+        var index = Math.Clamp(ViewportStart - ScrollOffset + viewportY, 0, _lines.Count - 1);
+        return _lines[index];
     }
 
-    private void TrimHistoryOverflow()
+    private BufferLine GetLiveLine(int viewportY)
     {
-        if (!HasHistory || _historySize <= 0)
-        {
-            return;
-        }
+        EnsureViewportLines();
+        viewportY = Math.Clamp(viewportY, 0, Rows - 1);
+        return _lines[ViewportStart + viewportY];
+    }
 
-        while (ViewportStart > _historySize)
+    private void EnsureViewportLines()
+    {
+        while (_lines.Count < Rows)
         {
-            _lines.RemoveAt(0);
-            ViewportStart--;
+            _lines.AddLast(NewBlankLine(CellAttributes.Default));
         }
     }
 
     private void TrimHistory()
     {
-        if (ViewportStart <= 0)
+        while (_lines.Count > Rows)
         {
-            return;
+            _lines.RemoveFirst();
         }
 
-        _lines.RemoveRange(0, ViewportStart);
-        ViewportStart = 0;
+        ScrollOffset = 0;
     }
 
-    private int VisibleIndex(int viewportY)
-    {
-        viewportY = Math.Clamp(viewportY, 0, Rows - 1);
-        var index = ViewportStart - ScrollOffset + viewportY;
-        if (index < 0)
-        {
-            index = 0;
-        }
-
-        if (index >= _lines.Count)
-        {
-            EnsureViewportLines();
-            index = Math.Min(index, _lines.Count - 1);
-        }
-
-        return index;
-    }
-
-    private Cell[] BlankRow()
+    private BufferLine NewBlankLine(CellAttributes attributes)
     {
         var row = new Cell[Columns];
-        for (var i = 0; i < row.Length; i++)
+        for (var x = 0; x < row.Length; x++)
         {
-            row[i] = BlankWithCurrent();
+            row[x] = BlankWith(attributes);
         }
 
-        return row;
+        return new BufferLine(row);
     }
 
-    private Cell BlankWithCurrent() => new()
+    private static Cell BlankWith(CellAttributes attributes) => new()
     {
         Rune = new Rune(' '),
-        Attributes = CurrentAttributes,
+        Attributes = attributes,
     };
 
     private void EraseLineRange(int fromY, int toY)
     {
-        for (var y = fromY; y <= toY; y++)
+        for (var y = Math.Max(0, fromY); y <= Math.Min(toY, Rows - 1); y++)
         {
-            if (y >= 0 && y < Rows)
-            {
-                EraseCells(GetRow(y), 0, Columns);
-            }
+            EraseCells(GetLiveLine(y).Cells, 0, Columns);
+            GetLiveLine(y).Wrapped = false;
         }
     }
 
@@ -517,27 +621,266 @@ public sealed class TextBuffer
     {
         from = Math.Clamp(from, 0, row.Length);
         to = Math.Clamp(to, 0, row.Length);
+        if (from < to)
+        {
+            ClearGlyphAt(row, from);
+            ClearGlyphAt(row, to - 1);
+        }
+
         for (var x = from; x < to; x++)
         {
-            row[x] = BlankWithCurrent();
+            row[x] = BlankWith(CurrentAttributes);
         }
     }
 
-    private static Cell[] ResizeRow(Cell[] source, int oldCols, int newCols)
+    private void AppendCombining(Rune rune)
     {
-        var row = new Cell[newCols];
-        var copy = Math.Min(oldCols, newCols);
-        for (var i = 0; i < copy && i < source.Length; i++)
+        var y = CursorY;
+        var x = CursorX - 1;
+        if (WrapPending)
         {
-            row[i] = source[i];
+            x = CursorX;
+        }
+        else if (x < 0 && y > 0 && GetLiveLine(y - 1).Wrapped)
+        {
+            y--;
+            x = Columns - 1;
         }
 
-        for (var i = copy; i < newCols; i++)
+        if (x < 0)
         {
-            row[i] = Cell.Blank;
+            return;
         }
 
-        return row;
+        var row = GetLiveLine(y).Cells;
+        if (row[x].IsWideContinuation && x > 0)
+        {
+            x--;
+        }
+
+        if (row[x].IsBlank)
+        {
+            return;
+        }
+
+        row[x].CombiningCharacters = (row[x].CombiningCharacters ?? string.Empty) + rune;
+    }
+
+    private static void ClearGlyphAt(Cell[] row, int x)
+    {
+        if ((uint)x >= (uint)row.Length)
+        {
+            return;
+        }
+
+        if (row[x].IsWideContinuation)
+        {
+            row[x] = Cell.Blank;
+            if (x > 0)
+            {
+                row[x - 1] = Cell.Blank;
+            }
+        }
+        else if (WcWidth.Width(row[x].Rune) == 2)
+        {
+            row[x] = Cell.Blank;
+            if (x + 1 < row.Length && row[x + 1].IsWideContinuation)
+            {
+                row[x + 1] = Cell.Blank;
+            }
+        }
+    }
+
+    private static void RepairWideCells(Cell[] row)
+    {
+        for (var x = 0; x < row.Length; x++)
+        {
+            if (row[x].IsWideContinuation)
+            {
+                if (x == 0 || WcWidth.Width(row[x - 1].Rune) != 2)
+                {
+                    row[x] = Cell.Blank;
+                }
+            }
+            else if (WcWidth.Width(row[x].Rune) == 2)
+            {
+                if (x + 1 >= row.Length)
+                {
+                    row[x] = Cell.Blank;
+                }
+                else
+                {
+                    row[x + 1] = new Cell
+                    {
+                        Rune = new Rune(' '),
+                        Attributes = row[x].Attributes,
+                        IsWideContinuation = true,
+                        HyperlinkUri = row[x].HyperlinkUri,
+                    };
+                    x++;
+                }
+            }
+        }
+    }
+
+    private List<BufferLine> Reflow(
+        IReadOnlyList<BufferLine> source,
+        int oldColumns,
+        int newColumns,
+        int cursorLine,
+        int cursorX,
+        out int newCursorLine,
+        out int newCursorX)
+    {
+        var result = new List<BufferLine>();
+        newCursorLine = 0;
+        newCursorX = 0;
+        var paragraphCells = new List<Cell>();
+        var cursorOffset = -1;
+
+        for (var lineIndex = 0; lineIndex < source.Count; lineIndex++)
+        {
+            var line = source[lineIndex];
+            var used = line.Wrapped ? oldColumns : LastContentColumn(line.Cells) + 1;
+            if (lineIndex == cursorLine)
+            {
+                used = Math.Max(used, cursorX);
+                cursorOffset = DisplayWidth(paragraphCells) + Math.Min(cursorX, used);
+            }
+
+            for (var x = 0; x < used && x < line.Cells.Length; x++)
+            {
+                if (!line.Cells[x].IsWideContinuation)
+                {
+                    paragraphCells.Add(line.Cells[x]);
+                }
+            }
+
+            if (!line.Wrapped || lineIndex == source.Count - 1)
+            {
+                EmitParagraph(paragraphCells, newColumns, result, cursorOffset, out var relativeLine, out var relativeColumn);
+                if (cursorOffset >= 0)
+                {
+                    newCursorLine = result.Count - relativeLine;
+                    newCursorX = relativeColumn;
+                    cursorOffset = -1;
+                }
+
+                paragraphCells.Clear();
+            }
+        }
+
+        return result;
+    }
+
+    private void EmitParagraph(
+        IReadOnlyList<Cell> cells,
+        int columns,
+        List<BufferLine> output,
+        int cursorOffset,
+        out int linesAfterCursor,
+        out int cursorColumn)
+    {
+        var line = NewBlankLine(CellAttributes.Default);
+        var x = 0;
+        var cursorLineIndex = -1;
+        cursorColumn = 0;
+        var consumedWidth = 0;
+
+        if (cursorOffset == 0)
+        {
+            cursorLineIndex = output.Count;
+        }
+
+        foreach (var cell in cells)
+        {
+            var width = Math.Max(1, WcWidth.Width(cell.Rune));
+            if (width > columns)
+            {
+                continue;
+            }
+
+            if (x + width > columns)
+            {
+                line.Wrapped = true;
+                output.Add(line);
+                line = NewBlankLine(CellAttributes.Default);
+                x = 0;
+            }
+
+            if (cursorLineIndex < 0 && cursorOffset >= 0 && consumedWidth >= cursorOffset)
+            {
+                cursorLineIndex = output.Count;
+                cursorColumn = x;
+            }
+
+            line.Cells[x] = cell;
+            line.Cells[x].IsWideContinuation = false;
+            if (width == 2)
+            {
+                line.Cells[x + 1] = new Cell
+                {
+                    Rune = new Rune(' '),
+                    Attributes = cell.Attributes,
+                    IsWideContinuation = true,
+                    HyperlinkUri = cell.HyperlinkUri,
+                };
+            }
+
+            x += width;
+            consumedWidth += width;
+        }
+
+        if (cursorLineIndex < 0 && cursorOffset >= 0)
+        {
+            cursorLineIndex = output.Count;
+            cursorColumn = Math.Min(x, columns - 1);
+        }
+
+        output.Add(line);
+        linesAfterCursor = cursorLineIndex < 0 ? 0 : output.Count - cursorLineIndex;
+    }
+
+    private static int LastContentColumn(Cell[] cells)
+    {
+        for (var x = cells.Length - 1; x >= 0; x--)
+        {
+            if (!cells[x].IsBlank && !cells[x].IsWideContinuation)
+            {
+                return Math.Min(cells.Length - 1, x + Math.Max(1, WcWidth.Width(cells[x].Rune)) - 1);
+            }
+        }
+
+        return -1;
+    }
+
+    private static int DisplayWidth(IReadOnlyList<Cell> cells)
+    {
+        var width = 0;
+        for (var i = 0; i < cells.Count; i++)
+        {
+            width += Math.Max(1, WcWidth.Width(cells[i].Rune));
+        }
+
+        return width;
+    }
+
+    private static bool[] CreateDefaultTabStops(int columns)
+    {
+        var stops = new bool[columns];
+        for (var x = 8; x < columns; x += 8)
+        {
+            stops[x] = true;
+        }
+
+        return stops;
+    }
+
+    private static bool[] ResizeTabStops(bool[] source, int columns)
+    {
+        var stops = CreateDefaultTabStops(columns);
+        Array.Copy(source, stops, Math.Min(source.Length, stops.Length));
+        return stops;
     }
 
     private static void Normalize(ref int x1, ref int y1, ref int x2, ref int y2)
