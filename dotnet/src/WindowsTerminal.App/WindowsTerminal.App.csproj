@@ -10,6 +10,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <AvaloniaResource Include="..\..\..\src\cascadia\CascadiaPackage\ProfileIcons\*.scale-100.png"
+                      Link="Assets\ProfileIcons\%(Filename)%(Extension)" />
+    <AvaloniaResource Include="..\..\..\src\cascadia\CascadiaPackage\ProfileGeneratorIcons\*.png"
+                      Link="Assets\ProfileGeneratorIcons\%(Filename)%(Extension)" />
+    <AvaloniaResource Include="..\..\..\res\terminal\images\Square44x44Logo.targetsize-16_altform-unplated.png"
+                      Link="Assets\ProfileIcons\terminal.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Terminal.Control\Terminal.Control.csproj" />
     <ProjectReference Include="..\Terminal.Connection\Terminal.Connection.csproj" />
     <ProjectReference Include="..\Terminal.Settings\Terminal.Settings.csproj" />

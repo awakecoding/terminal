@@ -19,16 +19,17 @@
   </TrayIcon.Icons>
   <Application.Styles>
     <FluentTheme />
-    <Style Selector="Window">
-      <Setter Property="FontFamily" Value="Cascadia Mono, Consolas" />
-    </Style>
     <Style Selector="Button.tab">
       <Setter Property="Background" Value="Transparent" />
-      <Setter Property="Foreground" Value="#CCCCCC" />
-      <Setter Property="Padding" Value="12,6" />
-      <Setter Property="Margin" Value="2,4,2,0" />
-      <Setter Property="CornerRadius" Value="6,6,0,0" />
+      <Setter Property="Foreground" Value="#F2F2F2" />
+      <Setter Property="Padding" Value="10,0" />
+      <Setter Property="Margin" Value="0,4,2,0" />
+      <Setter Property="Height" Value="36" />
+      <Setter Property="MinWidth" Value="120" />
+      <Setter Property="MaxWidth" Value="240" />
+      <Setter Property="CornerRadius" Value="7,7,0,0" />
       <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
     </Style>
     <Style Selector="Button.tab:pointerover">
       <Setter Property="Background" Value="#333333" />
@@ -39,14 +40,14 @@
     </Style>
     <Style Selector="Button.icon">
       <Setter Property="Background" Value="Transparent" />
-      <Setter Property="Foreground" Value="#CCCCCC" />
+      <Setter Property="Foreground" Value="#F2F2F2" />
       <Setter Property="Width" Value="32" />
       <Setter Property="Height" Value="32" />
       <Setter Property="Padding" Value="0" />
       <Setter Property="BorderThickness" Value="0" />
     </Style>
     <Style Selector="Button.icon:pointerover">
-      <Setter Property="Background" Value="#333333" />
+      <Setter Property="Background" Value="#3A3A3A" />
     </Style>
   </Application.Styles>
 </Application>

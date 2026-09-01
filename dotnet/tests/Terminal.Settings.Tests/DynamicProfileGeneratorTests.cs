@@ -286,6 +286,38 @@ public sealed class DynamicProfileGeneratorTests
     }
 
     [Fact]
+    public async Task NewSettingsPreferGeneratedPowerShellLikeWindowsTerminal()
+    {
+        var preferred = Guid.Parse("574e775e-4f2a-5b96-ac1e-a2962a402336");
+        var generator = new StubGenerator(
+            DynamicProfileSource.PowerShellCore,
+            [
+                new ProfileSettings
+                {
+                    Guid = preferred.ToString("B"),
+                    Name = "PowerShell",
+                    Source = DynamicProfileSource.PowerShellCore,
+                    Commandline = "pwsh.exe",
+                },
+            ]);
+        const string defaults = """
+            {
+              "defaultProfile": "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}",
+              "profiles": { "defaults": {}, "list": [] },
+              "schemes": [{ "name": "Campbell" }]
+            }
+            """;
+
+        var loaded = await DynamicSettingsLoader.LoadAsync(
+            defaults,
+            null,
+            [],
+            new DynamicProfileManager([generator]));
+
+        Assert.Equal(preferred.ToString("B"), loaded.Settings.DefaultProfile);
+    }
+
+    [Fact]
     public async Task OrphanIsHiddenWithoutPersistingAUserHiddenOverride()
     {
         var orphan = Guid.NewGuid();

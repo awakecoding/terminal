@@ -1,5 +1,4 @@
 using Avalonia;
-using Avalonia.Media;
 using WindowsTerminal.Broker;
 using WindowsTerminal.Cli;
 
@@ -73,10 +72,6 @@ internal static class Program
     public static AppBuilder BuildAvaloniaApp() =>
         AppBuilder.Configure<App>()
             .UsePlatformDetect()
-            .With(new FontManagerOptions
-            {
-                DefaultFamilyName = "avares://WindowsTerminal/Assets/Fonts/CascadiaMono.ttf#Cascadia Mono",
-            })
             .LogToTrace();
 
     private static async ValueTask<BrokerResponse> ForwardToPrimaryAsync(CliInvocation invocation)

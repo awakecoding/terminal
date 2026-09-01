@@ -3,6 +3,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Input.TextInput;
 using Microsoft.Terminal.Control;
+using Microsoft.Terminal.Render;
 using Microsoft.Terminal.Settings;
 using Xunit;
 
@@ -10,6 +11,23 @@ namespace Terminal.Control.Tests;
 
 public sealed class TermControlAccessibilityTests
 {
+    [AvaloniaFact]
+    public void DefaultCascadiaMetricsMatchWindowsTerminalPointsAndDpiRounding()
+    {
+        var profile = new ProfileSettings
+        {
+            FontFace = "Cascadia Mono",
+            FontSize = 12,
+        };
+
+        var defaultDpi = TermControl.MeasureCell(profile);
+        var scaled = TermControl.MeasureCell(profile, 1.5);
+
+        Assert.Equal(new CellSize(9, 19), defaultDpi);
+        Assert.Equal(Math.Round(scaled.Width * 1.5), scaled.Width * 1.5, 6);
+        Assert.Equal(Math.Round(scaled.Height * 1.5), scaled.Height * 1.5, 6);
+    }
+
     [AvaloniaFact]
     public void AutomationPeerExposesDocumentValueSelectionAndCaret()
     {
@@ -144,6 +162,19 @@ public sealed class TermControlAccessibilityTests
         Assert.Equal("C1", control.BuildCopyPayload()?.Text);
         Assert.True(control.SelectCommand(TerminalShellSelectionDirection.Next));
         Assert.Equal("C2", control.BuildCopyPayload()?.Text);
+    }
+
+    [Fact]
+    public void ClickWithoutDragDoesNotLeaveASelectionThatConsumesEnter()
+    {
+        var control = new TermControl();
+        control.Engine.Resize(20, 3);
+        control.Engine.Feed("prompt");
+
+        control.BeginSelection(2, 0);
+        control.EndSelection();
+
+        Assert.False(control.HasSelection);
     }
 
     [Fact]

@@ -293,6 +293,17 @@ public static class DynamicSettingsLoader
         var settings = SettingsLoader.Load(defaultsJson, userJson, layers, userSource);
         settings.Diagnostics.AddRange(generation.Diagnostics);
         generation.Reconcile(settings);
+        if (userJson is null)
+        {
+            var preferredPowerShell = settings.Profiles.FirstOrDefault(static profile =>
+                profile.Source == DynamicProfileSource.PowerShellCore &&
+                profile.Name.Equals("PowerShell", StringComparison.Ordinal));
+            if (preferredPowerShell?.Guid is { Length: > 0 } preferredGuid)
+            {
+                settings.DefaultProfile = preferredGuid;
+            }
+        }
+
         return new DynamicSettingsLoadResult(settings, generation);
     }
 }

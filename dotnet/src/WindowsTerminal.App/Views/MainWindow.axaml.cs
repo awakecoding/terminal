@@ -7,6 +7,8 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using Microsoft.Terminal.Connection;
 using Microsoft.Terminal.Control;
@@ -18,6 +20,7 @@ using WindowsTerminal.Models;
 using WindowsTerminal.Panes;
 using WindowsTerminal.Routing;
 using WindowsTerminal.Settings;
+using System.Runtime.CompilerServices;
 
 namespace WindowsTerminal.Views;
 
@@ -30,6 +33,8 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     private readonly ActionDispatcher _actionDispatcher = new();
     private readonly TabCollection<TerminalTab, TabLayoutDescriptor> _tabCollection = new();
     private readonly List<PaletteItem> _paletteItems = [];
+    private readonly Dictionary<string, Bitmap> _tabIconCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConditionalWeakTable<TerminalPane, ScrollBar> _paneScrollBars = new();
     private IReadOnlyList<TerminalTab> _tabs => _tabCollection.Items;
     private uint _nextPaneId;
     private TerminalTab? _activeTab;
@@ -89,8 +94,12 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             : DynamicProfileManager.CreateDefault();
         _settings = SettingsService.LoadWithDynamicProfiles(_dynamicProfileManager);
         _stateStore = SettingsService.LoadApplicationState();
-        Width = Math.Max(640, _settings.InitialCols * 8);
-        Height = Math.Max(400, _settings.InitialRows * 16 + 80);
+        var defaultProfile = _settings.GetDefaultProfile();
+        var defaultCell = TermControl.MeasureCell(defaultProfile, DisplayScale());
+        Width = Math.Max(
+            640,
+            (_settings.InitialCols * defaultCell.Width) + 16 + ScrollbarWidth(defaultProfile));
+        Height = Math.Max(400, (_settings.InitialRows * defaultCell.Height) + 56);
         Opened += OnOpened;
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
         AddHandler(TextInputEvent, OnWindowTextInput, RoutingStrategies.Tunnel);
@@ -177,14 +186,21 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             Position = new PixelPoint(x, y);
         }
 
+        var profile = ResolveLaunchProfile(activation) ??
+                      _activeTab?.Panes.ActiveContent?.Profile ??
+                      _settings.GetDefaultProfile();
+        var cell = TermControl.MeasureCell(profile, DisplayScale());
         if (activation.Columns is { } columns)
         {
-            Width = Math.Max(320, columns * 8);
+            Width = Math.Max(320, (columns * cell.Width) + 16 + ScrollbarWidth(profile));
         }
 
         if (activation.Rows is { } rows)
         {
-            Height = Math.Max(240, rows * 16 + 80);
+            var titleBarHeight = activation.LaunchMode.HasFlag(TerminalWindowLaunchMode.Focus)
+                ? 0
+                : 40;
+            Height = Math.Max(240, (rows * cell.Height) + 16 + titleBarHeight);
         }
 
         if (activation.LaunchMode.HasFlag(TerminalWindowLaunchMode.Fullscreen))
@@ -198,6 +214,25 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
         TitleBar.IsVisible = !activation.LaunchMode.HasFlag(TerminalWindowLaunchMode.Focus);
     }
+
+    private ProfileSettings? ResolveLaunchProfile(TerminalWindowActivation activation)
+    {
+        foreach (var action in activation.Actions)
+        {
+            if (action.Action == ShortcutAction.NewTab &&
+                action.Args is NewTabArgs args)
+            {
+                return ResolveProfile(args.ContentArgs);
+            }
+        }
+
+        return _initialProfile;
+    }
+
+    private double DisplayScale() =>
+        Screens.ScreenFromPoint(Position)?.Scaling ??
+        Screens.Primary?.Scaling ??
+        1;
 
     private static bool IsDefaultStartupActivation(TerminalWindowActivation activation) =>
         activation.Actions.Count == 0 ||
@@ -268,6 +303,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         }
         else if (item.Profile is not null)
         {
+            menu.Icon = CreateTabIcon(ProfileVisualDefaults.Icon(item.Profile));
             menu.Command = new RelayCommand(() => _ = CreateTabAsync(item.Profile));
         }
         else if (item.ActionId is { } actionId &&
@@ -325,7 +361,9 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             presentation);
         control.TitleChanged += (_, title) =>
         {
-            pane.Title = profile.SuppressApplicationTitle || string.IsNullOrWhiteSpace(title)
+            pane.Title = profile.SuppressApplicationTitle ||
+                         string.IsNullOrWhiteSpace(title) ||
+                         IsExecutableTitle(profile, title)
                 ? (string.IsNullOrWhiteSpace(profile.TabTitle) ? profile.Name : profile.TabTitle)
                 : title;
             var tab = FindTab(pane);
@@ -359,6 +397,24 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             }
         };
         return pane;
+    }
+
+    private static bool IsExecutableTitle(ProfileSettings profile, string title)
+    {
+        var commandLine = profile.ExpandCommandline().Trim();
+        var normalizedTitle = title.Trim().Trim('"');
+        if (normalizedTitle.Equals(commandLine.Trim('"'), StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var closingQuote = commandLine.StartsWith('"') ? commandLine.IndexOf('"', 1) : -1;
+        var executable = closingQuote > 1
+            ? commandLine[1..closingQuote]
+            : commandLine.Split(' ', 2)[0];
+        return normalizedTitle.Equals(
+            executable.Trim().Trim('"'),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private IRestartableTerminalConnection CreateConnection(ProfileSettings profile)
@@ -600,12 +656,21 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private Border BuildPaneLeaf(TerminalTab tab, TerminalPane pane)
     {
-        var active = ReferenceEquals(tab.Panes.ActiveContent, pane);
+        var active = tab.Panes.Count > 1 && ReferenceEquals(tab.Panes.ActiveContent, pane);
+        var scrollBar = _paneScrollBars.GetValue(pane, CreatePaneScrollBar);
+
+        var content = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+        };
+        content.Children.Add(pane.Control);
+        Grid.SetColumn(scrollBar, 1);
+        content.Children.Add(scrollBar);
         var border = new Border
         {
             BorderBrush = active ? new SolidColorBrush(Color.Parse("#3A96DD")) : Brushes.Transparent,
             BorderThickness = new Thickness(active ? 1 : 0),
-            Child = pane.Control,
+            Child = content,
             MinWidth = 80,
             MinHeight = 40,
         };
@@ -613,70 +678,143 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         return border;
     }
 
+    private static ScrollBar CreatePaneScrollBar(TerminalPane pane)
+    {
+        var scrollBar = new ScrollBar
+        {
+            Orientation = Orientation.Vertical,
+            Width = 12,
+            Minimum = 0,
+            SmallChange = 1,
+            AllowAutoHide = !pane.Profile.ScrollbarState.Equals(
+                "always",
+                StringComparison.OrdinalIgnoreCase),
+        };
+        var updatingScrollBar = false;
+        void UpdateScrollBar()
+        {
+            updatingScrollBar = true;
+            var history = pane.Control.Engine.Buffer.HistoryCount;
+            scrollBar.Maximum = history;
+            scrollBar.ViewportSize = pane.Control.Engine.Rows;
+            scrollBar.LargeChange = Math.Max(1, pane.Control.Engine.Rows - 1);
+            scrollBar.Value = history - pane.Control.Engine.Buffer.ScrollOffset;
+            scrollBar.IsVisible = !pane.Profile.ScrollbarState.Equals(
+                "hidden",
+                StringComparison.OrdinalIgnoreCase);
+            updatingScrollBar = false;
+        }
+
+        scrollBar.ValueChanged += (_, _) =>
+        {
+            if (!updatingScrollBar)
+            {
+                pane.Control.SetScrollOffset(
+                    pane.Control.Engine.Buffer.HistoryCount - (int)Math.Round(scrollBar.Value));
+            }
+        };
+        pane.Control.ViewportChanged += (_, _) => UpdateScrollBar();
+        UpdateScrollBar();
+        return scrollBar;
+    }
+
     private void RebuildTabs()
     {
         TabStrip.Children.Clear();
+        Button? activeButton = null;
         foreach (var tab in _tabs)
         {
             var presentation = tab.Panes.ActiveContent?.Presentation ?? new PanePresentationState();
-            var content = new StackPanel
+            var tabWidth = TabWidth();
+            var compact = tabWidth < 160;
+            var content = new Grid
             {
-                Orientation = Orientation.Horizontal,
-                Spacing = 6,
+                ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto"),
+                ColumnSpacing = 6,
+                ClipToBounds = true,
             };
+            var prefix = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
             if (!string.IsNullOrWhiteSpace(presentation.Icon))
             {
-                content.Children.Add(new TextBlock
-                {
-                    Text = presentation.Icon,
-                    MaxWidth = 18,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                    VerticalAlignment = VerticalAlignment.Center,
-                });
+                prefix.Children.Add(CreateTabIcon(presentation.Icon));
             }
 
-            if (presentation.IsAdministrator)
+            if (presentation.IsAdministrator && !compact)
             {
-                content.Children.Add(new TextBlock { Text = "◆" });
+                prefix.Children.Add(new TextBlock { Text = "◆" });
             }
 
-            content.Children.Add(new TextBlock
+            content.Children.Add(prefix);
+            var title = new TextBlock
             {
                 Text = tab.Title,
-                MaxWidth = 180,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center,
                 FontWeight = presentation.HasUnseenActivity ? FontWeight.Bold : FontWeight.Normal,
-            });
-            if (presentation.IsReadOnly)
-            {
-                content.Children.Add(new TextBlock { Text = "🔒" });
-            }
+            };
+            Grid.SetColumn(title, 1);
+            content.Children.Add(title);
 
-            if (presentation.HasBellIndicator)
+            var status = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+            if (compact)
             {
-                content.Children.Add(new TextBlock { Text = "●" });
-            }
-
-            if (presentation.ProgressState != TerminalProgressState.None)
-            {
-                content.Children.Add(new ProgressBar
+                if (presentation.ProgressState != TerminalProgressState.None)
                 {
-                    Width = 34,
-                    Height = 3,
-                    IsIndeterminate = presentation.ProgressState == TerminalProgressState.Indeterminate,
-                    Value = presentation.Progress * 100,
-                    VerticalAlignment = VerticalAlignment.Center,
-                });
+                    status.Children.Add(new ProgressBar
+                    {
+                        Width = 20,
+                        Height = 3,
+                        IsIndeterminate = presentation.ProgressState == TerminalProgressState.Indeterminate,
+                        Value = presentation.Progress * 100,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    });
+                }
+                else if (presentation.IsReadOnly)
+                {
+                    status.Children.Add(new TextBlock { Text = "🔒" });
+                }
+                else if (presentation.HasBellIndicator)
+                {
+                    status.Children.Add(new TextBlock { Text = "●" });
+                }
+            }
+            else
+            {
+                if (presentation.IsReadOnly)
+                {
+                    status.Children.Add(new TextBlock { Text = "🔒" });
+                }
+
+                if (presentation.HasBellIndicator)
+                {
+                    status.Children.Add(new TextBlock { Text = "●" });
+                }
+
+                if (presentation.ProgressState != TerminalProgressState.None)
+                {
+                    status.Children.Add(new ProgressBar
+                    {
+                        Width = 34,
+                        Height = 3,
+                        IsIndeterminate = presentation.ProgressState == TerminalProgressState.Indeterminate,
+                        Value = presentation.Progress * 100,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    });
+                }
             }
 
-            content.Children.Add(CreateCloseButton(tab));
+            Grid.SetColumn(status, 2);
+            content.Children.Add(status);
+            var closeButton = CreateCloseButton(tab);
+            Grid.SetColumn(closeButton, 3);
+            content.Children.Add(closeButton);
             var button = new Button
             {
                 Classes = { "tab" },
                 Content = content,
                 Tag = tab,
                 ContextMenu = CreateTabContextMenu(tab),
+                Width = tabWidth,
             };
             if (TryParseColor(tab.Color ?? presentation.Color, out var tabColor))
             {
@@ -685,6 +823,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             if (ReferenceEquals(tab, _activeTab))
             {
                 button.Classes.Add("active");
+                activeButton = button;
             }
 
             button.Click += (_, _) => ActivateTab(tab);
@@ -692,6 +831,121 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             button.PointerReleased += (_, e) => EndTabDrag(tab, button, e);
             TabStrip.Children.Add(button);
         }
+
+        if (activeButton is not null)
+        {
+            Dispatcher.UIThread.Post(activeButton.BringIntoView, DispatcherPriority.Loaded);
+        }
+    }
+
+    private double TabWidth()
+    {
+        var available = double.IsFinite(TabScrollViewer.MaxWidth)
+            ? TabScrollViewer.MaxWidth
+            : 720;
+        return Math.Clamp(
+            (available - (_tabs.Count * 2)) / Math.Max(1, _tabs.Count),
+            120,
+            240);
+    }
+
+    private Control CreateTabIcon(string icon)
+    {
+        if (TryResolveTabIcon(icon, out var key, out var uri, out var filePath))
+        {
+            if (!_tabIconCache.TryGetValue(key, out var bitmap))
+            {
+                try
+                {
+                    using var stream = filePath is null
+                        ? AssetLoader.Open(uri!)
+                        : File.OpenRead(filePath);
+                    bitmap = new Bitmap(stream);
+                }
+                catch (Exception ex) when (ex is
+                    IOException or
+                    UnauthorizedAccessException or
+                    ArgumentException or
+                    InvalidOperationException)
+                {
+                    return CreateTabIcon("ms-appx:///ProfileIcons/terminal.png");
+                }
+
+                _tabIconCache.Add(key, bitmap);
+            }
+
+            return new Image
+            {
+                Source = bitmap,
+                Width = 16,
+                Height = 16,
+                Stretch = Stretch.Uniform,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+        }
+
+        if (!icon.Contains('/') && !icon.Contains('\\') && icon.Length <= 4)
+        {
+            return new TextBlock
+            {
+                Text = icon,
+                FontSize = 14,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+        }
+
+        return CreateTabIcon("ms-appx:///ProfileIcons/terminal.png");
+    }
+
+    private static bool TryResolveTabIcon(
+        string icon,
+        out string key,
+        out Uri? uri,
+        out string? filePath)
+    {
+        const string profilePrefix = "ms-appx:///ProfileIcons/";
+        const string generatorPrefix = "ms-appx:///ProfileGeneratorIcons/";
+        filePath = null;
+        if (icon.StartsWith(profilePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var fileName = Path.GetFileName(icon[profilePrefix.Length..]);
+            var resourceName = fileName.Equals("terminal.png", StringComparison.OrdinalIgnoreCase)
+                ? fileName
+                : $"{Path.GetFileNameWithoutExtension(fileName)}.scale-100.png";
+            key = $"profile:{resourceName}";
+            uri = new Uri($"avares://WindowsTerminal.App/Assets/ProfileIcons/{resourceName}");
+            return AssetLoader.Exists(uri);
+        }
+
+        if (icon.StartsWith(generatorPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var fileName = Path.GetFileName(icon[generatorPrefix.Length..]);
+            key = $"generator:{fileName}";
+            uri = new Uri($"avares://WindowsTerminal.App/Assets/ProfileGeneratorIcons/{fileName}");
+            return AssetLoader.Exists(uri);
+        }
+
+        var expanded = Environment.ExpandEnvironmentVariables(icon);
+        if (Uri.TryCreate(expanded, UriKind.Absolute, out var parsed) && parsed.IsFile)
+        {
+            filePath = parsed.LocalPath;
+        }
+        else if (Path.IsPathRooted(expanded))
+        {
+            filePath = expanded;
+        }
+
+        if (filePath is not null && File.Exists(filePath))
+        {
+            key = $"file:{Path.GetFullPath(filePath)}";
+            uri = null;
+            return true;
+        }
+
+        key = string.Empty;
+        uri = null;
+        filePath = null;
+        return false;
     }
 
     private ContextMenu CreateTabContextMenu(TerminalTab tab) =>
@@ -1779,13 +2033,19 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         if (AvaloniaKeyChord.TryCreate(e, out var chord) &&
             _settings.ActionMap.ResolveAction(chord) is { } action)
         {
+            if (!_actionDispatcher.CanExecute(action))
+            {
+                e.Handled = TryRouteCoordinatedKey(e);
+                return;
+            }
+
             // Claim executable bindings before an asynchronous clipboard/process action yields,
             // so the terminal control cannot also translate the same chord to VT input.
             e.Handled = true;
             var result = await DispatchActionAsync(action).ConfigureAwait(true);
             if (result.Status == ActionDispatchStatus.Disabled)
             {
-                e.Handled = TryRouteCoordinatedKey(e);
+                RouteTerminalKey(e);
             }
         }
         else
@@ -1816,6 +2076,30 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
         activeTab.BroadcastInput.WriteInput(activePane, activeTab.Panes.Leaves(), input);
         return true;
+    }
+
+    private bool RouteTerminalKey(KeyEventArgs e)
+    {
+        if (_activeTab is not { } activeTab ||
+            activeTab.Panes.ActiveContent is not { } activePane)
+        {
+            return false;
+        }
+
+        var input = KeyMapper.ToVt(
+            e.Key,
+            e.KeyModifiers,
+            e.PhysicalKey,
+            e.KeySymbol,
+            activePane.Control.Engine.ApplicationCursorKeys);
+        if (input is null)
+        {
+            return activePane.Presentation.IsReadOnly;
+        }
+
+        return activeTab.BroadcastInput
+            .WriteInput(activePane, activeTab.Panes.Leaves(), input)
+            .Count > 0;
     }
 
     private void OnWindowTextInput(object? sender, TextInputEventArgs e)
@@ -1869,6 +2153,12 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         }
     }
 
+    private void MainWindow_OnSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        TabScrollViewer.MaxWidth = Math.Max(120, e.NewSize.Width - 247);
+        RebuildTabs();
+    }
+
     private void OpenSettings(SettingsTarget target = SettingsTarget.SettingsUI)
     {
         switch (target)
@@ -1910,12 +2200,19 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private (int Columns, int Rows) InitialTerminalSize()
     {
-        var columns = Math.Max(20, (int)((TerminalHost.Bounds.Width - 16) / 8));
-        var rows = Math.Max(10, (int)((TerminalHost.Bounds.Height - 16) / 16));
+        var profile = _activeTab?.Panes.ActiveContent?.Profile ?? _settings.GetDefaultProfile();
+        var cell = ActiveControl?.CellSize ?? TermControl.MeasureCell(profile, DisplayScale());
+        var columns = Math.Max(
+            20,
+            (int)((TerminalHost.Bounds.Width - 16 - ScrollbarWidth(profile)) / cell.Width));
+        var rows = Math.Max(10, (int)((TerminalHost.Bounds.Height - 16) / cell.Height));
         return double.IsNaN(TerminalHost.Bounds.Width) || TerminalHost.Bounds.Width <= 0
             ? (_settings.InitialCols, _settings.InitialRows)
             : (columns, rows);
     }
+
+    private static int ScrollbarWidth(ProfileSettings profile) =>
+        profile.ScrollbarState.Equals("hidden", StringComparison.OrdinalIgnoreCase) ? 0 : 16;
 
     public TerminalWindowLayoutDescriptor CaptureLayout() =>
         new()
@@ -2022,7 +2319,9 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             regenerateIdentities ? Guid.NewGuid() : descriptor.TabId,
             tree)
         {
-            Title = descriptor.Title,
+            Title = string.IsNullOrWhiteSpace(descriptor.CustomTitle)
+                ? activePane.Title
+                : descriptor.CustomTitle,
             CustomTitle = descriptor.CustomTitle,
             Color = descriptor.Color,
         };
@@ -2090,7 +2389,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             StartingDirectory = profile.StartingDirectory,
             TabTitle = profile.TabTitle,
             TabColor = profile.TabColor,
-            Icon = profile.IconResource?.ToString(),
+            Icon = ProfileVisualDefaults.Icon(profile),
             Elevate = profile.Elevate,
             SuppressApplicationTitle = profile.SuppressApplicationTitle,
             ReloadEnvironmentVariables = profile.ReloadEnvironmentVariables,
@@ -2577,18 +2876,27 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         }
     }
 
-    private static void DetachPaneControls(TerminalTab tab)
+    private void DetachPaneControls(TerminalTab tab)
     {
         foreach (var pane in tab.Panes.Leaves())
         {
-            if (pane.Control.Parent is Decorator decorator)
+            DetachControl(pane.Control);
+            if (_paneScrollBars.TryGetValue(pane, out var scrollBar))
             {
-                decorator.Child = null;
+                DetachControl(scrollBar);
             }
-            else if (pane.Control.Parent is Panel panel)
-            {
-                panel.Children.Remove(pane.Control);
-            }
+        }
+    }
+
+    private static void DetachControl(Control control)
+    {
+        if (control.Parent is Decorator decorator)
+        {
+            decorator.Child = null;
+        }
+        else if (control.Parent is Panel panel)
+        {
+            panel.Children.Remove(control);
         }
     }
 
@@ -2607,7 +2915,58 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             }
         }
 
+        foreach (var bitmap in _tabIconCache.Values)
+        {
+            bitmap.Dispose();
+        }
+
+        _tabIconCache.Clear();
+
         base.OnClosed(e);
+    }
+}
+
+internal static class ProfileVisualDefaults
+{
+    public static string Icon(ProfileSettings profile)
+    {
+        if (profile.IconResource?.ToString() is { Length: > 0 } icon)
+        {
+            return icon;
+        }
+
+        if (profile.Commandline.Contains("pwsh.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return "ms-appx:///ProfileIcons/pwsh.png";
+        }
+
+        if (profile.Commandline.Contains("powershell.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return "ms-appx:///ProfileIcons/{61c54bbd-c2c6-5271-96e7-009a87ff44bf}.png";
+        }
+
+        if (profile.Commandline.Contains("cmd.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return "ms-appx:///ProfileIcons/{0caa0dad-35be-5f56-a8ff-afceeeaa6101}.png";
+        }
+
+        if (profile.Commandline.Contains("wsl.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return "ms-appx:///ProfileGeneratorIcons/WSL.png";
+        }
+
+        if (profile.Commandline.Contains("ssh", StringComparison.OrdinalIgnoreCase))
+        {
+            return "ms-appx:///ProfileGeneratorIcons/SSH.png";
+        }
+
+        if (profile.Name.Contains("Visual Studio", StringComparison.OrdinalIgnoreCase) ||
+            profile.Name.Contains("Developer", StringComparison.OrdinalIgnoreCase))
+        {
+            return "ms-appx:///ProfileGeneratorIcons/VisualStudio.png";
+        }
+
+        return "ms-appx:///ProfileIcons/terminal.png";
     }
 }
 
@@ -2631,6 +2990,12 @@ public sealed class TerminalPane : ITerminalInputTarget
             Color = profile.TabColor,
             IsAdministrator = profile.Elevate,
         };
+        Presentation.Title = string.IsNullOrWhiteSpace(profile.TabTitle)
+            ? profile.Name
+            : profile.TabTitle;
+        Presentation.Icon = string.IsNullOrWhiteSpace(Presentation.Icon)
+            ? ProfileVisualDefaults.Icon(profile)
+            : Presentation.Icon;
     }
 
     public uint Id { get; }

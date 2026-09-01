@@ -11,35 +11,40 @@
         TransparencyLevelHint="Mica,AcrylicBlur,None"
         ExtendClientAreaToDecorationsHint="True"
         ExtendClientAreaChromeHints="PreferSystemChrome"
-        ExtendClientAreaTitleBarHeightHint="40">
+        ExtendClientAreaTitleBarHeightHint="40"
+        SizeChanged="MainWindow_OnSizeChanged">
   <DockPanel>
     <Border x:Name="TitleBar"
             DockPanel.Dock="Top"
             Height="40"
-            Background="#2B2B2B"
+            Background="#202020"
             PointerPressed="TitleBar_OnPointerPressed">
-      <Grid ColumnDefinitions="Auto,*,Auto" Margin="8,0,140,0">
-        <Button x:Name="MenuButton"
-                Grid.Column="0"
-                Classes="icon"
-                Click="Menu_OnClick"
-                AutomationProperties.Name="Menu"
-                ToolTip.Tip="Menu">
-          <TextBlock Text="☰" FontSize="16" />
-        </Button>
-        <ScrollViewer Grid.Column="1"
-                      HorizontalScrollBarVisibility="Auto"
-                      VerticalScrollBarVisibility="Disabled">
-          <StackPanel x:Name="TabStrip"
-                      Orientation="Horizontal"
-                      Spacing="0" />
-        </ScrollViewer>
-        <Button Grid.Column="2"
-                Classes="icon"
-                Click="NewTab_OnClick"
-                ToolTip.Tip="New tab (Ctrl+Shift+T)">
-          <TextBlock Text="+" FontSize="18" />
-        </Button>
+      <Grid ColumnDefinitions="Auto,*" Margin="8,0,138,0">
+        <StackPanel Grid.Column="0" Orientation="Horizontal">
+          <ScrollViewer x:Name="TabScrollViewer"
+                       MaxWidth="720"
+                       HorizontalScrollBarVisibility="Hidden"
+                       VerticalScrollBarVisibility="Disabled">
+            <StackPanel x:Name="TabStrip"
+                       Orientation="Horizontal"
+                       Spacing="0" />
+          </ScrollViewer>
+          <Button Classes="icon"
+                 Click="NewTab_OnClick"
+                 AutomationProperties.Name="New tab"
+                 ToolTip.Tip="New tab (Ctrl+Shift+T)">
+            <TextBlock Text="+" FontSize="18" />
+          </Button>
+          <Button x:Name="MenuButton"
+                 Classes="icon"
+                 Width="24"
+                 Click="Menu_OnClick"
+                 AutomationProperties.Name="New tab menu"
+                 ToolTip.Tip="New tab menu">
+            <TextBlock Text="⌄" FontSize="14" />
+          </Button>
+        </StackPanel>
+        <Border Grid.Column="1" MinWidth="45" />
       </Grid>
     </Border>
     <Grid>

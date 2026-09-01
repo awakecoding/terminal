@@ -7,6 +7,11 @@ public static class KeyMapper
 {
     public static string? ToVt(Key key, KeyModifiers modifiers, PhysicalKey physicalKey, string? keySymbol, bool applicationCursorKeys)
     {
+        if (physicalKey is PhysicalKey.Enter or PhysicalKey.NumPadEnter)
+        {
+            key = Key.Return;
+        }
+
         var ctrl = modifiers.HasFlag(KeyModifiers.Control);
         var alt = modifiers.HasFlag(KeyModifiers.Alt);
         var shift = modifiers.HasFlag(KeyModifiers.Shift);
@@ -23,7 +28,7 @@ public static class KeyMapper
 
         var sequence = key switch
         {
-            Key.Enter => "\r",
+            Key.Return or Key.LineFeed => "\r",
             Key.Tab => shift ? "\u001b[Z" : "\t",
             Key.Back => "\u007f",
             Key.Escape => "\u001b",

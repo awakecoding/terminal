@@ -8,6 +8,7 @@ namespace Microsoft.Terminal.Render;
 
 public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
 {
+    private const float DipsPerPoint = 96f / 72f;
     private readonly object _gate = new();
     private readonly SKPaint _paint = new() { IsAntialias = true };
     private readonly SKPaint _strokePaint = new()
@@ -85,7 +86,10 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
             if (Math.Abs(_viewport.Scale - normalized.Scale) > 0.001)
             {
                 _glyphs.Clear();
+                _viewport = normalized;
+                MeasureCell();
                 ResourceGeneration++;
+                return;
             }
 
             _viewport = normalized;
@@ -155,12 +159,12 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
         var left = padding + (composition.Column * (float)CellSize.Width);
         var top = padding + (composition.Row * (float)CellSize.Height);
         _paint.Color = SKColors.White;
-        _paint.TextSize = _settings.FontSize * (float)Math.Max(0.1, _viewport.Scale);
+        _paint.TextSize = _settings.FontSize;
         _paint.Typeface = _fonts.Resolve(composition.Text.AsSpan(), CellFlags.None);
         canvas.DrawText(composition.Text, left, top + _baseline, _paint);
 
         _strokePaint.Color = SKColors.White;
-        _strokePaint.StrokeWidth = Math.Max(1, (float)_viewport.Scale);
+        _strokePaint.StrokeWidth = PhysicalPixel;
         var width = Math.Max(
             (float)CellSize.Width,
             DisplayWidth(composition.Text) * (float)CellSize.Width);
@@ -652,7 +656,7 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
         }
 
         _paint.Color = ToColor(run.Attributes.Foreground);
-        _paint.StrokeWidth = Math.Max(1, (float)_viewport.Scale);
+        _paint.StrokeWidth = PhysicalPixel;
         var left = padding + (run.StartColumn * (float)CellSize.Width);
         var right = left + (run.CellCount * (float)CellSize.Width);
         if (underline)
@@ -717,7 +721,7 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
                 break;
             case TerminalCursorStyle.EmptyBox:
                 _strokePaint.Color = _paint.Color;
-                _strokePaint.StrokeWidth = Math.Max(1, (float)_viewport.Scale);
+                _strokePaint.StrokeWidth = PhysicalPixel;
                 canvas.DrawRect(left, top, width, height, _strokePaint);
                 break;
             default:
@@ -810,10 +814,17 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
         var typeface = _fonts.Resolve("M".AsSpan(), CellFlags.None);
         using var paint = CreateFontPaint(typeface, CellFlags.None);
         paint.GetFontMetrics(out var metrics);
-        var width = Math.Max(1, paint.MeasureText("M"));
+        var width = Math.Max(1, paint.MeasureText("0"));
         var height = Math.Max(1, metrics.Descent - metrics.Ascent + metrics.Leading);
-        CellSize = new CellSize(Math.Ceiling(width), Math.Ceiling(height * 1.08f));
-        _baseline = (float)Math.Ceiling(-metrics.Ascent + ((CellSize.Height - height) * 0.5));
+        var scale = Math.Max(0.1, _viewport.Scale == 0 ? 1 : _viewport.Scale);
+        CellSize = new CellSize(
+            Math.Max(1, Math.Round(width * scale, MidpointRounding.AwayFromZero) / scale),
+            Math.Max(1, Math.Round(height * scale, MidpointRounding.AwayFromZero) / scale));
+        _baseline = (float)(
+            Math.Round(
+                (-metrics.Ascent + ((CellSize.Height - height) * 0.5)) * scale,
+                MidpointRounding.AwayFromZero) /
+            scale);
     }
 
     private void ReleaseResources()
@@ -839,7 +850,7 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
             FontFamily = string.IsNullOrWhiteSpace(settings.FontFamily)
                 ? "Cascadia Mono"
                 : settings.FontFamily.Trim(),
-            FontSize = Math.Max(1, settings.FontSize),
+            FontSize = Math.Clamp(settings.FontSize, 1, 100) * DipsPerPoint,
             FontWeight = Math.Clamp(settings.FontWeight, 100, 1000),
             GlyphCacheCapacity = Math.Max(1, settings.GlyphCacheCapacity),
             DecodedImageCacheByteCapacity = Math.Max(
@@ -859,6 +870,8 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
 
         return true;
     }
+
+    private float PhysicalPixel => 1f / (float)Math.Max(0.1, _viewport.Scale == 0 ? 1 : _viewport.Scale);
 
     private static SKColor ToColor(uint argb) => new(
         (byte)((argb >> 16) & 0xFF),

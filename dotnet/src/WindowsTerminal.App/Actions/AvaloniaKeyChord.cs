@@ -63,7 +63,7 @@ public static class AvaloniaKeyChord
 
         return key switch
         {
-            Key.Enter => "enter",
+            Key.Return or Key.LineFeed => "enter",
             Key.Tab => "tab",
             Key.Escape => "esc",
             Key.Space => "space",

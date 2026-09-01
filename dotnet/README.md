@@ -66,6 +66,11 @@ tenant-selection UI and never receives or persists access/refresh tokens.
 The command palette supports action, `wt` command-line, tab-search, profile-launch,
 and shell command-history flows. Settings-driven notification-area behavior is
 available for unpackaged and packaged runs.
+Stock visual defaults mirror Windows Terminal: Fluent/Segoe UI chrome, equal-width
+tabs with profile icons and visible profile titles, 12-point packaged Cascadia
+Mono with Atlas-compatible cell rounding, Campbell colors, 8-DIP default
+padding and scrollbar behavior, `%USERPROFILE%` startup directories, and per-session
+`WT_SESSION`/`WT_PROFILE_ID` (including WSL forwarding).
 The compiled-XAML settings editor and host integration are documented in
 [doc/settings-editor.md](doc/settings-editor.md).
 

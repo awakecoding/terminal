@@ -25,6 +25,6 @@ public sealed class UiTestCollection
         var menu = window.FindControl<Avalonia.Controls.Button>("MenuButton");
 
         Assert.NotNull(menu);
-        Assert.Equal("Menu", AutomationProperties.GetName(menu));
+        Assert.Equal("New tab menu", AutomationProperties.GetName(menu));
     }
 }

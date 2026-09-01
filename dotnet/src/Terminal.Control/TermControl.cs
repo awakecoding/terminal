@@ -36,6 +36,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     private bool _acceptOutput;
     private readonly SkiaTerminalRenderer _renderer = new();
     private readonly TerminalSearchSession _search;
+    private readonly Guid _terminalSessionId = Guid.NewGuid();
     private IRestartableTerminalConnection? _connection;
     private double _fontSize = 12;
     private double _defaultFontSize = 12;
@@ -68,6 +69,7 @@ public sealed class TermControl : Avalonia.Controls.Control
         {
             UpdateSearchHighlights();
             ScrollMarksChanged?.Invoke(this, EventArgs.Empty);
+            ViewportChanged?.Invoke(this, EventArgs.Empty);
             AccessibilityChanged?.Invoke(this, EventArgs.Empty);
         };
         Focusable = true;
@@ -95,6 +97,7 @@ public sealed class TermControl : Avalonia.Controls.Control
             _textInputMethodClient.NotifyCursorChanged();
             AccessibilityTextChanged?.Invoke(this, EventArgs.Empty);
             ScrollMarksChanged?.Invoke(this, EventArgs.Empty);
+            ViewportChanged?.Invoke(this, EventArgs.Empty);
             Dispatcher.UIThread.Post(InvalidateVisual, DispatcherPriority.Render);
         };
         Engine.TitleChanged += (_, title) => TitleChanged?.Invoke(this, title);
@@ -107,6 +110,7 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     public TerminalEngine Engine { get; }
     public TerminalSearchSession Search => _search;
+    public CellSize CellSize => _renderer.CellSize;
     public Func<ProfileSettings, IRestartableTerminalConnection>? ConnectionFactory { get; set; }
     public ProfileSettings? Profile { get; private set; }
     public bool IsRunning => _connection?.IsRunning == true;
@@ -139,6 +143,16 @@ public sealed class TermControl : Avalonia.Controls.Control
         TerminalControlCapabilities.ShowHide |
         TerminalControlCapabilities.Restart;
 
+    public static CellSize MeasureCell(ProfileSettings profile, double scale = 1)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        using var renderer = new SkiaTerminalRenderer(CreateRendererSettings(
+            profile,
+            profile.FontSize <= 0 ? 12 : profile.FontSize));
+        renderer.Resize(new RenderViewport(1, 1, scale));
+        return renderer.CellSize;
+    }
+
     public event EventHandler<string>? TitleChanged;
     public event EventHandler<int>? ProcessExited;
     public event EventHandler<TerminalExitInfo>? SessionExited;
@@ -148,6 +162,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     public event EventHandler? AccessibilityChanged;
     internal event EventHandler? AccessibilityTextChanged;
     public event EventHandler? ScrollMarksChanged;
+    public event EventHandler? ViewportChanged;
     public event EventHandler<TerminalPasteWarningEventArgs>? PasteWarning;
     public event EventHandler<TerminalHyperlinkEventArgs>? HyperlinkOpenRequested;
     public event EventHandler<TerminalHyperlinkEventArgs>? HyperlinkContextRequested;
@@ -197,7 +212,7 @@ public sealed class TermControl : Avalonia.Controls.Control
                     Columns = columns,
                     Rows = rows,
                     InheritEnvironment = profile.ReloadEnvironmentVariables,
-                    EnvironmentVariables = profile.Environment,
+                    EnvironmentVariables = BuildTerminalEnvironment(profile),
                     CloseOnExit = ToConnectionPolicy(profile.CloseOnExit),
                 }).ConfigureAwait(true);
         }
@@ -357,7 +372,7 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
 
         _connection.Write(Engine.WrapPaste(request.Text));
-        Engine.Buffer.ScrollOffset = 0;
+        SetScrollOffset(0);
         return TerminalPasteResult.Written;
     }
 
@@ -372,7 +387,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     {
         ArgumentNullException.ThrowIfNull(input);
         _connection?.Write(input);
-        Engine.Buffer.ScrollOffset = 0;
+        SetScrollOffset(0);
     }
 
     public void SelectAll()
@@ -417,6 +432,14 @@ public sealed class TermControl : Avalonia.Controls.Control
     public void EndSelection()
     {
         _selecting = false;
+        if (!_isMarkMode &&
+            _selection is { } selection &&
+            selection.Anchor == selection.Active)
+        {
+            SetSelection(null);
+            return;
+        }
+
         if (InteractionOptions.CopyOnSelect && _selection is not null)
         {
             ObserveInteractionAsync("copy on select", CopyAsync(InteractionOptions.Copy));
@@ -635,24 +658,31 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     public void ScrollBy(int rows)
     {
-        Engine.Buffer.ScrollOffset = Math.Clamp(
-            Engine.Buffer.ScrollOffset + rows,
-            0,
-            Engine.Buffer.HistoryCount);
-        InvalidateVisual();
+        SetScrollOffset(Engine.Buffer.ScrollOffset + rows);
     }
 
     public void ScrollPage(int direction) => ScrollBy(direction * Math.Max(1, Engine.Rows - 1));
 
     public void ScrollToTop()
     {
-        Engine.Buffer.ScrollOffset = Engine.Buffer.HistoryCount;
-        InvalidateVisual();
+        SetScrollOffset(Engine.Buffer.HistoryCount);
     }
 
     public void ScrollToBottom()
     {
-        Engine.Buffer.ScrollOffset = 0;
+        SetScrollOffset(0);
+    }
+
+    public void SetScrollOffset(int offset)
+    {
+        var normalized = Math.Clamp(offset, 0, Engine.Buffer.HistoryCount);
+        if (Engine.Buffer.ScrollOffset == normalized)
+        {
+            return;
+        }
+
+        Engine.Buffer.ScrollOffset = normalized;
+        ViewportChanged?.Invoke(this, EventArgs.Empty);
         InvalidateVisual();
     }
 
@@ -801,7 +831,7 @@ public sealed class TermControl : Avalonia.Controls.Control
         if (vt is not null)
         {
             _connection?.Write(vt);
-            Engine.Buffer.ScrollOffset = 0;
+            SetScrollOffset(0);
             e.Handled = true;
         }
 
@@ -813,7 +843,7 @@ public sealed class TermControl : Avalonia.Controls.Control
         if (!string.IsNullOrEmpty(e.Text) && e.Text != "\r" && e.Text != "\n" && e.Text != "\t")
         {
             _connection?.Write(e.Text);
-            Engine.Buffer.ScrollOffset = 0;
+            SetScrollOffset(0);
             e.Handled = true;
         }
 
@@ -991,9 +1021,7 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
 
         var delta = (int)Math.Round(e.Delta.Y * 3);
-        var max = Engine.Buffer.HistoryCount;
-        Engine.Buffer.ScrollOffset = Math.Clamp(Engine.Buffer.ScrollOffset + delta, 0, max);
-        InvalidateVisual();
+        SetScrollOffset(Engine.Buffer.ScrollOffset + delta);
         e.Handled = true;
         base.OnPointerWheelChanged(e);
     }
@@ -1068,8 +1096,17 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     private void MeasureGlyph()
     {
-        _cellWidth = _renderer.CellSize.Width;
-        _cellHeight = _renderer.CellSize.Height;
+        var width = _renderer.CellSize.Width;
+        var height = _renderer.CellSize.Height;
+        if (Math.Abs(_cellWidth - width) < 0.001 &&
+            Math.Abs(_cellHeight - height) < 0.001)
+        {
+            return;
+        }
+
+        _cellWidth = width;
+        _cellHeight = height;
+        InvalidateMeasure();
     }
 
     private void UpdateSearchHighlights()
@@ -1278,18 +1315,23 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     private void ConfigureRenderer(ProfileSettings profile)
     {
-        _renderer.Configure(new TerminalRendererSettings
+        _renderer.Configure(CreateRendererSettings(profile, _fontSize));
+    }
+
+    private static TerminalRendererSettings CreateRendererSettings(
+        ProfileSettings profile,
+        double fontSize) =>
+        new()
         {
             FontFamily = profile.FontFace,
-            FontSize = (float)_fontSize,
+            FontSize = (float)fontSize,
             FontWeight = profile.FontWeight,
             FontSources =
             [
                 new TerminalFontSource("Cascadia Mono", false, OpenCascadiaMono),
                 new TerminalFontSource("Cascadia Mono", true, OpenCascadiaMonoItalic),
             ],
-        });
-    }
+        };
 
     private void UpdateHoveredHyperlink(Point position)
     {
@@ -1538,10 +1580,10 @@ public sealed class TermControl : Avalonia.Controls.Control
                             : TerminalCursorStyle.Bar;
 
     private static Stream OpenCascadiaMono() =>
-        AssetLoader.Open(new Uri("avares://WindowsTerminal/Assets/Fonts/CascadiaMono.ttf"));
+        AssetLoader.Open(new Uri("avares://Terminal.Control/Assets/Fonts/CascadiaMono.ttf"));
 
     private static Stream OpenCascadiaMonoItalic() =>
-        AssetLoader.Open(new Uri("avares://WindowsTerminal/Assets/Fonts/CascadiaMonoItalic.ttf"));
+        AssetLoader.Open(new Uri("avares://Terminal.Control/Assets/Fonts/CascadiaMonoItalic.ttf"));
 
     private static TerminalCloseOnExitPolicy ToConnectionPolicy(CloseOnExitMode mode) =>
         mode switch
@@ -1551,6 +1593,56 @@ public sealed class TermControl : Avalonia.Controls.Control
             CloseOnExitMode.Always => TerminalCloseOnExitPolicy.Always,
             _ => TerminalCloseOnExitPolicy.Automatic,
         };
+
+    private IReadOnlyDictionary<string, string?> BuildTerminalEnvironment(ProfileSettings profile)
+    {
+        var environment = new Dictionary<string, string?>(
+            profile.Environment,
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["WT_SESSION"] = _terminalSessionId.ToString("D"),
+            ["WT_PROFILE_ID"] = Guid.TryParse(profile.Guid, out var profileId)
+                ? profileId.ToString("B")
+                : profile.Guid,
+        };
+        var inheritedWslEnvironment = profile.ReloadEnvironmentVariables
+            ? Environment.GetEnvironmentVariable("WSLENV") ?? string.Empty
+            : string.Empty;
+        var wslEnvironment = profile.Environment.TryGetValue("WSLENV", out var configuredWslEnvironment)
+            ? configuredWslEnvironment ?? string.Empty
+            : inheritedWslEnvironment;
+        var wslVariables = new HashSet<string>(
+            wslEnvironment
+                .Split(':', StringSplitOptions.RemoveEmptyEntries)
+                .Select(static value => value.Split('/')[0]),
+            StringComparer.OrdinalIgnoreCase);
+        var additionalWslVariables = new List<string> { "WT_SESSION", "WT_PROFILE_ID" };
+        additionalWslVariables.AddRange(profile.Environment
+            .Where(static pair =>
+                pair.Value is not null &&
+                !pair.Key.Equals("PATH", StringComparison.OrdinalIgnoreCase) &&
+                !pair.Key.Equals("WSLENV", StringComparison.OrdinalIgnoreCase))
+            .Select(static pair => pair.Key));
+        var newWslVariables = new List<string>();
+        foreach (var variable in additionalWslVariables)
+        {
+            if (wslVariables.Add(variable))
+            {
+                newWslVariables.Add(variable);
+            }
+        }
+
+        if (newWslVariables.Count > 0)
+        {
+            var additions = string.Join(':', newWslVariables);
+            wslEnvironment = string.IsNullOrEmpty(wslEnvironment)
+                ? additions
+                : $"{additions}:{wslEnvironment}";
+        }
+
+        environment["WSLENV"] = wslEnvironment;
+        return environment;
+    }
 
     internal readonly record struct ImeContext(string Text, int CursorTextOffset);
 }

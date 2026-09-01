@@ -20,6 +20,12 @@ when the selected family lacks the requested face. It supports faint,
 underline, strikethrough, hyperlink underline, CJK wide cells, color emoji,
 common Powerline separators, and all Windows Terminal cursor shapes.
 
+Windows Terminal font sizes are point sizes, not raw Avalonia DIPs. The renderer
+uses the same 96/72 point-to-DIP conversion and nearest-pixel cell metric
+rounding as Atlas. The packaged Cascadia Mono regular and italic faces remain
+terminal-only resources; Fluent application chrome uses the platform Segoe UI
+family.
+
 ## Cache and invalidation
 
 The glyph cache is an LRU with a configurable hard capacity (4096 entries by
