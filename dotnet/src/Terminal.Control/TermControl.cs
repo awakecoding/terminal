@@ -111,6 +111,7 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     public TerminalEngine Engine { get; }
     public TerminalSearchSession Search => _search;
+    public Func<ProfileSettings, IRestartableTerminalConnection>? ConnectionFactory { get; set; }
     public ProfileSettings? Profile { get; private set; }
     public bool IsRunning => _connection?.IsRunning == true;
     public bool HasSelection => _selection is not null;
@@ -183,7 +184,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     [SupportedOSPlatform("windows")]
     private async Task StartConnectionAsync(ProfileSettings profile, int columns, int rows)
     {
-        var connection = new ConPtyConnection();
+        var connection = ConnectionFactory?.Invoke(profile) ?? new ConPtyConnection();
         connection.OutputReceived += OnOutput;
         connection.SessionExited += OnSessionExited;
         _connection = connection;
