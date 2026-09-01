@@ -206,4 +206,16 @@ public sealed class PaneTreeTests
         Assert.True(tree.FocusFirst());
         Assert.Equal("one", tree.ActiveContent);
     }
+
+    [Fact]
+    public void SwapActiveMovesContentAndPreservesFocus()
+    {
+        var tree = new PaneTree<string>("left");
+        tree.SplitActive("right", PaneSplitOrientation.Vertical);
+
+        Assert.True(tree.SwapActive(PaneDirection.Left));
+
+        Assert.Equal(["right", "left"], tree.Leaves());
+        Assert.Equal("right", tree.ActiveContent);
+    }
 }

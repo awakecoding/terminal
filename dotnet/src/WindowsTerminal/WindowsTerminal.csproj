@@ -22,8 +22,21 @@
     <PackageReference Include="Avalonia.Diagnostics" Condition="'$(Configuration)' == 'Debug'" />
   </ItemGroup>
 
+  <Target Name="PublishWtCli" AfterTargets="Publish">
+    <PropertyGroup>
+      <_WindowsTerminalPublishDir Condition="$([System.IO.Path]::IsPathRooted('$(PublishDir)'))">$(PublishDir)</_WindowsTerminalPublishDir>
+      <_WindowsTerminalPublishDir Condition="!$([System.IO.Path]::IsPathRooted('$(PublishDir)'))">$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\$(PublishDir)'))</_WindowsTerminalPublishDir>
+    </PropertyGroup>
+    <MSBuild
+      Projects="..\WindowsTerminal.Cli\WindowsTerminal.Cli.csproj"
+      Targets="Publish"
+      Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);PublishAot=$(PublishAot);PublishDir=$(_WindowsTerminalPublishDir)" />
+  </Target>
+
   <ItemGroup>
     <ProjectReference Include="..\WindowsTerminal.App\WindowsTerminal.App.csproj" />
+    <ProjectReference Include="..\WindowsTerminal.Broker\WindowsTerminal.Broker.csproj" />
+    <ProjectReference Include="..\WindowsTerminal.Cli\WindowsTerminal.Cli.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -5,6 +5,8 @@
     <Project Path="src/Terminal.Core/Terminal.Core.csproj" />
     <Project Path="src/Terminal.Render/Terminal.Render.csproj" />
     <Project Path="src/Terminal.Settings/Terminal.Settings.csproj" />
+    <Project Path="src/WindowsTerminal.Broker/WindowsTerminal.Broker.csproj" />
+    <Project Path="src/WindowsTerminal.Cli/WindowsTerminal.Cli.csproj" />
     <Project Path="src/WindowsTerminal.App/WindowsTerminal.App.csproj" />
     <Project Path="src/WindowsTerminal.Interop/WindowsTerminal.Interop.csproj" />
     <Project Path="src/WindowsTerminal.Package/WindowsTerminal.Package.csproj" />
@@ -17,6 +19,8 @@
     <Project Path="tests/Terminal.Core.Tests/Terminal.Core.Tests.csproj" />
     <Project Path="tests/Terminal.Render.Tests/Terminal.Render.Tests.csproj" />
     <Project Path="tests/Terminal.Settings.Tests/Terminal.Settings.Tests.csproj" />
+    <Project Path="tests/WindowsTerminal.Broker.Tests/WindowsTerminal.Broker.Tests.csproj" />
+    <Project Path="tests/WindowsTerminal.Cli.Tests/WindowsTerminal.Cli.Tests.csproj" />
     <Project Path="tests/WindowsTerminal.App.Tests/WindowsTerminal.App.Tests.csproj" />
     <Project Path="tests/WindowsTerminal.Compatibility.Tests/WindowsTerminal.Compatibility.Tests.csproj" />
     <Project Path="tests/WindowsTerminal.Settings.Tests/WindowsTerminal.Settings.Tests.csproj" />

@@ -162,6 +162,26 @@ public sealed class PaneTree<T> where T : class
         return true;
     }
 
+    public bool SwapActive(PaneDirection direction)
+    {
+        if (Root is null || ActiveContent is null)
+        {
+            return false;
+        }
+
+        var active = ActiveContent;
+        if (!MoveFocus(direction) || ActiveContent is null)
+        {
+            return false;
+        }
+
+        var target = ActiveContent;
+        Root = SwapLeafContent(Root, active, target);
+        ActiveContent = active;
+        ZoomedContent = null;
+        return true;
+    }
+
     public bool MoveFocusInOrder(int delta)
     {
         var leaves = Leaves();
@@ -285,6 +305,19 @@ public sealed class PaneTree<T> where T : class
             {
                 First = ReplaceLeaf(split.First, target, replacement),
                 Second = ReplaceLeaf(split.Second, target, replacement),
+            },
+            _ => node,
+        };
+
+    private PaneNode<T> SwapLeafContent(PaneNode<T> node, T first, T second) =>
+        node switch
+        {
+            PaneLeaf<T> leaf when _comparer.Equals(leaf.Content, first) => new PaneLeaf<T>(second),
+            PaneLeaf<T> leaf when _comparer.Equals(leaf.Content, second) => new PaneLeaf<T>(first),
+            PaneSplit<T> split => split with
+            {
+                First = SwapLeafContent(split.First, first, second),
+                Second = SwapLeafContent(split.Second, first, second),
             },
             _ => node,
         };

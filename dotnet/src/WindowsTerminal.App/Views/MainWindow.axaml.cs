@@ -10,28 +10,45 @@ using Microsoft.Terminal.Control;
 using Microsoft.Terminal.Settings;
 using WindowsTerminal.Actions;
 using WindowsTerminal.Panes;
+using WindowsTerminal.Routing;
 using WindowsTerminal.Settings;
 
 namespace WindowsTerminal.Views;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Window, ITerminalWindowActivationTarget
 {
     private readonly AppSettings _settings;
     private readonly ActionDispatcher _actionDispatcher = new();
     private readonly List<TerminalTab> _tabs = [];
     private readonly List<PaletteItem> _paletteItems = [];
+    private uint _nextPaneId;
     private TerminalTab? _activeTab;
     private ActionDispatchResult? _lastDispatchResult;
     private ProfileSettings? _initialProfile;
+    private readonly TerminalWindowActivation? _initialActivation;
+    private readonly Action<TerminalWindowActivation>? _newWindowRequested;
+    private readonly TaskCompletionSource<TerminalWindowActivationResult> _initialActivationCompletion =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public MainWindow()
+    public MainWindow() : this(0, string.Empty, null)
     {
+    }
+
+    public MainWindow(
+        int windowId,
+        string windowName,
+        TerminalWindowActivation? initialActivation,
+        Action<TerminalWindowActivation>? newWindowRequested = null)
+    {
+        WindowId = windowId;
+        WindowName = windowName;
+        _initialActivation = initialActivation;
+        _newWindowRequested = newWindowRequested;
         InitializeComponent();
         _settings = SettingsService.Load();
         Width = Math.Max(640, _settings.InitialCols * 8);
         Height = Math.Max(400, _settings.InitialRows * 16 + 80);
-        Opened += async (_, _) =>
-            await CreateTabAsync(_initialProfile ?? _settings.GetDefaultProfile()).ConfigureAwait(true);
+        Opened += OnOpened;
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
         ConfigureActionDispatcher();
         PopulateCommandPalette();
@@ -40,6 +57,82 @@ public partial class MainWindow : Window
     private MainWindow(ProfileSettings initialProfile) : this()
     {
         _initialProfile = initialProfile;
+    }
+
+    public int WindowId { get; }
+    public string WindowName { get; }
+    public Task<TerminalWindowActivationResult> InitialActivation => _initialActivationCompletion.Task;
+
+    public async ValueTask<TerminalWindowActivationResult> ActivateAsync(
+        TerminalWindowActivation activation,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ApplyLaunchOptions(activation);
+        var results = new List<ActionDispatchResult>(activation.Actions.Count);
+        foreach (var action in activation.Actions)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            results.Add(await DispatchActionAsync(action).ConfigureAwait(true));
+        }
+
+        Show();
+        Activate();
+        var failure = results.FirstOrDefault(result => result.Status != ActionDispatchStatus.Executed);
+        return failure is null
+            ? new(true, "Activation completed.", results)
+            : new(false, failure.Message ?? $"Action '{failure.Action}' failed.", results);
+    }
+
+    private async void OnOpened(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (_initialActivation is not null)
+            {
+                _initialActivationCompletion.SetResult(
+                    await ActivateAsync(_initialActivation).ConfigureAwait(true));
+            }
+            else
+            {
+                await CreateTabAsync(_initialProfile ?? _settings.GetDefaultProfile()).ConfigureAwait(true);
+                _initialActivationCompletion.SetResult(
+                    new(true, "Activation completed.", []));
+            }
+        }
+        catch (Exception ex)
+        {
+            _initialActivationCompletion.SetException(ex);
+        }
+    }
+
+    private void ApplyLaunchOptions(TerminalWindowActivation activation)
+    {
+        if (activation.PositionX is { } x && activation.PositionY is { } y)
+        {
+            Position = new PixelPoint(x, y);
+        }
+
+        if (activation.Columns is { } columns)
+        {
+            Width = Math.Max(320, columns * 8);
+        }
+
+        if (activation.Rows is { } rows)
+        {
+            Height = Math.Max(240, rows * 16 + 80);
+        }
+
+        if (activation.LaunchMode.HasFlag(TerminalWindowLaunchMode.Fullscreen))
+        {
+            WindowState = WindowState.FullScreen;
+        }
+        else if (activation.LaunchMode.HasFlag(TerminalWindowLaunchMode.Maximized))
+        {
+            WindowState = WindowState.Maximized;
+        }
+
+        TitleBar.IsVisible = !activation.LaunchMode.HasFlag(TerminalWindowLaunchMode.Focus);
     }
 
     private async void NewTab_OnClick(object? sender, RoutedEventArgs e) =>
@@ -96,7 +189,7 @@ public partial class MainWindow : Window
     {
         var control = new TermControl();
         control.Cursor = new Cursor(StandardCursorType.Ibeam);
-        var pane = new TerminalPane(profile, control);
+        var pane = new TerminalPane(_nextPaneId++, profile, control);
         control.TitleChanged += (_, title) =>
         {
             pane.Title = profile.SuppressApplicationTitle || string.IsNullOrWhiteSpace(title)
@@ -570,6 +663,28 @@ public partial class MainWindow : Window
                 MovePane((MovePaneArgs)action.Args!);
                 return Task.CompletedTask;
             });
+        Register(ShortcutAction.SwapPane, ActionScope.Pane,
+            action => _activeTab?.Panes.Count > 1 &&
+                      action.Args is SwapPaneArgs args &&
+                      ToPaneDirection(args.Direction) is not null,
+            action =>
+            {
+                var direction = ToPaneDirection(((SwapPaneArgs)action.Args!).Direction)!.Value;
+                _activeTab!.Panes.SwapActive(direction);
+                RebuildTerminalHost();
+                ActiveControl?.Focus();
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.FocusPane, ActionScope.Pane,
+            action => action.Args is FocusPaneArgs args &&
+                      _activeTab?.Panes.Leaves().Any(pane => pane.Id == args.Id) == true,
+            action =>
+            {
+                var pane = _activeTab!.Panes.Leaves()
+                    .First(candidate => candidate.Id == ((FocusPaneArgs)action.Args!).Id);
+                ActivatePane(_activeTab, pane);
+                return Task.CompletedTask;
+            });
         Register(ShortcutAction.RestartConnection, ActionScope.Pane, _ => ActiveControl is not null,
             async _ => await ActiveControl!.RestartAsync().ConfigureAwait(true));
 
@@ -585,7 +700,22 @@ public partial class MainWindow : Window
         });
         Register(ShortcutAction.NewWindow, ActionScope.Application, _ => true, action =>
         {
-            new MainWindow(ResolveProfile((action.Args as NewWindowArgs)?.ContentArgs)).Show();
+            var content = (action.Args as NewWindowArgs)?.ContentArgs ?? new NewTerminalArgs();
+            if (_newWindowRequested is not null)
+            {
+                _newWindowRequested(new(
+                    null,
+                    null,
+                    null,
+                    null,
+                    TerminalWindowLaunchMode.Default,
+                    [new(ShortcutAction.NewTab, new NewTabArgs(content))]));
+            }
+            else
+            {
+                new MainWindow(ResolveProfile(content)).Show();
+            }
+
             return Task.CompletedTask;
         });
         Register(ShortcutAction.CloseWindow, ActionScope.Window, _ => true, _ =>
@@ -1054,8 +1184,9 @@ public partial class MainWindow : Window
     }
 }
 
-internal sealed class TerminalPane(ProfileSettings profile, TermControl control)
+internal sealed class TerminalPane(uint id, ProfileSettings profile, TermControl control)
 {
+    public uint Id { get; } = id;
     public ProfileSettings Profile { get; } = profile;
     public TermControl Control { get; } = control;
     public string Title { get; set; } = string.IsNullOrWhiteSpace(profile.TabTitle) ? profile.Name : profile.TabTitle;
