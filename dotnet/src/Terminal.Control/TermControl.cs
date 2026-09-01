@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Runtime.Versioning;
-using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -8,6 +7,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Microsoft.Terminal.Connection;
 using Microsoft.Terminal.Core;
+using Microsoft.Terminal.Render;
 using Microsoft.Terminal.Settings;
 
 namespace Microsoft.Terminal.Control;
@@ -171,28 +171,26 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     public override void Render(DrawingContext context)
     {
-        var scheme = Engine.Scheme;
-        var bg = ToBrush(scheme.Background);
+        var frame = TerminalRenderPlanner.Create(Engine.CreateSnapshot(), Engine.Scheme);
+        var bg = ToBrush(frame.Background);
         context.FillRectangle(bg, new Rect(Bounds.Size));
 
-        var buffer = Engine.Buffer;
         var padding = 8.0;
-        for (var y = 0; y < buffer.Rows; y++)
+        foreach (var row in frame.RowsData)
         {
-            var row = buffer.GetRow(y);
-            DrawRow(context, row, y, padding);
+            DrawRow(context, row, frame.Background, padding);
         }
 
         if (_hasSelection)
         {
-            DrawSelection(context, padding);
+            DrawSelection(context, frame.SelectionColor, frame.Columns, padding);
         }
 
-        if (Engine.CursorVisible && _cursorOn && IsFocused)
+        if (frame.CursorVisible && _cursorOn && IsFocused)
         {
-            var x = padding + (Engine.CursorX * _cellWidth);
-            var y = padding + (Engine.CursorY * _cellHeight);
-            context.FillRectangle(ToBrush(scheme.Cursor), new Rect(x, y, 2, _cellHeight));
+            var x = padding + (frame.CursorX * _cellWidth);
+            var y = padding + (frame.CursorY * _cellHeight);
+            context.FillRectangle(ToBrush(frame.CursorColor), new Rect(x, y, 2, _cellHeight));
         }
     }
 
@@ -322,53 +320,30 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
     }
 
-    private void DrawRow(DrawingContext context, Cell[] row, int y, double padding)
+    private void DrawRow(
+        DrawingContext context,
+        TerminalRenderRow row,
+        uint defaultBackground,
+        double padding)
     {
-        var scheme = Engine.Scheme;
-        var x = 0;
-        while (x < row.Length)
+        foreach (var run in row.Runs)
         {
-            if (row[x].IsWideContinuation)
-            {
-                x++;
-                continue;
-            }
-
-            var start = x;
-            var cell = row[x];
-            x++;
-            while (x < row.Length && !row[x].IsWideContinuation && SamePaint(row[x], cell))
-            {
-                x++;
-            }
-
-            var width = x - start;
-            var (fg, bg) = ResolveColors(cell.Attributes, scheme);
             var rect = new Rect(
-                padding + (start * _cellWidth),
-                padding + (y * _cellHeight),
-                width * _cellWidth,
+                padding + (run.StartColumn * _cellWidth),
+                padding + (row.RowIndex * _cellHeight),
+                run.CellCount * _cellWidth,
                 _cellHeight);
-            if (bg != scheme.Background)
+            if (run.Attributes.Background != defaultBackground)
             {
-                context.FillRectangle(ToBrush(bg), rect);
+                context.FillRectangle(ToBrush(run.Attributes.Background), rect);
             }
 
-            if ((cell.Attributes.Flags & CellFlags.Invisible) != 0)
+            if ((run.Attributes.Flags & CellFlags.Invisible) != 0)
             {
                 continue;
             }
 
-            var sb = new StringBuilder(width);
-            for (var i = start; i < x; i++)
-            {
-                if (!row[i].IsWideContinuation)
-                {
-                    sb.Append(row[i].Rune.ToString());
-                }
-            }
-
-            var text = sb.ToString().TrimEnd();
+            var text = run.Text.TrimEnd();
             if (text.Length == 0)
             {
                 continue;
@@ -376,8 +351,8 @@ public sealed class TermControl : Avalonia.Controls.Control
 
             var typeface = new Typeface(
                 _typeface.FontFamily,
-                (cell.Attributes.Flags & CellFlags.Italic) != 0 ? FontStyle.Italic : FontStyle.Normal,
-                (cell.Attributes.Flags & CellFlags.Bold) != 0 ? FontWeight.Bold : FontWeight.Normal);
+                (run.Attributes.Flags & CellFlags.Italic) != 0 ? FontStyle.Italic : FontStyle.Normal,
+                (run.Attributes.Flags & CellFlags.Bold) != 0 ? FontWeight.Bold : FontWeight.Normal);
 
             var formatted = new FormattedText(
                 text,
@@ -385,19 +360,31 @@ public sealed class TermControl : Avalonia.Controls.Control
                 FlowDirection.LeftToRight,
                 typeface,
                 _fontSize,
-                ToBrush(fg));
+                ToBrush(run.Attributes.Foreground));
 
             context.DrawText(formatted, new Point(rect.X, rect.Y));
 
-            if ((cell.Attributes.Flags & CellFlags.Underline) != 0)
+            if ((run.Attributes.Flags & CellFlags.Underline) != 0 || run.Attributes.HyperlinkUri is not null)
             {
                 var yPos = rect.Bottom - 2;
-                context.DrawLine(new Pen(ToBrush(fg), 1), new Point(rect.X, yPos), new Point(rect.Right, yPos));
+                context.DrawLine(
+                    new Pen(ToBrush(run.Attributes.Foreground), 1),
+                    new Point(rect.X, yPos),
+                    new Point(rect.Right, yPos));
+            }
+
+            if ((run.Attributes.Flags & CellFlags.Strikethrough) != 0)
+            {
+                var yPos = rect.Y + (rect.Height / 2);
+                context.DrawLine(
+                    new Pen(ToBrush(run.Attributes.Foreground), 1),
+                    new Point(rect.X, yPos),
+                    new Point(rect.Right, yPos));
             }
         }
     }
 
-    private void DrawSelection(DrawingContext context, double padding)
+    private void DrawSelection(DrawingContext context, uint selectionColor, int columns, double padding)
     {
         var x1 = _selX1;
         var y1 = _selY1;
@@ -409,11 +396,11 @@ public sealed class TermControl : Avalonia.Controls.Control
             (y1, y2) = (y2, y1);
         }
 
-        var brush = ToBrush(Engine.Scheme.SelectionBackground);
+        var brush = ToBrush(selectionColor);
         for (var y = y1; y <= y2; y++)
         {
             var from = y == y1 ? x1 : 0;
-            var to = y == y2 ? x2 : Engine.Columns - 1;
+            var to = y == y2 ? x2 : columns - 1;
             var rect = new Rect(
                 padding + (from * _cellWidth),
                 padding + (y * _cellHeight),
@@ -442,34 +429,6 @@ public sealed class TermControl : Avalonia.Controls.Control
             Brushes.White);
         _cellWidth = Math.Max(1, formatted.Width);
         _cellHeight = Math.Max(1, Math.Ceiling(formatted.Height * 1.2));
-    }
-
-    private static bool SamePaint(Cell left, Cell right) =>
-        left.Attributes.Equals(right.Attributes);
-
-    private static (uint Fg, uint Bg) ResolveColors(CellAttributes attributes, ColorScheme scheme)
-    {
-        var fg = attributes.Foreground.ToArgb(scheme, foreground: true);
-        var bg = attributes.Background.ToArgb(scheme, foreground: false);
-        if ((attributes.Flags & CellFlags.Inverse) != 0)
-        {
-            (fg, bg) = (bg, fg);
-        }
-
-        if ((attributes.Flags & CellFlags.Faint) != 0)
-        {
-            fg = Fade(fg);
-        }
-
-        return (fg, bg);
-    }
-
-    private static uint Fade(uint argb)
-    {
-        var r = (byte)((argb >> 16) & 0xFF);
-        var g = (byte)((argb >> 8) & 0xFF);
-        var b = (byte)(argb & 0xFF);
-        return 0xFF000000u | ((uint)(r / 2) << 16) | ((uint)(g / 2) << 8) | (byte)(b / 2);
     }
 
     private static IBrush ToBrush(uint argb) =>

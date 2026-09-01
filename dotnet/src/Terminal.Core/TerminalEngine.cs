@@ -13,7 +13,8 @@ public sealed record TerminalSnapshot(
     bool MouseTracking,
     bool SgrMouse,
     bool AutoWrap,
-    bool InsertMode);
+    bool InsertMode,
+    bool ReverseVideo);
 
 public sealed class TerminalEngine : IVtDispatch
 {
@@ -126,7 +127,8 @@ public sealed class TerminalEngine : IVtDispatch
         MouseTracking,
         SgrMouse,
         AutoWrap,
-        InsertMode);
+        InsertMode,
+        ReverseVideo);
 
     public string CopySelection(int x1, int y1, int x2, int y2) => Buffer.GetText(x1, y1, x2, y2);
 

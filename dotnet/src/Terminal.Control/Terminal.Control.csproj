@@ -8,6 +8,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Terminal.Core\Terminal.Core.csproj" />
+    <ProjectReference Include="..\Terminal.Render\Terminal.Render.csproj" />
     <ProjectReference Include="..\Terminal.Connection\Terminal.Connection.csproj" />
     <ProjectReference Include="..\Terminal.Settings\Terminal.Settings.csproj" />
   </ItemGroup>

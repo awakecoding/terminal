@@ -15,6 +15,7 @@
     <Project Path="tests/Terminal.Connection.Tests/Terminal.Connection.Tests.csproj" />
     <Project Path="tests/Terminal.Control.Tests/Terminal.Control.Tests.csproj" />
     <Project Path="tests/Terminal.Core.Tests/Terminal.Core.Tests.csproj" />
+    <Project Path="tests/Terminal.Render.Tests/Terminal.Render.Tests.csproj" />
     <Project Path="tests/Terminal.Settings.Tests/Terminal.Settings.Tests.csproj" />
     <Project Path="tests/WindowsTerminal.App.Tests/WindowsTerminal.App.Tests.csproj" />
     <Project Path="tests/WindowsTerminal.Compatibility.Tests/WindowsTerminal.Compatibility.Tests.csproj" />

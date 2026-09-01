@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Terminal.Render\Terminal.Render.csproj" />
+  </ItemGroup>
+</Project>
