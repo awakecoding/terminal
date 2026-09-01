@@ -8,6 +8,7 @@ using Avalonia.Media;
 using Microsoft.Terminal.Control;
 using Microsoft.Terminal.Settings;
 using WindowsTerminal.Panes;
+using WindowsTerminal.Settings;
 
 namespace WindowsTerminal.Views;
 
@@ -61,7 +62,7 @@ public partial class MainWindow : Window
         });
         items.Add(new MenuItem
         {
-            Header = "Open settings file",
+            Header = "Settings",
             Command = new RelayCommand(OpenSettings),
         });
         return items;
@@ -448,14 +449,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void OpenSettings()
+    private void OpenSettings()
     {
-        SettingsService.Save(SettingsService.Load());
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = SettingsService.SettingsPath,
-            UseShellExecute = true,
-        });
+        SettingsViewFactory.CreateWindow().Show(this);
     }
 
     private (int Columns, int Rows) InitialTerminalSize()
