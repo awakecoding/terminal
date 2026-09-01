@@ -13,7 +13,8 @@
         ExtendClientAreaChromeHints="PreferSystemChrome"
         ExtendClientAreaTitleBarHeightHint="40">
   <DockPanel>
-    <Border DockPanel.Dock="Top"
+    <Border x:Name="TitleBar"
+            DockPanel.Dock="Top"
             Height="40"
             Background="#2B2B2B"
             PointerPressed="TitleBar_OnPointerPressed">
@@ -39,6 +40,46 @@
         </Button>
       </Grid>
     </Border>
-    <Panel x:Name="TerminalHost" Background="#0C0C0C" />
+    <Grid>
+      <Panel x:Name="TerminalHost" Background="#0C0C0C" />
+      <Border x:Name="FindBar"
+              IsVisible="False"
+              HorizontalAlignment="Right"
+              VerticalAlignment="Top"
+              Margin="12"
+              Padding="8"
+              CornerRadius="4"
+              Background="#F02B2B2B">
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBox x:Name="FindBox"
+                   Width="260"
+                   Watermark="Find"
+                   KeyDown="FindBox_OnKeyDown" />
+          <Button Content="Previous" Click="FindPrevious_OnClick" />
+          <Button Content="Next" Click="FindNext_OnClick" />
+          <Button Content="Close" Click="CloseFind_OnClick" />
+        </StackPanel>
+      </Border>
+      <Border x:Name="CommandPalette"
+              IsVisible="False"
+              Width="520"
+              MaxHeight="440"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Top"
+              Margin="0,56,0,0"
+              Padding="12"
+              CornerRadius="6"
+              Background="#F02B2B2B">
+        <Grid RowDefinitions="Auto,*" RowSpacing="8">
+          <TextBox x:Name="CommandPaletteQuery"
+                   Watermark="Search actions"
+                   TextChanged="CommandPaletteQuery_OnTextChanged"
+                   KeyDown="CommandPaletteQuery_OnKeyDown" />
+          <ListBox x:Name="CommandPaletteList"
+                   Grid.Row="1"
+                   DoubleTapped="CommandPaletteList_OnDoubleTapped" />
+        </Grid>
+      </Border>
+    </Grid>
   </DockPanel>
 </Window>

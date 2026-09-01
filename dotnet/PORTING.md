@@ -21,9 +21,9 @@ The original C++ tree stays in place. All new work lives under `dotnet/`.
 | `Terminal.Core` | Cell/attributes, text buffer, VT ground/CSI/OSC subset, alt screen, SGR (16/256/truecolor) |
 | `Terminal.Render` | Renderer-neutral contracts for the future Skia glyph atlas |
 | `Terminal.Connection` | NativeAOT-safe ConPTY via `LibraryImport`, transactional safe-handle lifecycle, cancellation, async writes, resize, and environment overrides |
-| `Terminal.Settings` | Complete MTSM global/window/profile/font/appearance/theme/scheme/media/new-tab-menu projection; tri-state inheritance, legacy migrations, fragments/origins, diagnostics, stable profile GUIDs, local-layer diff serialization, and atomic `settings.json`/`state.json` persistence |
-| `Terminal.Control` | Avalonia `TermControl`: Skia text, selection, copy/paste, key map |
-| `WindowsTerminal.App` | Tabbed window, title bar, Ctrl+Shift+T/W/N/C/V |
+| `Terminal.Settings` | Complete MTSM settings projection plus the 92-action inventory, typed action arguments, normalized key chords, current/legacy binding parsing, and source-generated NativeAOT-safe JSON |
+| `Terminal.Control` | Avalonia `TermControl`: Skia text, selection, action-driven copy/paste/find/scroll/font controls, key map |
+| `WindowsTerminal.App` | Tabbed/paned window, scoped action dispatch, settings-driven key handling, find bar, and command palette |
 | `WindowsTerminal` | NativeAOT executable and composition root |
 
 The baseline also includes dedicated settings, connection, control, app,
@@ -31,9 +31,9 @@ compatibility, and UI test projects; x64/ARM64 NativeAOT CI; architecture
 decisions; and a generated compatibility inventory covering 120 settings keys,
 92 actions, 123 VT dispatch methods, 14 CLI commands, and 25 settings pages.
 
-What it is **not**: a daily driver. No panes, no ActionMap, no settings UI, no
-Atlas-quality rendering, no `wt` CLI, no WSL/VS generators, no search, no
-command palette, no accessibility.
+What it is **not**: a daily driver. Later inventory actions remain explicit
+unsupported dispatch results; there is no settings UI, Atlas-quality rendering,
+`wt` CLI, WSL/VS generators, or accessibility.
 
 ## Non-goals
 
@@ -160,8 +160,8 @@ Required types:
 - Warnings for invalid defaults, profile/scheme/theme references, environment
   names, and menu structure
 
-Actions and keybindings are deliberately retained as lossless raw JSON until the
-dedicated action phase adds `ActionMap` and `ActionAndArgs`.
+Actions and keybindings retain their lossless raw JSON and also project into
+`ActionMap`/`ActionAndArgs` for typed lookup and dispatch.
 
 Typed JSON is source-generated (`System.Text.Json` + `JsonSerializerContext`).
 Settings layering and unknown-property preservation operate on `JsonNode`, so
@@ -220,12 +220,12 @@ P0:
 - `startingDirectory`, `commandline` expansion
 - `closeOnExit` (always / graceful / never / automatic)
 - Resize must call `ResizePseudoConsole` and `TerminalEngine.Resize`
+- Restart an active connection without replacing its pane/control
 
 P1:
 
 - WSL path translation
 - `elevate` via a small helper (not the C++ shim at first)
-- Restart connection
 - Inbound ConPTY listener / default-terminal handoff
 - Working directory from OSC 7
 
@@ -250,8 +250,9 @@ App
      └─ Settings page (optional pane content)
 ```
 
-`AllShortcutActions.h` is the action checklist (~90 actions). P0 implements
-the ones users hit every day; the rest become no-ops that still parse.
+`AllShortcutActions.h` is the action checklist (92 actions). P0 implements
+the ones users hit every day; the rest still parse and return explicit
+unsupported dispatch results.
 
 ### P0 actions
 
@@ -260,13 +261,16 @@ the ones users hit every day; the rest become no-ops that still parse.
 `MoveFocus`, `ResizePane`, `TogglePaneZoom`, `AdjustFontSize`,
 `ResetFontSize`, `ScrollUp`/`Down`/`Page`/`ToTop`/`ToBottom`, `Find`,
 `OpenSettings`, `ToggleCommandPalette`, `NewWindow`, `Quit`, `SelectAll`,
-`ClearBuffer`, `OpenNewTabDropdown`.
+`ClearBuffer`, `SendInput`, `MovePane`, `CloseOtherPanes`,
+`ToggleSplitOrientation`, `RestartConnection`, `FindMatch`,
+`ToggleAlwaysOnTop`, `ToggleFullscreen`, `ToggleFocusMode`, and
+`MultipleActions`.
 
 ### P1 actions
 
-Tab color/rename, mark mode, find match, export buffer, quake/global summon,
-always-on-top, fullscreen/focus mode, broadcast input, suggestions,
-color selection, restore last closed, multiple actions, `wt` commandline.
+Tab color/rename, mark mode, full-scrollback search, export buffer,
+quake/global summon, broadcast input, suggestions, color selection,
+restore last closed, and `wt` commandline.
 
 ### P2 actions
 
@@ -338,16 +342,19 @@ solution only. Do not gate this port on the C++ OpenConsole build.
 
 ## Phased roadmap
 
-### P0 — Daily driver (this is the next implementation slice)
+### P0 — Daily driver
 
 Goal: replace Windows Terminal for local `pwsh`/`cmd`/`wsl` work.
 
 1. **Settings.** Load WT `defaults.json` + user file; inheritance;
-   ActionMap; unknown-key preservation.
+   ActionMap; unknown-key preservation. **Implemented.**
 2. **Actions + default keybindings.** Dispatch table wired to the window.
-3. **Panes.** Binary split tree, focus movement, zoom, close.
-4. **Search.** Incremental find in the buffer, next/prev.
-5. **Command palette.** Action search, fuzzy filter.
+   **Implemented for the P0 action set; later actions report unsupported.**
+3. **Panes.** Binary split tree, focus movement, zoom, close. **Implemented.**
+4. **Search.** Find in the visible buffer, next/prev. **Implemented; full
+   scrollback incremental search remains P1.**
+5. **Command palette.** Action search and dispatch. **Implemented; fuzzy ranking
+   remains P1.**
 6. **Dynamic profiles.** `pwsh` on PATH, WSL `-l -q`, cmd, Windows PowerShell.
 7. **Buffer/VT bucket A–D** completed and tested.
 8. **Scrollbar, copy HTML/RTF optional, confirm close.**

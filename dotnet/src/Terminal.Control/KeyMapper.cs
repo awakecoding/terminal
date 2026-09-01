@@ -11,11 +11,6 @@ public static class KeyMapper
         var alt = modifiers.HasFlag(KeyModifiers.Alt);
         var shift = modifiers.HasFlag(KeyModifiers.Shift);
 
-        if (ctrl && shift && key is Key.C or Key.V or Key.T or Key.W or Key.N)
-        {
-            return null;
-        }
-
         if (ctrl && !alt && !shift && key is >= Key.A and <= Key.Z)
         {
             return ((char)(key - Key.A + 1)).ToString();

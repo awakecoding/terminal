@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -7,6 +8,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Microsoft.Terminal.Control;
 using Microsoft.Terminal.Settings;
+using WindowsTerminal.Actions;
 using WindowsTerminal.Panes;
 
 namespace WindowsTerminal.Views;
@@ -14,8 +16,12 @@ namespace WindowsTerminal.Views;
 public partial class MainWindow : Window
 {
     private readonly AppSettings _settings;
+    private readonly ActionDispatcher _actionDispatcher = new();
     private readonly List<TerminalTab> _tabs = [];
+    private readonly List<PaletteItem> _paletteItems = [];
     private TerminalTab? _activeTab;
+    private ActionDispatchResult? _lastDispatchResult;
+    private ProfileSettings? _initialProfile;
 
     public MainWindow()
     {
@@ -23,12 +29,17 @@ public partial class MainWindow : Window
         _settings = SettingsService.Load();
         Width = Math.Max(640, _settings.InitialCols * 8);
         Height = Math.Max(400, _settings.InitialRows * 16 + 80);
-        Opened += async (_, _) => await OpenDefaultTabAsync().ConfigureAwait(true);
-        KeyDown += OnWindowKeyDown;
+        Opened += async (_, _) =>
+            await CreateTabAsync(_initialProfile ?? _settings.GetDefaultProfile()).ConfigureAwait(true);
+        AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
+        ConfigureActionDispatcher();
+        PopulateCommandPalette();
     }
 
-    private async Task OpenDefaultTabAsync() =>
-        await CreateTabAsync(_settings.GetDefaultProfile()).ConfigureAwait(true);
+    private MainWindow(ProfileSettings initialProfile) : this()
+    {
+        _initialProfile = initialProfile;
+    }
 
     private async void NewTab_OnClick(object? sender, RoutedEventArgs e) =>
         await CreateTabAsync(_settings.GetDefaultProfile()).ConfigureAwait(true);
@@ -83,6 +94,7 @@ public partial class MainWindow : Window
     private TerminalPane CreatePane(ProfileSettings profile)
     {
         var control = new TermControl();
+        control.Cursor = new Cursor(StandardCursorType.Ibeam);
         var pane = new TerminalPane(profile, control);
         control.TitleChanged += (_, title) =>
         {
@@ -115,7 +127,11 @@ public partial class MainWindow : Window
         return pane;
     }
 
-    private async Task SplitActivePaneAsync(PaneSplitOrientation orientation)
+    private async Task SplitActivePaneAsync(
+        PaneSplitOrientation orientation,
+        ProfileSettings? profile = null,
+        double splitSize = 0.5,
+        bool newPaneFirst = false)
     {
         var tab = _activeTab;
         var activePane = tab?.Panes.ActiveContent;
@@ -124,8 +140,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        var newPane = CreatePane(activePane.Profile);
-        if (!tab.Panes.SplitActive(newPane, orientation))
+        var newPane = CreatePane(profile ?? activePane.Profile);
+        var normalizedSize = Math.Clamp(splitSize, 0.1, 0.9);
+        var firstPaneRatio = newPaneFirst ? normalizedSize : 1 - normalizedSize;
+        if (!tab.Panes.SplitActive(newPane, orientation, firstPaneRatio, newPaneFirst))
         {
             return;
         }
@@ -381,63 +399,556 @@ public partial class MainWindow : Window
         return close;
     }
 
-    private async void OnWindowKeyDown(object? sender, KeyEventArgs e)
+    private TermControl? ActiveControl => _activeTab?.Panes.ActiveContent?.Control;
+
+    private void ConfigureActionDispatcher()
     {
-        var modifiers = e.KeyModifiers;
-        if (modifiers == (KeyModifiers.Alt | KeyModifiers.Shift) && e.Key == Key.D)
+        Register(ShortcutAction.CopyText, ActionScope.Control, action => ActiveControl?.HasSelection == true, async action =>
         {
-            await SplitActivePaneAsync(PaneSplitOrientation.Vertical).ConfigureAwait(true);
-            e.Handled = true;
-            return;
-        }
-
-        if (modifiers == KeyModifiers.Alt && TryDirection(e.Key, out var direction) && _activeTab is not null)
-        {
-            if (_activeTab.Panes.MoveFocus(direction))
+            var args = action.Args as CopyTextArgs ?? new CopyTextArgs();
+            await ActiveControl!.CopyAsync(args.SingleLine).ConfigureAwait(true);
+            if (args.DismissSelection)
             {
-                var pane = _activeTab.Panes.ActiveContent!;
-                SynchronizeTitle(_activeTab);
-                RebuildTerminalHost();
-                pane.Control.Focus();
+                ActiveControl.ClearSelection();
             }
+        });
+        Register(ShortcutAction.PasteText, ActionScope.Control, _ => ActiveControl is not null,
+            async _ => await ActiveControl!.PasteAsync().ConfigureAwait(true));
+        Register(ShortcutAction.SendInput, ActionScope.Control, action => ActiveControl is not null && action.Args is SendInputArgs,
+            action =>
+            {
+                ActiveControl!.WriteInput(((SendInputArgs)action.Args!).Input);
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.SelectAll, ActionScope.Control, _ => ActiveControl is not null, _ =>
+        {
+            ActiveControl!.SelectAll();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ClearBuffer, ActionScope.Control, _ => ActiveControl is not null, _ =>
+        {
+            ActiveControl!.ClearBuffer();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.AdjustFontSize, ActionScope.Control,
+            action => ActiveControl is not null && action.Args is AdjustFontSizeArgs,
+            action =>
+            {
+                ActiveControl!.AdjustFontSize(((AdjustFontSizeArgs)action.Args!).Delta);
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.ResetFontSize, ActionScope.Control, _ => ActiveControl is not null, _ =>
+        {
+            ActiveControl!.ResetFontSize();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ScrollUp, ActionScope.Control, _ => ActiveControl is not null,
+            action =>
+            {
+                ActiveControl!.ScrollBy(-(int)((action.Args as ScrollUpArgs)?.RowsToScroll ?? 1));
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.ScrollDown, ActionScope.Control, _ => ActiveControl is not null,
+            action =>
+            {
+                ActiveControl!.ScrollBy((int)((action.Args as ScrollDownArgs)?.RowsToScroll ?? 1));
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.ScrollUpPage, ActionScope.Control, _ => ActiveControl is not null, _ =>
+        {
+            ActiveControl!.ScrollPage(-1);
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ScrollDownPage, ActionScope.Control, _ => ActiveControl is not null, _ =>
+        {
+            ActiveControl!.ScrollPage(1);
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ScrollToTop, ActionScope.Control, _ => ActiveControl is not null, _ =>
+        {
+            ActiveControl!.ScrollToTop();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ScrollToBottom, ActionScope.Control, _ => ActiveControl is not null, _ =>
+        {
+            ActiveControl!.ScrollToBottom();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.Find, ActionScope.Control, _ => ActiveControl is not null, _ =>
+        {
+            ShowFind();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.FindMatch, ActionScope.Control,
+            action => ActiveControl is not null && action.Args is FindMatchArgs && !string.IsNullOrWhiteSpace(FindBox.Text),
+            action =>
+            {
+                Find(((FindMatchArgs)action.Args!).Direction == FindMatchDirection.Previous);
+                return Task.CompletedTask;
+            });
 
-            e.Handled = true;
-            return;
+        Register(ShortcutAction.NewTab, ActionScope.Tab, _ => true,
+            async action => await CreateTabAsync(ResolveProfile((action.Args as NewTabArgs)?.ContentArgs)).ConfigureAwait(true));
+        Register(ShortcutAction.DuplicateTab, ActionScope.Tab, _ => _activeTab?.Panes.ActiveContent is not null,
+            async _ => await CreateTabAsync(_activeTab!.Panes.ActiveContent!.Profile).ConfigureAwait(true));
+        Register(ShortcutAction.CloseTab, ActionScope.Tab, action => ResolveTab((action.Args as CloseTabArgs)?.Index) is not null,
+            async action => await CloseTabAsync(ResolveTab((action.Args as CloseTabArgs)?.Index)!).ConfigureAwait(true));
+        Register(ShortcutAction.NextTab, ActionScope.Tab, _ => _tabs.Count > 1, _ =>
+        {
+            ActivateRelativeTab(1);
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.PrevTab, ActionScope.Tab, _ => _tabs.Count > 1, _ =>
+        {
+            ActivateRelativeTab(-1);
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.SwitchToTab, ActionScope.Tab,
+            action => action.Args is SwitchToTabArgs args && ResolveTab(args.TabIndex) is not null,
+            action =>
+            {
+                ActivateTab(ResolveTab(((SwitchToTabArgs)action.Args!).TabIndex)!);
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.CloseOtherTabs, ActionScope.Tab, _ => _tabs.Count > 1,
+            async action => await CloseOtherTabsAsync((action.Args as CloseOtherTabsArgs)?.Index).ConfigureAwait(true));
+        Register(ShortcutAction.CloseTabsAfter, ActionScope.Tab,
+            action => ResolveTab((action.Args as CloseTabsAfterArgs)?.Index) is { } tab && _tabs.IndexOf(tab) < _tabs.Count - 1,
+            async action => await CloseTabsAfterAsync((action.Args as CloseTabsAfterArgs)?.Index).ConfigureAwait(true));
+
+        Register(ShortcutAction.SplitPane, ActionScope.Pane, _ => ActiveControl is not null,
+            async action =>
+            {
+                var args = action.Args as SplitPaneArgs;
+                await SplitActivePaneAsync(
+                    ResolveSplitOrientation(args?.SplitDirection),
+                    ResolveSplitProfile(args),
+                    args?.SplitSize ?? 0.5,
+                    args?.SplitDirection is SplitDirection.Left or SplitDirection.Up).ConfigureAwait(true);
+            });
+        Register(ShortcutAction.ClosePane, ActionScope.Pane, _ => _activeTab?.Panes.ActiveContent is not null,
+            async _ => await ClosePaneAsync(_activeTab!, _activeTab!.Panes.ActiveContent!).ConfigureAwait(true));
+        Register(ShortcutAction.CloseOtherPanes, ActionScope.Pane, _ => _activeTab?.Panes.Count > 1,
+            async _ => await CloseOtherPanesAsync().ConfigureAwait(true));
+        Register(ShortcutAction.TogglePaneZoom, ActionScope.Pane, _ => _activeTab?.Panes.ActiveContent is not null, _ =>
+        {
+            _activeTab!.Panes.ToggleZoom();
+            RebuildTerminalHost();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ToggleSplitOrientation, ActionScope.Pane, _ => _activeTab?.Panes.Count > 1, _ =>
+        {
+            _activeTab!.Panes.ToggleActiveSplitOrientation();
+            RebuildTerminalHost();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.MoveFocus, ActionScope.Pane, action => CanMoveFocus(action.Args as MoveFocusArgs),
+            action =>
+            {
+                MoveFocus((MoveFocusArgs)action.Args!);
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.ResizePane, ActionScope.Pane,
+            action => _activeTab?.Panes.ActiveContent is not null && action.Args is ResizePaneArgs,
+            action =>
+            {
+                var direction = ToPaneDirection(((ResizePaneArgs)action.Args!).ResizeDirection);
+                if (direction is { } paneDirection)
+                {
+                    _activeTab!.Panes.ResizeActive(paneDirection, 0.05);
+                    RebuildTerminalHost();
+                }
+
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.MovePane, ActionScope.Pane, CanMovePane,
+            action =>
+            {
+                MovePane((MovePaneArgs)action.Args!);
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.RestartConnection, ActionScope.Pane, _ => ActiveControl is not null,
+            async _ => await ActiveControl!.RestartAsync().ConfigureAwait(true));
+
+        Register(ShortcutAction.ToggleCommandPalette, ActionScope.Window, _ => true, _ =>
+        {
+            ShowCommandPalette();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.OpenSettings, ActionScope.Application, _ => true, _ =>
+        {
+            OpenSettings();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.NewWindow, ActionScope.Application, _ => true, action =>
+        {
+            new MainWindow(ResolveProfile((action.Args as NewWindowArgs)?.ContentArgs)).Show();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.CloseWindow, ActionScope.Window, _ => true, _ =>
+        {
+            Close();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.Quit, ActionScope.Application, _ => true, _ =>
+        {
+            (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ToggleFullscreen, ActionScope.Window, _ => true, _ =>
+        {
+            WindowState = WindowState == WindowState.FullScreen ? WindowState.Normal : WindowState.FullScreen;
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.SetFullScreen, ActionScope.Window, action => action.Args is SetFullScreenArgs, action =>
+        {
+            WindowState = ((SetFullScreenArgs)action.Args!).IsFullScreen ? WindowState.FullScreen : WindowState.Normal;
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.SetMaximized, ActionScope.Window, action => action.Args is SetMaximizedArgs, action =>
+        {
+            WindowState = ((SetMaximizedArgs)action.Args!).IsMaximized ? WindowState.Maximized : WindowState.Normal;
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ToggleAlwaysOnTop, ActionScope.Window, _ => true, _ =>
+        {
+            Topmost = !Topmost;
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ToggleFocusMode, ActionScope.Window, _ => true, _ =>
+        {
+            TitleBar.IsVisible = !TitleBar.IsVisible;
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.SetFocusMode, ActionScope.Window, action => action.Args is SetFocusModeArgs, action =>
+        {
+            TitleBar.IsVisible = !((SetFocusModeArgs)action.Args!).IsFocusMode;
+            return Task.CompletedTask;
+        });
+    }
+
+    private void Register(
+        ShortcutAction action,
+        ActionScope scope,
+        Func<ActionAndArgs, bool> canExecute,
+        Func<ActionAndArgs, Task> execute) =>
+        _actionDispatcher.Register(action, scope, canExecute, execute);
+
+    private ProfileSettings ResolveProfile(INewContentArgs? contentArgs)
+    {
+        if (contentArgs is not NewTerminalArgs terminal)
+        {
+            return _settings.GetDefaultProfile();
         }
 
-        if (!modifiers.HasFlag(KeyModifiers.Control) || !modifiers.HasFlag(KeyModifiers.Shift))
+        if (terminal.ProfileIndex is { } index && index >= 0 && index < _settings.Profiles.Count)
+        {
+            return _settings.Profiles[index];
+        }
+
+        if (!string.IsNullOrWhiteSpace(terminal.Profile))
+        {
+            return _settings.Profiles.FirstOrDefault(profile =>
+                       profile.Name.Equals(terminal.Profile, StringComparison.OrdinalIgnoreCase) ||
+                       profile.Guid?.ToString().Equals(
+                           terminal.Profile.Trim('{', '}'),
+                           StringComparison.OrdinalIgnoreCase) == true)
+                   ?? _settings.GetDefaultProfile();
+        }
+
+        return _settings.GetDefaultProfile();
+    }
+
+    private ProfileSettings ResolveSplitProfile(SplitPaneArgs? args) =>
+        args?.SplitMode == SplitType.Duplicate && _activeTab?.Panes.ActiveContent is { } activePane
+            ? activePane.Profile
+            : ResolveProfile(args?.ContentArgs);
+
+    private TerminalTab? ResolveTab(uint? index)
+    {
+        if (index is null)
+        {
+            return _activeTab;
+        }
+
+        return index == uint.MaxValue
+            ? _tabs.LastOrDefault()
+            : index < _tabs.Count ? _tabs[(int)index] : null;
+    }
+
+    private void ActivateRelativeTab(int delta)
+    {
+        if (_activeTab is null || _tabs.Count == 0)
         {
             return;
         }
 
-        switch (e.Key)
+        var index = (_tabs.IndexOf(_activeTab) + delta + _tabs.Count) % _tabs.Count;
+        ActivateTab(_tabs[index]);
+    }
+
+    private async Task CloseOtherTabsAsync(uint? index)
+    {
+        var keep = ResolveTab(index) ?? _activeTab;
+        foreach (var tab in _tabs.Where(tab => !ReferenceEquals(tab, keep)).ToArray())
         {
-            case Key.T:
-                await CreateTabAsync(_settings.GetDefaultProfile()).ConfigureAwait(true);
-                e.Handled = true;
-                break;
-            case Key.W when _activeTab?.Panes.ActiveContent is { } pane:
-                await ClosePaneAsync(_activeTab, pane).ConfigureAwait(true);
-                e.Handled = true;
-                break;
-            case Key.N:
-                new MainWindow().Show();
-                e.Handled = true;
-                break;
+            await CloseTabAsync(tab).ConfigureAwait(true);
+        }
+
+        if (keep is not null)
+        {
+            ActivateTab(keep);
         }
     }
 
-    private static bool TryDirection(Key key, out PaneDirection direction)
+    private async Task CloseTabsAfterAsync(uint? index)
     {
-        direction = key switch
+        var keep = ResolveTab(index) ?? _activeTab;
+        var keepIndex = keep is null ? -1 : _tabs.IndexOf(keep);
+        foreach (var tab in _tabs.Skip(keepIndex + 1).ToArray())
         {
-            Key.Left => PaneDirection.Left,
-            Key.Right => PaneDirection.Right,
-            Key.Up => PaneDirection.Up,
-            Key.Down => PaneDirection.Down,
-            _ => default,
+            await CloseTabAsync(tab).ConfigureAwait(true);
+        }
+    }
+
+    private async Task CloseOtherPanesAsync()
+    {
+        var closed = _activeTab!.Panes.CloseOthers();
+        foreach (var pane in closed)
+        {
+            await pane.Control.CloseAsync().ConfigureAwait(true);
+        }
+
+        SynchronizeTitle(_activeTab);
+        RebuildTerminalHost();
+        ActiveControl?.Focus();
+    }
+
+    private bool CanMoveFocus(MoveFocusArgs? args)
+    {
+        if (_activeTab?.Panes.ActiveContent is null || args is null)
+        {
+            return false;
+        }
+
+        return args.FocusDirection switch
+        {
+            FocusDirection.First => true,
+            FocusDirection.NextInOrder or FocusDirection.Previous or FocusDirection.PreviousInOrder =>
+                _activeTab.Panes.Count > 1,
+            _ => ToPaneDirection(args.FocusDirection) is not null && _activeTab.Panes.Count > 1,
         };
-        return key is Key.Left or Key.Right or Key.Up or Key.Down;
+    }
+
+    private void MoveFocus(MoveFocusArgs args)
+    {
+        var moved = args.FocusDirection switch
+        {
+            FocusDirection.First => _activeTab!.Panes.FocusFirst(),
+            FocusDirection.NextInOrder => _activeTab!.Panes.MoveFocusInOrder(1),
+            FocusDirection.Previous or FocusDirection.PreviousInOrder => _activeTab!.Panes.MoveFocusInOrder(-1),
+            _ => ToPaneDirection(args.FocusDirection) is { } direction &&
+                 _activeTab!.Panes.MoveFocus(direction),
+        };
+        if (moved)
+        {
+            SynchronizeTitle(_activeTab!);
+            RebuildTerminalHost();
+            ActiveControl?.Focus();
+        }
+    }
+
+    private bool CanMovePane(ActionAndArgs action) =>
+        action.Args is MovePaneArgs args &&
+        string.IsNullOrEmpty(args.Window) &&
+        _activeTab?.Panes.ActiveContent is not null &&
+        ResolveTab(args.TabIndex) is { } target &&
+        !ReferenceEquals(target, _activeTab);
+
+    private void MovePane(MovePaneArgs args)
+    {
+        var sourceTab = _activeTab!;
+        var pane = sourceTab.Panes.ActiveContent!;
+        var targetTab = ResolveTab(args.TabIndex)!;
+        sourceTab.Panes.Close(pane);
+        targetTab.Panes.SplitActive(pane, PaneSplitOrientation.Vertical);
+        if (sourceTab.Panes.Count == 0)
+        {
+            _tabs.Remove(sourceTab);
+        }
+
+        ActivateTab(targetTab);
+        RebuildTabs();
+    }
+
+    private void PopulateCommandPalette()
+    {
+        _paletteItems.Clear();
+        foreach (var command in _settings.ActionMap.AllCommands.Where(static command => command.ActionAndArgs is not null))
+        {
+            var action = command.ActionAndArgs!;
+            _paletteItems.Add(new PaletteItem(command.Name, async () =>
+            {
+                await DispatchActionAsync(action).ConfigureAwait(true);
+            }));
+        }
+    }
+
+    private async Task<ActionDispatchResult> DispatchActionAsync(ActionAndArgs action)
+    {
+        _lastDispatchResult = await _actionDispatcher.DispatchAsync(action).ConfigureAwait(true);
+        return _lastDispatchResult;
+    }
+
+    private static PaneSplitOrientation ResolveSplitOrientation(SplitDirection? direction) =>
+        direction is SplitDirection.Up or SplitDirection.Down
+            ? PaneSplitOrientation.Horizontal
+            : PaneSplitOrientation.Vertical;
+
+    private static PaneDirection? ToPaneDirection(FocusDirection direction) => direction switch
+    {
+        FocusDirection.Left => PaneDirection.Left,
+        FocusDirection.Right => PaneDirection.Right,
+        FocusDirection.Up => PaneDirection.Up,
+        FocusDirection.Down => PaneDirection.Down,
+        _ => null,
+    };
+
+    private static PaneDirection? ToPaneDirection(ResizeDirection direction) => direction switch
+    {
+        ResizeDirection.Left => PaneDirection.Left,
+        ResizeDirection.Right => PaneDirection.Right,
+        ResizeDirection.Up => PaneDirection.Up,
+        ResizeDirection.Down => PaneDirection.Down,
+        _ => null,
+    };
+
+    private void ShowFind()
+    {
+        FindBar.IsVisible = true;
+        FindBox.Focus();
+        FindBox.SelectAll();
+    }
+
+    private void CloseFind()
+    {
+        FindBar.IsVisible = false;
+        _activeTab?.Panes.ActiveContent?.Control.Focus();
+    }
+
+    private void Find(bool previous)
+    {
+        if (!string.IsNullOrWhiteSpace(FindBox.Text))
+        {
+            _activeTab?.Panes.ActiveContent?.Control.Find(FindBox.Text, previous);
+        }
+    }
+
+    private void FindBox_OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            CloseFind();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Enter)
+        {
+            Find(e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+            e.Handled = true;
+        }
+    }
+
+    private void FindPrevious_OnClick(object? sender, RoutedEventArgs e) => Find(previous: true);
+
+    private void FindNext_OnClick(object? sender, RoutedEventArgs e) => Find(previous: false);
+
+    private void CloseFind_OnClick(object? sender, RoutedEventArgs e) => CloseFind();
+
+    private void ShowCommandPalette()
+    {
+        CommandPalette.IsVisible = true;
+        CommandPaletteQuery.Text = string.Empty;
+        RefreshCommandPalette();
+        CommandPaletteQuery.Focus();
+    }
+
+    private void CloseCommandPalette()
+    {
+        CommandPalette.IsVisible = false;
+        _activeTab?.Panes.ActiveContent?.Control.Focus();
+    }
+
+    private void RefreshCommandPalette()
+    {
+        var query = CommandPaletteQuery.Text;
+        CommandPaletteList.ItemsSource = string.IsNullOrWhiteSpace(query)
+            ? _paletteItems
+            : _paletteItems
+                .Where(item => item.Name.Contains(query, StringComparison.CurrentCultureIgnoreCase))
+                .ToArray();
+        CommandPaletteList.SelectedIndex = CommandPaletteList.ItemCount > 0 ? 0 : -1;
+    }
+
+    private void CommandPaletteQuery_OnTextChanged(object? sender, TextChangedEventArgs e) =>
+        RefreshCommandPalette();
+
+    private async void CommandPaletteQuery_OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            CloseCommandPalette();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Down && CommandPaletteList.ItemCount > 0)
+        {
+            CommandPaletteList.SelectedIndex = Math.Min(
+                CommandPaletteList.SelectedIndex + 1,
+                CommandPaletteList.ItemCount - 1);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Up && CommandPaletteList.ItemCount > 0)
+        {
+            CommandPaletteList.SelectedIndex = Math.Max(CommandPaletteList.SelectedIndex - 1, 0);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Enter)
+        {
+            await ExecuteSelectedPaletteAsync().ConfigureAwait(true);
+            e.Handled = true;
+        }
+    }
+
+    private async void CommandPaletteList_OnDoubleTapped(object? sender, TappedEventArgs e) =>
+        await ExecuteSelectedPaletteAsync().ConfigureAwait(true);
+
+    private async Task ExecuteSelectedPaletteAsync()
+    {
+        if (CommandPaletteList.SelectedItem is PaletteItem item)
+        {
+            CloseCommandPalette();
+            await item.Execute().ConfigureAwait(true);
+        }
+    }
+
+    private async void OnWindowKeyDown(object? sender, KeyEventArgs e)
+    {
+        if ((FindBar.IsVisible && FindBox.IsKeyboardFocusWithin) ||
+            (CommandPalette.IsVisible && CommandPaletteQuery.IsKeyboardFocusWithin) ||
+            e.Handled ||
+            !AvaloniaKeyChord.TryCreate(e, out var chord) ||
+            _settings.ActionMap.ResolveAction(chord) is not { } action)
+        {
+            return;
+        }
+
+        // Claim executable bindings before an asynchronous clipboard/process action yields,
+        // so the terminal control cannot also translate the same chord to VT input.
+        e.Handled = true;
+        var result = await DispatchActionAsync(action).ConfigureAwait(true);
+        if (result.Status == ActionDispatchStatus.Disabled)
+        {
+            e.Handled = false;
+        }
     }
 
     private void TitleBar_OnPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -538,4 +1049,9 @@ internal sealed class RelayCommand(Action execute) : System.Windows.Input.IComma
     public bool CanExecute(object? parameter) => true;
 
     public void Execute(object? parameter) => execute();
+}
+
+internal sealed record PaletteItem(string Name, Func<Task> Execute)
+{
+    public override string ToString() => Name;
 }

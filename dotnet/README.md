@@ -5,7 +5,7 @@ A C# reimplementation of the Windows Terminal shell experience:
 - **.NET 10** with **NativeAOT**
 - **Avalonia 11** UI instead of WinUI/XAML Islands
 - **ConPTY** for hosting `pwsh`, Windows PowerShell, and `cmd`
-- VT/xterm parser, text buffer, tabs, copy/paste, Campbell color scheme
+- VT/xterm parser, text buffer, tabs/panes, settings-driven actions and keybindings
 
 The original C++/WinUI tree is unchanged. This port lives entirely under `dotnet/`.
 
@@ -29,19 +29,19 @@ The native executable is written to
 
 ## Keyboard
 
-| Chord | Action |
-| --- | --- |
-| `Ctrl+Shift+T` | New tab |
-| `Ctrl+Shift+W` | Close tab |
-| `Ctrl+Shift+N` | New window |
-| `Ctrl+Shift+C` | Copy |
-| `Ctrl+Shift+V` | Paste |
+Keyboard input is resolved through the Windows Terminal-compatible `actions` and
+`keybindings` settings. The embedded defaults include tab, pane, clipboard,
+scrollback, font, find, settings, and command-palette bindings. User bindings can
+refer to command IDs or inline commands; normalized chord aliases, unbinding, and
+last-definition-wins conflicts match the settings model.
 
 Settings are stored at `%LOCALAPPDATA%\WindowsTerminal.NET\settings.json`.
 Set `WT_DOTNET_SETTINGS_PATH` to load a specific Windows Terminal settings file.
 Runtime application state is stored atomically in `state.json` beside that file.
-The settings loader applies embedded defaults, fragments, then the user layer;
-actions and keybindings are preserved losslessly for the dedicated action phase.
+The settings loader applies embedded defaults, fragments, then the user layer.
+Its typed action map covers the complete generated action inventory. Actions not
+yet implemented by the Avalonia shell still parse and produce an explicit
+unsupported dispatch result.
 
 ## Architecture
 

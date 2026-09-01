@@ -29,6 +29,19 @@ public sealed class PaneTreeTests
     }
 
     [Fact]
+    public void SplitCanPlaceNewPaneBeforeActivePane()
+    {
+        var tree = new PaneTree<string>("one");
+
+        Assert.True(tree.SplitActive("two", PaneSplitOrientation.Vertical, 0.3, newContentFirst: true));
+
+        var split = Assert.IsType<PaneSplit<string>>(tree.Root);
+        Assert.Equal(0.3, split.Ratio);
+        Assert.Equal(["two", "one"], tree.Leaves());
+        Assert.Equal("two", tree.ActiveContent);
+    }
+
+    [Fact]
     public void NestedSplitsCalculateNormalizedBounds()
     {
         var tree = new PaneTree<string>("one");
@@ -150,5 +163,47 @@ public sealed class PaneTreeTests
         Assert.False(tree.SplitActive("one", PaneSplitOrientation.Horizontal));
         Assert.False(tree.Activate("missing"));
         Assert.False(tree.Close("missing"));
+    }
+
+    [Fact]
+    public void ToggleSplitOrientationChangesNearestActiveSplit()
+    {
+        var tree = new PaneTree<string>("one");
+        tree.SplitActive("two", PaneSplitOrientation.Vertical);
+        tree.SplitActive("three", PaneSplitOrientation.Horizontal);
+
+        Assert.True(tree.ToggleActiveSplitOrientation());
+
+        var root = Assert.IsType<PaneSplit<string>>(tree.Root);
+        Assert.Equal(PaneSplitOrientation.Vertical, Assert.IsType<PaneSplit<string>>(root.Second).Orientation);
+    }
+
+    [Fact]
+    public void CloseOthersRetainsOnlyActivePane()
+    {
+        var tree = new PaneTree<string>("one");
+        tree.SplitActive("two", PaneSplitOrientation.Vertical);
+        tree.SplitActive("three", PaneSplitOrientation.Horizontal);
+
+        var removed = tree.CloseOthers();
+
+        Assert.Equal(["one", "two"], removed);
+        Assert.Equal(["three"], tree.Leaves());
+        Assert.Equal("three", tree.ActiveContent);
+    }
+
+    [Fact]
+    public void FocusCanMoveInLeafOrder()
+    {
+        var tree = new PaneTree<string>("one");
+        tree.SplitActive("two", PaneSplitOrientation.Vertical);
+        tree.SplitActive("three", PaneSplitOrientation.Horizontal);
+
+        Assert.True(tree.MoveFocusInOrder(1));
+        Assert.Equal("one", tree.ActiveContent);
+        Assert.True(tree.MoveFocusInOrder(-1));
+        Assert.Equal("three", tree.ActiveContent);
+        Assert.True(tree.FocusFirst());
+        Assert.Equal("one", tree.ActiveContent);
     }
 }
