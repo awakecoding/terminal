@@ -90,4 +90,33 @@ public sealed class TerminalBufferExportTests
         Assert.Equal(0u, ranges[0].Mark.ExitCode);
         Assert.Equal(1u, ranges[1].Mark.ExitCode);
     }
+
+    [Fact]
+    public void ExtractsCommandHistoryAcrossWrappedCells()
+    {
+        var engine = new TerminalEngine(8, 4);
+        engine.Feed("\u001b]133;A\u0007PS> ");
+        engine.Feed("\u001b]133;B\u0007echo 123456");
+        engine.Feed("\u001b]133;C\u0007\r\noutput");
+        engine.Feed("\u001b]133;D;0\u0007");
+
+        var history = TerminalBufferExport.GetCommandHistory(
+            engine.CreateSnapshot(includeHistory: true).Buffer);
+
+        Assert.Equal(["echo 123456"], history);
+    }
+
+    [Fact]
+    public void RangeTextPreservesHardNewlinesAndJoinsSoftWraps()
+    {
+        var engine = new TerminalEngine(4, 4);
+        engine.Feed("abcdef\r\ngh");
+        var snapshot = engine.CreateSnapshot().Buffer;
+
+        var text = TerminalBufferExport.GetRangeText(
+            snapshot,
+            new BufferRange(new BufferPosition(0, 0), new BufferPosition(2, 2)));
+
+        Assert.Equal($"abcdef{Environment.NewLine}gh", text);
+    }
 }

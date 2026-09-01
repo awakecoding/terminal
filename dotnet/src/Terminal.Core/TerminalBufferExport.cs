@@ -69,6 +69,47 @@ public static class TerminalBufferExport
         return ranges;
     }
 
+    public static string GetRangeText(TextBufferSnapshot snapshot, BufferRange range)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var startLine = Math.Clamp(range.Start.Line, 0, snapshot.Lines.Count - 1);
+        var endLine = Math.Clamp(range.End.Line, startLine, snapshot.Lines.Count - 1);
+        var output = new StringBuilder();
+        for (var line = startLine; line <= endLine; line++)
+        {
+            var cells = snapshot.Lines[line].Cells;
+            var startColumn = line == startLine ? Math.Clamp(range.Start.Column, 0, cells.Count) : 0;
+            var endColumn = line == endLine ? Math.Clamp(range.End.Column, startColumn, cells.Count) : cells.Count;
+            var lineText = new StringBuilder();
+            for (var column = startColumn; column < endColumn; column++)
+            {
+                if (!cells[column].IsWideContinuation)
+                {
+                    lineText.Append(cells[column].Text);
+                }
+            }
+
+            if (line < endLine && !snapshot.Lines[line].Wrapped)
+            {
+                output.Append(lineText.ToString().TrimEnd());
+                output.AppendLine();
+            }
+            else
+            {
+                output.Append(lineText);
+            }
+        }
+
+        return output.ToString().TrimEnd();
+    }
+
+    public static IReadOnlyList<string> GetCommandHistory(TextBufferSnapshot snapshot) =>
+        GetShellCommandRanges(snapshot)
+            .Where(static range => range.Command is not null)
+            .Select(range => GetRangeText(snapshot, range.Command!.Value))
+            .Where(static command => command.Length > 0)
+            .ToArray();
+
     private static BufferRange? FindRegion(
         TextBufferSnapshot snapshot,
         BufferPosition rangeStart,
