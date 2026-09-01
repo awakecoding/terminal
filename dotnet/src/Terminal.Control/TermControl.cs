@@ -31,6 +31,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     private IRestartableTerminalConnection? _connection;
     private Typeface _typeface = new("Cascadia Mono, Consolas, Courier New");
     private double _fontSize = 12;
+    private double _defaultFontSize = 12;
     private double _cellWidth = 8;
     private double _cellHeight = 16;
     private bool _cursorOn = true;
@@ -44,7 +45,6 @@ public sealed class TermControl : Avalonia.Controls.Control
         Engine = new TerminalEngine();
         Focusable = true;
         ClipToBounds = true;
-        Cursor = new Cursor(StandardCursorType.Ibeam);
 
         _blinkTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(530) };
         _blinkTimer.Tick += (_, _) =>
@@ -68,6 +68,8 @@ public sealed class TermControl : Avalonia.Controls.Control
     public TerminalEngine Engine { get; }
     public ProfileSettings? Profile { get; private set; }
     public bool IsRunning => _connection?.IsRunning == true;
+    public bool HasSelection => _hasSelection;
+    public double FontSize => _fontSize;
     public TerminalConnectionState ConnectionState =>
         _connection?.State ?? TerminalConnectionState.NotConnected;
     public TerminalProcessMetadata? ProcessMetadata => _connection?.ProcessMetadata;
@@ -85,7 +87,8 @@ public sealed class TermControl : Avalonia.Controls.Control
     public async Task StartAsync(ProfileSettings profile, int columns, int rows)
     {
         Profile = profile;
-        _fontSize = profile.FontSize <= 0 ? 12 : profile.FontSize;
+        _defaultFontSize = profile.FontSize <= 0 ? 12 : profile.FontSize;
+        _fontSize = _defaultFontSize;
         _typeface = new Typeface($"{profile.FontFace}, Cascadia Mono, Consolas, Courier New");
         Engine.Scheme = profile.ResolveScheme();
         Engine.Resize(columns, rows);
@@ -145,7 +148,7 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
     }
 
-    public async Task CopyAsync()
+    public async Task CopyAsync(bool singleLine = false)
     {
         if (!_hasSelection)
         {
@@ -156,6 +159,11 @@ public sealed class TermControl : Avalonia.Controls.Control
         if (string.IsNullOrEmpty(text))
         {
             return;
+        }
+
+        if (singleLine)
+        {
+            text = text.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ');
         }
 
         var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
@@ -183,6 +191,111 @@ public sealed class TermControl : Avalonia.Controls.Control
         Engine.Feed("\u001b[3J\u001b[2J\u001b[H");
         _hasSelection = false;
         InvalidateVisual();
+    }
+
+    public void WriteInput(string input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        _connection?.Write(input);
+        Engine.Buffer.ScrollOffset = 0;
+    }
+
+    public void SelectAll()
+    {
+        _selX1 = 0;
+        _selY1 = 0;
+        _selX2 = Engine.Columns - 1;
+        _selY2 = Engine.Rows - 1;
+        _hasSelection = true;
+        InvalidateVisual();
+    }
+
+    public void ClearSelection()
+    {
+        _hasSelection = false;
+        InvalidateVisual();
+    }
+
+    public void AdjustFontSize(double delta)
+    {
+        _fontSize = Math.Clamp(_fontSize + delta, 1, 72);
+        if (VisualRoot is not null)
+        {
+            MeasureGlyph();
+        }
+
+        InvalidateMeasure();
+        InvalidateVisual();
+    }
+
+    public void ResetFontSize()
+    {
+        _fontSize = _defaultFontSize;
+        if (VisualRoot is not null)
+        {
+            MeasureGlyph();
+        }
+
+        InvalidateMeasure();
+        InvalidateVisual();
+    }
+
+    public void ScrollBy(int rows)
+    {
+        Engine.Buffer.ScrollOffset = Math.Clamp(
+            Engine.Buffer.ScrollOffset + rows,
+            0,
+            Engine.Buffer.HistoryCount);
+        InvalidateVisual();
+    }
+
+    public void ScrollPage(int direction) => ScrollBy(direction * Math.Max(1, Engine.Rows - 1));
+
+    public void ScrollToTop()
+    {
+        Engine.Buffer.ScrollOffset = Engine.Buffer.HistoryCount;
+        InvalidateVisual();
+    }
+
+    public void ScrollToBottom()
+    {
+        Engine.Buffer.ScrollOffset = 0;
+        InvalidateVisual();
+    }
+
+    public bool Find(string query, bool previous = false)
+    {
+        if (string.IsNullOrEmpty(query))
+        {
+            return false;
+        }
+
+        var snapshot = Engine.Buffer.CreateSnapshot();
+        var indexes = previous
+            ? Enumerable.Range(0, snapshot.Lines.Count).Reverse()
+            : Enumerable.Range(0, snapshot.Lines.Count);
+        foreach (var rowIndex in indexes)
+        {
+            var text = string.Concat(snapshot.Lines[rowIndex].Cells.Select(static cell =>
+                cell.IsWideContinuation ? string.Empty : cell.Text));
+            var column = previous
+                ? text.LastIndexOf(query, StringComparison.CurrentCultureIgnoreCase)
+                : text.IndexOf(query, StringComparison.CurrentCultureIgnoreCase);
+            if (column < 0)
+            {
+                continue;
+            }
+
+            _selX1 = Math.Min(column, Engine.Columns - 1);
+            _selY1 = rowIndex;
+            _selX2 = Math.Min(column + query.Length - 1, Engine.Columns - 1);
+            _selY2 = rowIndex;
+            _hasSelection = true;
+            InvalidateVisual();
+            return true;
+        }
+
+        return false;
     }
 
     public void ResetTerminal()
@@ -258,23 +371,6 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
-        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
-        {
-            if (e.Key == Key.C)
-            {
-                _ = CopyAsync();
-                e.Handled = true;
-                return;
-            }
-
-            if (e.Key == Key.V)
-            {
-                _ = PasteAsync();
-                e.Handled = true;
-                return;
-            }
-        }
-
         var vt = KeyMapper.ToVt(e.Key, e.KeyModifiers, e.PhysicalKey, e.KeySymbol, Engine.ApplicationCursorKeys);
         if (vt is not null)
         {

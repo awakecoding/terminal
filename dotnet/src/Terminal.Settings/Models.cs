@@ -179,14 +179,16 @@ public sealed class AppSettings
     public string SearchWebDefaultQueryUrl { get; set; } = "https://www.bing.com/search?q=%22%s%22";
     public string WordDelimiters { get; set; } = " /\\()\"'-.,:;<>~!@#$%^&*|+=[]{}~?\u2502";
 
-    // Collections owned by the settings phase. Actions and keybindings remain raw
-    // until the dedicated action phase can project them without losing unknown keys.
+    // Raw arrays are retained for lossless settings.json round-tripping. Runtime
+    // consumers should use ActionMap.
     public ProfileSettings ProfileDefaults { get; set; } = new() { Origin = SettingsOrigin.ProfilesDefaults };
     public List<ProfileSettings> Profiles { get; set; } = [];
     public List<SchemeSettings> Schemes { get; set; } = [];
     public List<ThemeSettings> Themes { get; set; } = [];
     public JsonArray Actions { get; set; } = [];
     public JsonArray Keybindings { get; set; } = [];
+    [JsonIgnore]
+    public ActionMap ActionMap { get; internal set; } = new();
     public List<SettingsDiagnostic> Diagnostics { get; } = [];
 
     [JsonIgnore]

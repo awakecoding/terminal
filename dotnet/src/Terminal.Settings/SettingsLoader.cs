@@ -56,6 +56,23 @@ public static class SettingsLoader
         var defaults = ParseObject(defaultsJson, "defaults.json", required: true, diagnostics)!;
         MigrateLegacyAliases(defaults);
         var merged = (JsonObject)defaults.DeepClone();
+        var actionMap = new ActionMap();
+        actionMap.Layer(
+            defaults["actions"] as JsonArray,
+            defaults["keybindings"] as JsonArray,
+            SettingsOrigin.Inbox);
+
+        // These bindings are part of the product defaults, but intentionally live
+        // in userDefaults.json in the native settings model.
+        var userDefaults = ParseObject(
+            ReadEmbeddedUserDefaults(),
+            "userDefaults.json",
+            required: true,
+            diagnostics)!;
+        actionMap.Layer(
+            userDefaults["actions"] as JsonArray,
+            userDefaults["keybindings"] as JsonArray,
+            SettingsOrigin.Generated);
 
         if (fragments is not null)
         {
@@ -75,6 +92,10 @@ public static class SettingsLoader
                         pendingFragmentUpdates.AddRange(ExtractFragmentUpdates(fragmentObject));
                     }
 
+                    actionMap.Layer(
+                        fragmentObject["actions"] as JsonArray,
+                        fragmentObject["keybindings"] as JsonArray,
+                        SettingsOrigin.Fragment);
                     MergeRoot(merged, fragmentObject);
                 }
             }
@@ -91,12 +112,16 @@ public static class SettingsLoader
                 TagNamedEntries(userDocument["schemes"] as JsonArray, SettingsOrigin.User, userSource);
                 TagNamedEntries(userDocument["themes"] as JsonArray, SettingsOrigin.User, userSource);
                 HandleUserSchemeCollisions(merged, userDocument, diagnostics);
+                actionMap.Layer(
+                    userDocument["actions"] as JsonArray,
+                    userDocument["keybindings"] as JsonArray,
+                    SettingsOrigin.User);
                 MergeRoot(merged, userDocument);
             }
         }
 
         ApplyFragmentUpdates(merged, pendingFragmentUpdates);
-        var settings = Resolve(merged, userDocument, inheritedProfileIds);
+        var settings = Resolve(merged, userDocument, inheritedProfileIds, actionMap);
         settings.InheritedProfileIds = inheritedProfileIds;
         settings.UserDocument = userDocument is null ? null : (JsonObject)userDocument.DeepClone();
         settings.Diagnostics.AddRange(diagnostics);
@@ -140,7 +165,8 @@ public static class SettingsLoader
     private static AppSettings Resolve(
         JsonObject root,
         JsonObject? userDocument,
-        IReadOnlySet<string> inheritedProfileIds)
+        IReadOnlySet<string> inheritedProfileIds,
+        ActionMap actionMap)
     {
         var copyFormats = CopyFormats(root);
         var settings = new AppSettings
@@ -204,6 +230,7 @@ public static class SettingsLoader
                 ?? "https://www.bing.com/search?q=%22%s%22",
             Actions = CloneArray(root["actions"]),
             Keybindings = CloneArray(root["keybindings"]),
+            ActionMap = actionMap,
         };
 
         var profilesNode = NormalizeProfiles(root["profiles"]);

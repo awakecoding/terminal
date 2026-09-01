@@ -72,7 +72,11 @@ public sealed class PaneTree<T> where T : class
         return true;
     }
 
-    public bool SplitActive(T newContent, PaneSplitOrientation orientation, double ratio = 0.5)
+    public bool SplitActive(
+        T newContent,
+        PaneSplitOrientation orientation,
+        double ratio = 0.5,
+        bool newContentFirst = false)
     {
         ArgumentNullException.ThrowIfNull(newContent);
         if (Root is null || ActiveContent is null || FindLeaf(newContent) is not null)
@@ -84,8 +88,8 @@ public sealed class PaneTree<T> where T : class
         var replacement = new PaneSplit<T>(
             orientation,
             normalizedRatio,
-            new PaneLeaf<T>(ActiveContent),
-            new PaneLeaf<T>(newContent));
+            new PaneLeaf<T>(newContentFirst ? newContent : ActiveContent),
+            new PaneLeaf<T>(newContentFirst ? ActiveContent : newContent));
         Root = ReplaceLeaf(Root, ActiveContent, replacement);
         ActiveContent = newContent;
         ZoomedContent = null;
@@ -158,6 +162,37 @@ public sealed class PaneTree<T> where T : class
         return true;
     }
 
+    public bool MoveFocusInOrder(int delta)
+    {
+        var leaves = Leaves();
+        if (ActiveContent is null || leaves.Count <= 1)
+        {
+            return false;
+        }
+
+        var current = IndexOf(leaves, ActiveContent);
+        if (current < 0)
+        {
+            return false;
+        }
+
+        var next = (current + delta) % leaves.Count;
+        if (next < 0)
+        {
+            next += leaves.Count;
+        }
+
+        ActiveContent = leaves[next];
+        ZoomedContent = null;
+        return true;
+    }
+
+    public bool FocusFirst()
+    {
+        var first = Leaves().FirstOrDefault();
+        return first is not null && Activate(first);
+    }
+
     public bool ResizeActive(PaneDirection direction, double amount)
     {
         if (Root is null || ActiveContent is null || amount == 0)
@@ -197,6 +232,33 @@ public sealed class PaneTree<T> where T : class
             ? default
             : ActiveContent;
         return true;
+    }
+
+    public bool ToggleActiveSplitOrientation()
+    {
+        if (Root is null || ActiveContent is null)
+        {
+            return false;
+        }
+
+        var result = ToggleNearestSplit(Root, ActiveContent);
+        Root = result.Node;
+        return result.Toggled;
+    }
+
+    public IReadOnlyList<T> CloseOthers()
+    {
+        if (ActiveContent is null || Count <= 1)
+        {
+            return [];
+        }
+
+        var removed = Leaves()
+            .Where(content => !_comparer.Equals(content, ActiveContent))
+            .ToArray();
+        Root = new PaneLeaf<T>(ActiveContent);
+        ZoomedContent = null;
+        return removed;
     }
 
     public IReadOnlyDictionary<T, PaneBounds> CalculateBounds()
@@ -314,6 +376,29 @@ public sealed class PaneTree<T> where T : class
             : (node, false);
     }
 
+    private (PaneNode<T> Node, bool Toggled) ToggleNearestSplit(PaneNode<T> node, T target)
+    {
+        if (node is not PaneSplit<T> split)
+        {
+            return (node, false);
+        }
+
+        var targetInFirst = Contains(split.First, target);
+        var child = targetInFirst ? split.First : split.Second;
+        var childResult = ToggleNearestSplit(child, target);
+        if (childResult.Toggled)
+        {
+            return targetInFirst
+                ? (split with { First = childResult.Node }, true)
+                : (split with { Second = childResult.Node }, true);
+        }
+
+        var orientation = split.Orientation == PaneSplitOrientation.Vertical
+            ? PaneSplitOrientation.Horizontal
+            : PaneSplitOrientation.Vertical;
+        return (split with { Orientation = orientation }, true);
+    }
+
     private T? FindSiblingLeaf(PaneNode<T> node, T target)
     {
         if (node is not PaneSplit<T> split)
@@ -338,6 +423,19 @@ public sealed class PaneTree<T> where T : class
 
     private bool Contains(PaneNode<T> node, T target) =>
         EnumerateLeaves(node).Any(leaf => _comparer.Equals(leaf.Content, target));
+
+    private int IndexOf(IReadOnlyList<T> items, T target)
+    {
+        for (var index = 0; index < items.Count; index++)
+        {
+            if (_comparer.Equals(items[index], target))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
 
     private static IEnumerable<PaneLeaf<T>> EnumerateLeaves(PaneNode<T> node)
     {
