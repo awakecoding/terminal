@@ -1,4 +1,5 @@
 using System.Text;
+using System.Globalization;
 
 namespace Microsoft.Terminal.Core;
 
@@ -14,21 +15,28 @@ public sealed record TerminalSnapshot(
     bool SgrMouse,
     bool AutoWrap,
     bool InsertMode,
-    bool ReverseVideo);
+    bool ReverseVideo)
+{
+    public IReadOnlyList<TerminalImageOverlay> Images { get; init; } = [];
+}
 
 public sealed record TerminalNotification(string? Title, string Body);
 
 public sealed class TerminalEngine : IVtDispatch
 {
     private readonly VtParser _parser;
+    private readonly SixelDecoder _sixelDecoder = new();
     private readonly TextBuffer _primary;
     private readonly TextBuffer _alternate;
+    private readonly List<TerminalImageOverlay> _images = [];
     private TextBuffer _active;
     private CellAttributes _sgr = CellAttributes.Default;
     private ColorScheme _scheme;
     private ColorScheme _defaultScheme;
     private Rune _lastPrintedRune;
     private bool _hasLastPrintedRune;
+    private long _nextImageId;
+    private long _retainedImageBytes;
 
     public TerminalEngine(int columns = 120, int rows = 30, int historySize = 9001)
     {
@@ -75,6 +83,7 @@ public sealed class TerminalEngine : IVtDispatch
     public int Rows => Buffer.Rows;
     public int CursorX => Buffer.CursorX;
     public int CursorY => Buffer.CursorY;
+    public IReadOnlyList<TerminalImageOverlay> Images => _images;
 
     public event EventHandler? Invalidated;
     public event EventHandler<string>? TitleChanged;
@@ -82,6 +91,7 @@ public sealed class TerminalEngine : IVtDispatch
     public event EventHandler? ShellIntegrationChanged;
     public event EventHandler<string>? ClipboardWriteRequested;
     public event EventHandler<TerminalNotification>? NotificationRequested;
+    public event EventHandler<TerminalImageOverlay>? ImageAdded;
     public event EventHandler? Bell;
     public event EventHandler<byte[]>? ResponseReady;
 
@@ -118,6 +128,10 @@ public sealed class TerminalEngine : IVtDispatch
         ReverseVideo = false;
         _scheme = _defaultScheme;
         _hasLastPrintedRune = false;
+        _sixelDecoder.Reset();
+        _images.Clear();
+        _nextImageId = 0;
+        _retainedImageBytes = 0;
         _primary.Reset(keepHistory: false);
         _alternate.Reset(keepHistory: false);
         Invalidated?.Invoke(this, EventArgs.Empty);
@@ -130,18 +144,21 @@ public sealed class TerminalEngine : IVtDispatch
     }
 
     public TerminalSnapshot CreateSnapshot(bool includeHistory = false) => new(
-        Buffer.CreateSnapshot(includeHistory),
-        Title,
-        WorkingDirectory,
-        AlternateBufferActive,
-        CursorVisible,
-        ApplicationCursorKeys,
-        BracketedPaste,
-        MouseTracking,
-        SgrMouse,
-        AutoWrap,
-        InsertMode,
-        ReverseVideo);
+            Buffer.CreateSnapshot(includeHistory),
+            Title,
+            WorkingDirectory,
+            AlternateBufferActive,
+            CursorVisible,
+            ApplicationCursorKeys,
+            BracketedPaste,
+            MouseTracking,
+            SgrMouse,
+            AutoWrap,
+            InsertMode,
+            ReverseVideo)
+    {
+        Images = _images.ToArray(),
+    };
 
     public string CopySelection(int x1, int y1, int x2, int y2) => Buffer.GetText(x1, y1, x2, y2);
 
@@ -234,6 +251,32 @@ public sealed class TerminalEngine : IVtDispatch
     void IVtDispatch.CsiDispatch(char final, ReadOnlySpan<int> parameters, byte intermediate, byte privateMarker) =>
         DispatchCsi(final, parameters, intermediate, privateMarker);
 
+    void IVtDispatch.DcsDispatch(
+        char final,
+        ReadOnlySpan<int> parameters,
+        ReadOnlySpan<byte> intermediates,
+        byte privateMarker,
+        ReadOnlySpan<byte> data)
+    {
+        if (privateMarker != 0)
+        {
+            return;
+        }
+
+        if (final == 'q' && intermediates.IsEmpty)
+        {
+            DispatchSixel(parameters, data);
+        }
+        else if (final == 'q' && intermediates.SequenceEqual([(byte)'$']))
+        {
+            DispatchRequestSetting(data);
+        }
+        else if (final == 'q' && intermediates.SequenceEqual([(byte)'+']))
+        {
+            DispatchTermcapRequest(data);
+        }
+    }
+
     void IVtDispatch.OscDispatch(int command, ReadOnlySpan<char> data)
     {
         switch (command)
@@ -267,10 +310,347 @@ public sealed class TerminalEngine : IVtDispatch
             case 133:
                 DispatchShellIntegration(data);
                 break;
+            case 1337:
+                DispatchInlineImage(data);
+                break;
             case 777:
                 DispatchRxvtNotification(data);
                 break;
         }
+    }
+
+    private void DispatchSixel(ReadOnlySpan<int> parameters, ReadOnlySpan<byte> data)
+    {
+        if (!_sixelDecoder.TryDecode(
+                data,
+                Param(parameters, 0, 0),
+                Param(parameters, 1, 0),
+                Param(parameters, 2, 0),
+                out var image) ||
+            image is null)
+        {
+            return;
+        }
+
+        AddImage(new TerminalImageOverlay(
+            ++_nextImageId,
+            TerminalImageProtocol.Sixel,
+            AlternateBufferActive,
+            Buffer.CursorX,
+            Buffer.CursorY,
+            image,
+            null));
+    }
+
+    private void DispatchRequestSetting(ReadOnlySpan<byte> data)
+    {
+        var request = Encoding.ASCII.GetString(data);
+        var response = request switch
+        {
+            "m" => $"1$r{FormatSgrSetting()}m",
+            "r" => $"1$r{Buffer.ScrollTop + 1};{Buffer.ScrollBottom + 1}r",
+            "s" => $"1$r1;{Buffer.Columns}s",
+            " q" => "1$r0 q",
+            "\"q" => "1$r0\"q",
+            "*x" => "1$r1*x",
+            _ => "0$r",
+        };
+        RespondDcs(response);
+    }
+
+    private void DispatchTermcapRequest(ReadOnlySpan<byte> data)
+    {
+        const int maximumRequests = 32;
+        var offset = 0;
+        for (var requestCount = 0; requestCount < maximumRequests && offset < data.Length; requestCount++)
+        {
+            var remaining = data[offset..];
+            var separator = remaining.IndexOf((byte)';');
+            var requestBytes = separator < 0 ? remaining : remaining[..separator];
+            offset += separator < 0 ? remaining.Length : separator + 1;
+            if (requestBytes.IsEmpty)
+            {
+                continue;
+            }
+
+            if (requestBytes.Length > 128)
+            {
+                RespondDcs("0+r");
+                continue;
+            }
+
+            var request = Encoding.ASCII.GetString(requestBytes);
+            if (!TryDecodeHexAscii(request, out var name))
+            {
+                RespondDcs($"0+r{request}");
+                continue;
+            }
+
+            var value = name switch
+            {
+                "TN" => "xterm-256color",
+                "Co" => "256",
+                "RGB" or "Tc" => "1",
+                _ => null,
+            };
+            RespondDcs(value is null
+                ? $"0+r{request}"
+                : $"1+r{request}={Convert.ToHexString(Encoding.ASCII.GetBytes(value))}");
+        }
+    }
+
+    private string FormatSgrSetting()
+    {
+        var values = new List<string> { "0" };
+        AddSgrFlag(values, CellFlags.Bold, "1");
+        AddSgrFlag(values, CellFlags.Faint, "2");
+        AddSgrFlag(values, CellFlags.Italic, "3");
+        AddSgrFlag(values, CellFlags.Underline, "4");
+        AddSgrFlag(values, CellFlags.Blink, "5");
+        AddSgrFlag(values, CellFlags.Inverse, "7");
+        AddSgrFlag(values, CellFlags.Invisible, "8");
+        AddSgrFlag(values, CellFlags.Strikethrough, "9");
+        AddSgrColor(values, _sgr.Foreground, foreground: true);
+        AddSgrColor(values, _sgr.Background, foreground: false);
+        return string.Join(';', values);
+    }
+
+    private void AddSgrFlag(List<string> values, CellFlags flag, string parameter)
+    {
+        if ((_sgr.Flags & flag) != 0)
+        {
+            values.Add(parameter);
+        }
+    }
+
+    private static void AddSgrColor(List<string> values, TermColor color, bool foreground)
+    {
+        if (color.Kind == ColorKind.Indexed)
+        {
+            if (color.Index < 16)
+            {
+                values.Add((color.Index < 8
+                    ? (foreground ? 30 : 40) + color.Index
+                    : (foreground ? 90 : 100) + color.Index - 8).ToString(CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                values.Add($"{(foreground ? 38 : 48)}:5:{color.Index}");
+            }
+        }
+        else if (color.Kind == ColorKind.Rgb)
+        {
+            values.Add($"{(foreground ? 38 : 48)}:2::{color.R}:{color.G}:{color.B}");
+        }
+    }
+
+    private static bool TryDecodeHexAscii(ReadOnlySpan<char> value, out string decoded)
+    {
+        decoded = string.Empty;
+        if (value.Length is 0 or > 128 || (value.Length & 1) != 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            var bytes = Convert.FromHexString(value);
+            if (bytes.Any(static value => value is < 0x20 or > 0x7E))
+            {
+                return false;
+            }
+
+            decoded = Encoding.ASCII.GetString(bytes);
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private void DispatchInlineImage(ReadOnlySpan<char> data)
+    {
+        if (!data.StartsWith("File="))
+        {
+            return;
+        }
+
+        var separator = data.IndexOf(':');
+        if (separator < 0)
+        {
+            return;
+        }
+
+        var header = data[5..separator];
+        var payload = data[(separator + 1)..];
+        if (payload.Length > ((TerminalImageLimits.MaximumInlineImageBytes * 4 / 3) + 4) ||
+            !IsStrictBase64(payload))
+        {
+            return;
+        }
+
+        string? name = null;
+        long? declaredSize = null;
+        var width = TerminalImageDimension.Auto;
+        var height = TerminalImageDimension.Auto;
+        var preserveAspectRatio = true;
+        var inline = false;
+        const int maximumMetadataItems = 32;
+        var headerOffset = 0;
+        for (var itemCount = 0; itemCount < maximumMetadataItems && headerOffset < header.Length; itemCount++)
+        {
+            var remaining = header[headerOffset..];
+            var itemSeparator = remaining.IndexOf(';');
+            var item = itemSeparator < 0 ? remaining : remaining[..itemSeparator];
+            headerOffset += itemSeparator < 0 ? remaining.Length : itemSeparator + 1;
+            if (item.IsEmpty)
+            {
+                continue;
+            }
+
+            var equals = item.IndexOf('=');
+            if (equals < 0)
+            {
+                continue;
+            }
+
+            var key = item[..equals];
+            var value = item[(equals + 1)..];
+            if (key.SequenceEqual("inline"))
+            {
+                inline = value.SequenceEqual("1");
+            }
+            else if (key.SequenceEqual("name"))
+            {
+                name = DecodeInlineName(value);
+            }
+            else if (key.SequenceEqual("size"))
+            {
+                if (long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedSize))
+                {
+                    declaredSize = parsedSize;
+                }
+            }
+            else if (key.SequenceEqual("width"))
+            {
+                width = ParseInlineDimension(value);
+            }
+            else if (key.SequenceEqual("height"))
+            {
+                height = ParseInlineDimension(value);
+            }
+            else if (key.SequenceEqual("preserveAspectRatio"))
+            {
+                preserveAspectRatio = !value.SequenceEqual("0");
+            }
+        }
+
+        if (!inline || declaredSize is > TerminalImageLimits.MaximumInlineImageBytes)
+        {
+            return;
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(payload.ToString());
+        }
+        catch (FormatException)
+        {
+            return;
+        }
+
+        if (bytes.Length > TerminalImageLimits.MaximumInlineImageBytes)
+        {
+            return;
+        }
+
+        var inlineImage = new InlineImage(
+            new InlineImageMetadata(name, declaredSize, width, height, preserveAspectRatio),
+            bytes);
+        AddImage(new TerminalImageOverlay(
+            ++_nextImageId,
+            TerminalImageProtocol.Iterm2Inline,
+            AlternateBufferActive,
+            Buffer.CursorX,
+            Buffer.CursorY,
+            null,
+            inlineImage));
+    }
+
+    private static string? DecodeInlineName(ReadOnlySpan<char> value)
+    {
+        if (value.Length > 4096 || !IsStrictBase64(value))
+        {
+            return null;
+        }
+
+        try
+        {
+            return new UTF8Encoding(false, true).GetString(Convert.FromBase64String(value.ToString()));
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+        catch (DecoderFallbackException)
+        {
+            return null;
+        }
+    }
+
+    private static TerminalImageDimension ParseInlineDimension(ReadOnlySpan<char> value)
+    {
+        if (value.SequenceEqual("auto"))
+        {
+            return TerminalImageDimension.Auto;
+        }
+
+        var kind = TerminalImageDimensionKind.Cells;
+        if (value.EndsWith("px", StringComparison.Ordinal))
+        {
+            kind = TerminalImageDimensionKind.Pixels;
+            value = value[..^2];
+        }
+        else if (value.EndsWith("%", StringComparison.Ordinal))
+        {
+            kind = TerminalImageDimensionKind.Percent;
+            value = value[..^1];
+        }
+
+        var maximum = kind == TerminalImageDimensionKind.Percent
+            ? 100
+            : TerminalImageLimits.MaximumPixelDimension;
+        return double.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var number) &&
+               double.IsFinite(number) &&
+               number >= 0 &&
+               number <= maximum
+            ? new TerminalImageDimension(kind, number)
+            : TerminalImageDimension.Auto;
+    }
+
+    private void AddImage(TerminalImageOverlay image)
+    {
+        var imageBytes = image.Sixel?.EstimatedByteSize ?? image.InlineImage?.EstimatedByteSize ?? 0;
+        if (imageBytes > TerminalImageLimits.MaximumRetainedImageBytes)
+        {
+            return;
+        }
+
+        while (_images.Count > 0 &&
+               (_images.Count >= TerminalImageLimits.MaximumRetainedImages ||
+                _retainedImageBytes + imageBytes > TerminalImageLimits.MaximumRetainedImageBytes))
+        {
+            var removed = _images[0];
+            _retainedImageBytes -=
+                removed.Sixel?.EstimatedByteSize ?? removed.InlineImage?.EstimatedByteSize ?? 0;
+            _images.RemoveAt(0);
+        }
+
+        _images.Add(image);
+        _retainedImageBytes += imageBytes;
+        ImageAdded?.Invoke(this, image);
     }
 
     private void DispatchClipboard(ReadOnlySpan<char> data)
@@ -945,6 +1325,8 @@ public sealed class TerminalEngine : IVtDispatch
     }
 
     private void RespondOsc(string payload) => Respond($"\u001b]{payload}\u001b\\");
+
+    private void RespondDcs(string payload) => Respond($"\u001bP{payload}\u001b\\");
 
     private void Respond(string text) => ResponseReady?.Invoke(this, Encoding.UTF8.GetBytes(text));
 
