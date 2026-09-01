@@ -21,7 +21,7 @@ The original C++ tree stays in place. All new work lives under `dotnet/`.
 | `Terminal.Core` | Cell/attributes, text buffer, VT ground/CSI/OSC subset, alt screen, SGR (16/256/truecolor) |
 | `Terminal.Render` | Renderer-neutral contracts for the future Skia glyph atlas |
 | `Terminal.Connection` | NativeAOT-safe ConPTY via `LibraryImport` |
-| `Terminal.Settings` | Tiny JSON model (profiles, schemes, cols/rows) |
+| `Terminal.Settings` | Embedded defaults, modern/legacy profiles, profile-default inheritance, fragments, diagnostics, stable profile GUIDs, and atomic persistence |
 | `Terminal.Control` | Avalonia `TermControl`: Skia text, selection, copy/paste, key map |
 | `WindowsTerminal.App` | Tabbed window, title bar, Ctrl+Shift+T/W/N/C/V |
 | `WindowsTerminal` | NativeAOT executable and composition root |

@@ -6,4 +6,9 @@
   <ItemGroup>
     <ProjectReference Include="..\Terminal.Core\Terminal.Core.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Defaults\defaults.json" LogicalName="Microsoft.Terminal.Settings.defaults.json" />
+    <EmbeddedResource Include="Defaults\userDefaults.json" LogicalName="Microsoft.Terminal.Settings.userDefaults.json" />
+  </ItemGroup>
 </Project>

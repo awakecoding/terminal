@@ -1,4 +1,5 @@
-using System.Text.Json;
+using System.Diagnostics;
+using System.Text;
 
 namespace Microsoft.Terminal.Settings;
 
@@ -8,92 +9,151 @@ public static class SettingsService
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "WindowsTerminal.NET");
 
-    public static string SettingsPath => Path.Combine(SettingsDirectory, "settings.json");
+    public static string SettingsPath =>
+        Environment.GetEnvironmentVariable("WT_DOTNET_SETTINGS_PATH") ??
+        Path.Combine(SettingsDirectory, "settings.json");
+
+    public static IReadOnlyList<SettingsDiagnostic> LastDiagnostics { get; private set; } = [];
 
     public static AppSettings Load()
     {
-        try
+        string? userJson = null;
+        SettingsDiagnostic? readDiagnostic = null;
+        if (File.Exists(SettingsPath))
         {
-            if (File.Exists(SettingsPath))
+            try
             {
-                var json = File.ReadAllText(SettingsPath);
-                var loaded = JsonSerializer.Deserialize(json, SettingsJsonContext.Default.AppSettings);
-                if (loaded is not null)
-                {
-                    EnsureProfiles(loaded);
-                    return loaded;
-                }
+                userJson = File.ReadAllText(SettingsPath, Encoding.UTF8);
+            }
+            catch (IOException ex)
+            {
+                readDiagnostic = ReadDiagnostic(ex);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                readDiagnostic = ReadDiagnostic(ex);
             }
         }
-        catch (Exception)
+
+        var settings = SettingsLoader.Load(
+            SettingsLoader.ReadEmbeddedDefaults(),
+            userJson,
+            ReadFragments(),
+            SettingsPath);
+        if (readDiagnostic is not null)
         {
-            // Fall back to defaults when the user file is missing or invalid.
+            settings.Diagnostics.Add(readDiagnostic);
         }
 
-        var settings = CreateDefault();
-        Save(settings);
+        LastDiagnostics = settings.Diagnostics;
+
+        foreach (var diagnostic in settings.Diagnostics)
+        {
+            Trace.WriteLine($"{diagnostic.Severity} {diagnostic.Code}: {diagnostic.Message}");
+        }
+
         return settings;
     }
 
     public static void Save(AppSettings settings)
     {
-        Directory.CreateDirectory(SettingsDirectory);
-        var json = JsonSerializer.Serialize(settings, SettingsJsonContext.Default.AppSettings);
-        File.WriteAllText(SettingsPath, json);
-    }
+        ArgumentNullException.ThrowIfNull(settings);
+        var path = Path.GetFullPath(SettingsPath);
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException($"Settings path '{path}' has no parent directory.");
+        Directory.CreateDirectory(directory);
 
-    public static AppSettings CreateDefault()
-    {
-        var settings = new AppSettings
+        var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        var backupPath = path + ".bak";
+        try
         {
-            Profiles = [ProfileSettings.PowerShell, ProfileSettings.Cmd],
-            DefaultProfile = ProfileSettings.PowerShell.Guid,
-            Schemes =
-            [
-                new SchemeSettings { Name = "Campbell" },
-                new SchemeSettings { Name = "One Half Dark", Background = "#282C34", Foreground = "#DCDFE4" },
-                new SchemeSettings { Name = "Solarized Dark", Background = "#002B36", Foreground = "#839496" },
-            ],
-        };
-
-        var pwsh = FindPwsh();
-        if (pwsh is not null)
-        {
-            var profile = ProfileSettings.Pwsh;
-            profile.Commandline = pwsh;
-            settings.Profiles.Insert(0, profile);
-            settings.DefaultProfile = profile.Guid;
-        }
-
-        return settings;
-    }
-
-    private static void EnsureProfiles(AppSettings settings)
-    {
-        if (settings.Profiles.Count == 0)
-        {
-            settings.Profiles.Add(ProfileSettings.PowerShell);
-            settings.Profiles.Add(ProfileSettings.Cmd);
-        }
-    }
-
-    private static string? FindPwsh()
-    {
-        var path = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrEmpty(path))
-        {
-            return null;
-        }
-
-        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            var candidate = Path.Combine(directory.Trim('"'), "pwsh.exe");
-            if (File.Exists(candidate))
+            File.WriteAllText(tempPath, SettingsLoader.SerializeUserDocument(settings), new UTF8Encoding(false));
+            if (File.Exists(path))
             {
-                return candidate;
+                File.Copy(path, backupPath, overwrite: true);
+            }
+
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
             }
         }
+    }
 
-        return null;
+    public static AppSettings CreateDefault() =>
+        SettingsLoader.Load(SettingsLoader.ReadEmbeddedDefaults());
+
+    private static SettingsDiagnostic ReadDiagnostic(Exception exception) => new(
+        SettingsDiagnosticSeverity.Error,
+        "SettingsReadFailed",
+        $"Could not read settings from '{SettingsPath}': {exception.Message}",
+        SettingsPath);
+
+    private static IEnumerable<SettingsLayer> ReadFragments()
+    {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        var roots = new[]
+        {
+            Path.Combine(localAppData, "Microsoft", "Windows Terminal", "Fragments"),
+            Path.Combine(programData, "Microsoft", "Windows Terminal", "Fragments"),
+        };
+
+        foreach (var root in roots)
+        {
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+
+            string[] paths;
+            try
+            {
+                paths = Directory.GetFiles(
+                    root,
+                    "*.json",
+                    new EnumerationOptions
+                    {
+                        RecurseSubdirectories = true,
+                        IgnoreInaccessible = true,
+                        AttributesToSkip = FileAttributes.ReparsePoint,
+                    });
+            }
+            catch (IOException ex)
+            {
+                Trace.WriteLine($"Could not enumerate settings fragments in '{root}': {ex.Message}");
+                continue;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Trace.WriteLine($"Could not enumerate settings fragments in '{root}': {ex.Message}");
+                continue;
+            }
+
+            foreach (var path in paths.Order(StringComparer.OrdinalIgnoreCase))
+            {
+                string json;
+                try
+                {
+                    json = File.ReadAllText(path, Encoding.UTF8);
+                }
+                catch (IOException ex)
+                {
+                    Trace.WriteLine($"Could not read settings fragment '{path}': {ex.Message}");
+                    continue;
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    Trace.WriteLine($"Could not read settings fragment '{path}': {ex.Message}");
+                    continue;
+                }
+
+                yield return new SettingsLayer(path, json, SettingsLayerKind.Fragment);
+            }
+        }
     }
 }
