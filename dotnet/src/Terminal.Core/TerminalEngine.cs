@@ -16,6 +16,8 @@ public sealed record TerminalSnapshot(
     bool InsertMode,
     bool ReverseVideo);
 
+public sealed record TerminalNotification(string? Title, string Body);
+
 public sealed class TerminalEngine : IVtDispatch
 {
     private readonly VtParser _parser;
@@ -67,6 +69,8 @@ public sealed class TerminalEngine : IVtDispatch
     public bool InsertMode { get; private set; }
     public bool NewLineMode { get; private set; }
     public bool ReverseVideo { get; private set; }
+    public bool AllowClipboardWrite { get; private set; }
+    public bool AllowNotifications { get; private set; }
     public int Columns => Buffer.Columns;
     public int Rows => Buffer.Rows;
     public int CursorX => Buffer.CursorX;
@@ -76,6 +80,8 @@ public sealed class TerminalEngine : IVtDispatch
     public event EventHandler<string>? TitleChanged;
     public event EventHandler<string?>? WorkingDirectoryChanged;
     public event EventHandler? ShellIntegrationChanged;
+    public event EventHandler<string>? ClipboardWriteRequested;
+    public event EventHandler<TerminalNotification>? NotificationRequested;
     public event EventHandler? Bell;
     public event EventHandler<byte[]>? ResponseReady;
 
@@ -115,6 +121,12 @@ public sealed class TerminalEngine : IVtDispatch
         _primary.Reset(keepHistory: false);
         _alternate.Reset(keepHistory: false);
         Invalidated?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void ConfigureOptionalFeatures(bool allowClipboardWrite, bool allowNotifications)
+    {
+        AllowClipboardWrite = allowClipboardWrite;
+        AllowNotifications = allowNotifications;
     }
 
     public TerminalSnapshot CreateSnapshot(bool includeHistory = false) => new(
@@ -241,15 +253,141 @@ public sealed class TerminalEngine : IVtDispatch
             case 8:
                 DispatchHyperlink(data);
                 break;
+            case 9:
+                DispatchWindowsNotification(data);
+                break;
             case 10:
             case 11:
             case 12:
                 DispatchDynamicColors(command, data);
                 break;
+            case 52:
+                DispatchClipboard(data);
+                break;
             case 133:
                 DispatchShellIntegration(data);
                 break;
+            case 777:
+                DispatchRxvtNotification(data);
+                break;
         }
+    }
+
+    private void DispatchClipboard(ReadOnlySpan<char> data)
+    {
+        if (!AllowClipboardWrite)
+        {
+            return;
+        }
+
+        var separator = data.IndexOf(';');
+        if (separator < 0)
+        {
+            return;
+        }
+
+        var payload = data[(separator + 1)..];
+        if (payload.SequenceEqual("?"))
+        {
+            return;
+        }
+
+        const int maximumEncodedLength = (1024 * 1024 * 4 / 3) + 4;
+        if (payload.Length > maximumEncodedLength)
+        {
+            return;
+        }
+
+        if (!IsStrictBase64(payload))
+        {
+            return;
+        }
+
+        string text;
+        try
+        {
+            var bytes = Convert.FromBase64String(payload.ToString());
+            text = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                .GetString(bytes);
+        }
+        catch (FormatException)
+        {
+            return;
+        }
+        catch (DecoderFallbackException)
+        {
+            return;
+        }
+
+        ClipboardWriteRequested?.Invoke(this, text);
+    }
+
+    private void DispatchWindowsNotification(ReadOnlySpan<char> data)
+    {
+        if (data.StartsWith("9;"))
+        {
+            WorkingDirectory = data[2..].ToString();
+            WorkingDirectoryChanged?.Invoke(this, WorkingDirectory);
+            return;
+        }
+
+        if (AllowNotifications && !data.IsEmpty)
+        {
+            NotificationRequested?.Invoke(this, new TerminalNotification(null, data.ToString()));
+        }
+    }
+
+    private void DispatchRxvtNotification(ReadOnlySpan<char> data)
+    {
+        if (!AllowNotifications || !data.StartsWith("notify;"))
+        {
+            return;
+        }
+
+        var content = data[7..];
+        var separator = content.IndexOf(';');
+        if (separator < 0)
+        {
+            return;
+        }
+
+        var title = content[..separator].ToString();
+        var body = content[(separator + 1)..].ToString();
+        NotificationRequested?.Invoke(this, new TerminalNotification(title, body));
+    }
+
+    private static bool IsStrictBase64(ReadOnlySpan<char> payload)
+    {
+        if (payload.IsEmpty)
+        {
+            return true;
+        }
+
+        if (payload.Length % 4 != 0)
+        {
+            return false;
+        }
+
+        var padding = 0;
+        for (var index = 0; index < payload.Length; index++)
+        {
+            var value = payload[index];
+            if (value == '=')
+            {
+                padding++;
+                if (index < payload.Length - 2 || padding > 2)
+                {
+                    return false;
+                }
+            }
+            else if (padding > 0 ||
+                     !(value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '+' or '/'))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void DispatchShellIntegration(ReadOnlySpan<char> data)
