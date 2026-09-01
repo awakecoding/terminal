@@ -4,7 +4,7 @@ A C# reimplementation of the Windows Terminal shell experience:
 
 - **.NET 10** with **NativeAOT**
 - **Avalonia 11** UI instead of WinUI/XAML Islands
-- **ConPTY** for hosting `pwsh`, Windows PowerShell, and `cmd`
+- **ConPTY** for local shells and Azure Cloud Shell for remote Azure sessions
 - VT/xterm parser, text buffer, tabs/panes, settings-driven actions and keybindings
 
 The original C++/WinUI tree is unchanged. This port lives entirely under `dotnet/`.
@@ -55,7 +55,7 @@ The compiled-XAML settings editor and host integration are documented in
 ```
 Terminal.Core         VT parser + text buffer + terminal engine
 Terminal.Render       Renderer-neutral contracts; Skia atlas lands in P1
-Terminal.Connection   ConPTY (safe handles, cancellation, NativeAOT)
+Terminal.Connection   ConPTY + Azure Cloud Shell (HTTP/WebSocket, NativeAOT)
 Terminal.Settings     Layered Windows Terminal-compatible JSON settings
 Terminal.Control      Avalonia TermControl renderer
 WindowsTerminal.App   Tabs, title bar, panes, actions, window behavior
@@ -73,6 +73,8 @@ read-only cell snapshots for render and test consumers; the existing live
 
 The full phased plan for a complete port is in [PORTING.md](PORTING.md).
 Architecture decisions are recorded in [doc/decisions](doc/decisions).
+Azure authentication, service protocol, diagnostics, and host composition are
+documented in [doc/azure-cloud-shell.md](doc/azure-cloud-shell.md).
 
 ## Compatibility inventory
 
