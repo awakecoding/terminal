@@ -8,28 +8,34 @@ using Microsoft.Win32.SafeHandles;
 namespace Microsoft.Terminal.Connection;
 
 [SupportedOSPlatform("windows")]
-public sealed class ConPtyConnection : ITerminalConnection
+public sealed class ConPtyConnection : IRestartableTerminalConnection
 {
     private readonly object _stateLock = new();
+    private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private SafePseudoConsoleHandle? _pseudoConsole;
-    private SafeKernelObjectHandle? _process;
-    private FileStream? _inputStream;
-    private FileStream? _outputStream;
-    private CancellationTokenSource? _lifetimeCts;
-    private Task? _readTask;
-    private Task? _waitTask;
-    private CancellationTokenRegistration _cancellationRegistration;
-    private bool _started;
+    private SessionResources? _session;
+    private TerminalLaunchOptions? _lastOptions;
+    private long _generation;
+    private bool _hasStarted;
     private bool _disposed;
 
     public event EventHandler<ReadOnlyMemory<byte>>? OutputReceived;
     public event EventHandler<int>? Exited;
+    public event EventHandler<TerminalExitInfo>? SessionExited;
     public event EventHandler<Exception>? Faulted;
 
     public bool IsRunning { get; private set; }
     public int Columns { get; private set; }
     public int Rows { get; private set; }
+    public TerminalConnectionCapabilities Capabilities { get; } =
+        TerminalConnectionCapabilities.Resize |
+        TerminalConnectionCapabilities.Restart |
+        TerminalConnectionCapabilities.ProcessMetadata |
+        TerminalConnectionCapabilities.WslPathTranslation;
+    public TerminalConnectionState State { get; private set; } =
+        TerminalConnectionState.NotConnected;
+    public TerminalProcessMetadata? ProcessMetadata { get; private set; }
+    public TerminalExitInfo? LastExitInfo { get; private set; }
 
     public Task StartAsync(
         string commandLine,
@@ -47,122 +53,65 @@ public sealed class ConPtyConnection : ITerminalConnection
             },
             cancellationToken);
 
-    public Task StartAsync(
+    public async Task StartAsync(
         TerminalLaunchOptions options,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentException.ThrowIfNullOrWhiteSpace(options.CommandLine);
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!OperatingSystem.IsWindows())
-        {
-            throw new PlatformNotSupportedException("ConPTY requires Windows.");
-        }
-
-        var validatedColumns = ValidateDimension(options.Columns, nameof(options.Columns));
-        var validatedRows = ValidateDimension(options.Rows, nameof(options.Rows));
-        lock (_stateLock)
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_started)
-            {
-                throw new InvalidOperationException("A ConPTY connection can only be started once.");
-            }
-
-            _started = true;
-        }
-
-        SafeFileHandle? inputRead = null;
-        SafeFileHandle? inputWrite = null;
-        SafeFileHandle? outputRead = null;
-        SafeFileHandle? outputWrite = null;
-        SafePseudoConsoleHandle? pseudoConsole = null;
-        SafeKernelObjectHandle? process = null;
-        FileStream? inputStream = null;
-        FileStream? outputStream = null;
-
+        ValidateOptions(options, cancellationToken);
+        await _lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            CreatePipe(out inputRead, out inputWrite);
-            CreatePipe(out outputRead, out outputWrite);
-
-            var size = new Kernel32.Coord { X = (short)validatedColumns, Y = (short)validatedRows };
-            var hr = Kernel32.CreatePseudoConsole(size, inputRead, outputWrite, 0, out var pseudoConsoleValue);
-            if (hr != 0)
-            {
-                Marshal.ThrowExceptionForHR(hr);
-            }
-
-            pseudoConsole = new SafePseudoConsoleHandle(pseudoConsoleValue);
-            process = StartProcess(options, pseudoConsole);
-
-            inputStream = new FileStream(inputWrite, FileAccess.Write, 4096, isAsync: false);
-            inputWrite = null;
-            outputStream = new FileStream(outputRead, FileAccess.Read, 4096, isAsync: false);
-            outputRead = null;
-
-            var lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             lock (_stateLock)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                _pseudoConsole = pseudoConsole;
-                _process = process;
-                _inputStream = inputStream;
-                _outputStream = outputStream;
-                _lifetimeCts = lifetimeCts;
-                Columns = validatedColumns;
-                Rows = validatedRows;
-                IsRunning = true;
+                if (_hasStarted)
+                {
+                    throw new InvalidOperationException(
+                        "The ConPTY connection has already been started. Use RestartAsync to replace its session.");
+                }
             }
 
-            inputRead.Dispose();
-            inputRead = null;
-            outputWrite.Dispose();
-            outputWrite = null;
-            pseudoConsole = null;
-            process = null;
-            inputStream = null;
-            outputStream = null;
-
-            var processForWait = _process
-                ?? throw new InvalidOperationException("The ConPTY process was not initialized.");
-            var outputForRead = _outputStream
-                ?? throw new InvalidOperationException("The ConPTY output stream was not initialized.");
-            _readTask = Task.Factory.StartNew(
-                () => ReadLoop(outputForRead, lifetimeCts.Token),
-                CancellationToken.None,
-                TaskCreationOptions.LongRunning,
-                TaskScheduler.Default);
-            _waitTask = Task.Factory.StartNew(
-                () => WaitLoop(processForWait),
-                CancellationToken.None,
-                TaskCreationOptions.LongRunning,
-                TaskScheduler.Default);
-            _cancellationRegistration = cancellationToken.Register(
-                static state => ((ConPtyConnection)state!).Cancel(),
-                this);
-            return Task.CompletedTask;
-        }
-        catch
-        {
-            lock (_stateLock)
-            {
-                _started = false;
-            }
-
-            throw;
+            StartCore(options, cancellationToken);
         }
         finally
         {
-            inputStream?.Dispose();
-            outputStream?.Dispose();
-            inputRead?.Dispose();
-            inputWrite?.Dispose();
-            outputRead?.Dispose();
-            outputWrite?.Dispose();
-            process?.Dispose();
-            pseudoConsole?.Dispose();
+            _lifecycleLock.Release();
+        }
+    }
+
+    public async Task RestartAsync(
+        TerminalLaunchOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await _lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var restartOptions = options ?? _lastOptions
+                ?? throw new InvalidOperationException("No previous ConPTY launch options are available.");
+            ValidateOptions(restartOptions, cancellationToken);
+            await StopCoreAsync(TerminalExitReason.Closed).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            StartCore(restartOptions, cancellationToken);
+        }
+        finally
+        {
+            _lifecycleLock.Release();
+        }
+    }
+
+    public async Task CloseAsync(CancellationToken cancellationToken = default)
+    {
+        await _lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            await StopCoreAsync(TerminalExitReason.Closed).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleLock.Release();
         }
     }
 
@@ -204,7 +153,12 @@ public sealed class ConPtyConnection : ITerminalConnection
             return;
         }
 
-        var lifetimeToken = _lifetimeCts?.Token ?? CancellationToken.None;
+        CancellationToken lifetimeToken;
+        lock (_stateLock)
+        {
+            lifetimeToken = _session?.Lifetime.Token ?? CancellationToken.None;
+        }
+
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             lifetimeToken);
@@ -228,10 +182,11 @@ public sealed class ConPtyConnection : ITerminalConnection
         lock (_stateLock)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_pseudoConsole is not null && !_pseudoConsole.IsInvalid && !_pseudoConsole.IsClosed)
+            var pseudoConsole = _session?.PseudoConsole;
+            if (pseudoConsole is not null && !pseudoConsole.IsInvalid && !pseudoConsole.IsClosed)
             {
                 var size = new Kernel32.Coord { X = (short)validatedColumns, Y = (short)validatedRows };
-                var hr = Kernel32.ResizePseudoConsole(_pseudoConsole, size);
+                var hr = Kernel32.ResizePseudoConsole(pseudoConsole, size);
                 if (hr != 0)
                 {
                     Marshal.ThrowExceptionForHR(hr);
@@ -245,70 +200,200 @@ public sealed class ConPtyConnection : ITerminalConnection
 
     public async ValueTask DisposeAsync()
     {
-        SafePseudoConsoleHandle? pseudoConsole;
-        SafeKernelObjectHandle? process;
-        FileStream? inputStream;
-        FileStream? outputStream;
-        CancellationTokenSource? lifetimeCts;
-        Task? readTask;
-        Task? waitTask;
-        CancellationTokenRegistration cancellationRegistration;
-
-        lock (_stateLock)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-            IsRunning = false;
-            pseudoConsole = _pseudoConsole;
-            process = _process;
-            inputStream = _inputStream;
-            outputStream = _outputStream;
-            lifetimeCts = _lifetimeCts;
-            readTask = _readTask;
-            waitTask = _waitTask;
-            cancellationRegistration = _cancellationRegistration;
-            _pseudoConsole = null;
-            _process = null;
-            _inputStream = null;
-            _outputStream = null;
-            _lifetimeCts = null;
-            _readTask = null;
-            _waitTask = null;
-            _cancellationRegistration = default;
-        }
-
-        cancellationRegistration.Dispose();
-        if (lifetimeCts is not null)
-        {
-            await lifetimeCts.CancelAsync().ConfigureAwait(false);
-        }
-
-        if (process is not null && !process.IsInvalid && !process.IsClosed && waitTask?.IsCompleted != true)
-        {
-            _ = Kernel32.TerminateProcess(process, 0);
-        }
-
-        inputStream?.Dispose();
-        await _writeLock.WaitAsync().ConfigureAwait(false);
-        _writeLock.Release();
-        outputStream?.Dispose();
-        pseudoConsole?.Dispose();
-
-        var taskErrors = new List<Exception>();
+        await _lifecycleLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            await ObserveAsync(readTask, taskErrors).ConfigureAwait(false);
-            await ObserveAsync(waitTask, taskErrors).ConfigureAwait(false);
+            lock (_stateLock)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                _disposed = true;
+            }
+
+            await StopCoreAsync(TerminalExitReason.Disposed).ConfigureAwait(false);
+            lock (_stateLock)
+            {
+                State = TerminalConnectionState.Disposed;
+            }
         }
         finally
         {
+            _lifecycleLock.Release();
+        }
+    }
+
+    private void StartCore(TerminalLaunchOptions options, CancellationToken cancellationToken)
+    {
+        SafeFileHandle? inputRead = null;
+        SafeFileHandle? inputWrite = null;
+        SafeFileHandle? outputRead = null;
+        SafeFileHandle? outputWrite = null;
+        SafePseudoConsoleHandle? pseudoConsole = null;
+        SafeKernelObjectHandle? process = null;
+        FileStream? inputStream = null;
+        FileStream? outputStream = null;
+        CancellationTokenSource? lifetime = null;
+
+        lock (_stateLock)
+        {
+            State = TerminalConnectionState.Connecting;
+            LastExitInfo = null;
+        }
+
+        try
+        {
+            CreatePipe(out inputRead, out inputWrite);
+            CreatePipe(out outputRead, out outputWrite);
+
+            var size = new Kernel32.Coord
+            {
+                X = (short)options.Columns,
+                Y = (short)options.Rows,
+            };
+            var hr = Kernel32.CreatePseudoConsole(size, inputRead, outputWrite, 0, out var pseudoConsoleValue);
+            if (hr != 0)
+            {
+                Marshal.ThrowExceptionForHR(hr);
+            }
+
+            pseudoConsole = new SafePseudoConsoleHandle(pseudoConsoleValue);
+            var processResult = StartProcess(options, pseudoConsole);
+            process = processResult.Handle;
+
+            inputStream = new FileStream(inputWrite, FileAccess.Write, 4096, isAsync: false);
+            inputWrite = null;
+            outputStream = new FileStream(outputRead, FileAccess.Read, 4096, isAsync: false);
+            outputRead = null;
+            lifetime = new CancellationTokenSource();
+
+            var generation = ++_generation;
+            var metadata = new TerminalProcessMetadata(
+                Guid.NewGuid(),
+                processResult.ProcessId,
+                options.CommandLine,
+                ResolveWorkingDirectory(options.WorkingDirectory),
+                DateTimeOffset.UtcNow);
+            var session = new SessionResources(
+                generation,
+                options,
+                metadata,
+                pseudoConsole,
+                process,
+                inputStream,
+                outputStream,
+                lifetime);
+
+            lock (_stateLock)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                _session = session;
+                _lastOptions = options;
+                _hasStarted = true;
+                ProcessMetadata = metadata;
+                Columns = options.Columns;
+                Rows = options.Rows;
+                IsRunning = true;
+                State = TerminalConnectionState.Connected;
+            }
+
+            inputRead.Dispose();
+            inputRead = null;
+            outputWrite.Dispose();
+            outputWrite = null;
+            pseudoConsole = null;
+            process = null;
+            inputStream = null;
+            outputStream = null;
+            lifetime = null;
+
+            session.ReadTask = Task.Run(() => ReadLoop(session));
+            session.WaitTask = Task.Run(() => WaitLoop(session));
+            session.CancellationRegistration = cancellationToken.Register(
+                static state =>
+                {
+                    var registration = (CancellationState)state!;
+                    registration.Connection.Cancel(registration.Generation);
+                },
+                new CancellationState(this, generation));
+        }
+        catch (Exception ex)
+        {
+            var exit = new TerminalExitInfo(
+                null,
+                null,
+                TerminalExitReason.StartupFailure,
+                false,
+                DateTimeOffset.UtcNow);
+            lock (_stateLock)
+            {
+                IsRunning = false;
+                State = TerminalConnectionState.Failed;
+                LastExitInfo = exit;
+            }
+
+            Faulted?.Invoke(this, ex);
+            throw;
+        }
+        finally
+        {
+            inputStream?.Dispose();
+            outputStream?.Dispose();
+            inputRead?.Dispose();
+            inputWrite?.Dispose();
+            outputRead?.Dispose();
+            outputWrite?.Dispose();
             process?.Dispose();
-            lifetimeCts?.Dispose();
-            _writeLock.Dispose();
+            pseudoConsole?.Dispose();
+            lifetime?.Dispose();
+        }
+    }
+
+    private async Task StopCoreAsync(TerminalExitReason reason)
+    {
+        SessionResources? session;
+        lock (_stateLock)
+        {
+            session = _session;
+            if (session is null)
+            {
+                IsRunning = false;
+                if (!_disposed)
+                {
+                    State = TerminalConnectionState.Closed;
+                }
+
+                return;
+            }
+
+            session.RequestedExitReason ??= reason;
+            IsRunning = false;
+            State = TerminalConnectionState.Closing;
+        }
+
+        session.CancellationRegistration.Dispose();
+        await session.Lifetime.CancelAsync().ConfigureAwait(false);
+        if (!session.Process.IsInvalid &&
+            !session.Process.IsClosed &&
+            session.WaitTask?.IsCompleted != true)
+        {
+            _ = Kernel32.TerminateProcess(session.Process, 0);
+        }
+
+        var taskErrors = await CleanupSessionResourcesAsync(
+            session,
+            observeWaitTask: true,
+            drainOutput: false).ConfigureAwait(false);
+        lock (_stateLock)
+        {
+            if (!_disposed && State == TerminalConnectionState.Closing)
+            {
+                State = session.RequestedExitReason == TerminalExitReason.ConnectionFailure
+                    ? TerminalConnectionState.Failed
+                    : TerminalConnectionState.Closed;
+            }
         }
 
         if (taskErrors.Count > 0)
@@ -317,25 +402,24 @@ public sealed class ConPtyConnection : ITerminalConnection
         }
     }
 
-    private void Cancel()
+    private void Cancel(long generation)
     {
-        SafeKernelObjectHandle? process;
-        CancellationTokenSource? lifetimeCts;
+        SessionResources? session;
         lock (_stateLock)
         {
-            if (_disposed)
+            session = _session;
+            if (_disposed || session?.Generation != generation)
             {
                 return;
             }
 
-            process = _process;
-            lifetimeCts = _lifetimeCts;
+            session.RequestedExitReason = TerminalExitReason.Cancelled;
         }
 
-        lifetimeCts?.Cancel();
-        if (process is not null && !process.IsInvalid && !process.IsClosed)
+        session.Lifetime.Cancel();
+        if (!session.Process.IsInvalid && !session.Process.IsClosed)
         {
-            _ = Kernel32.TerminateProcess(process, 0);
+            _ = Kernel32.TerminateProcess(session.Process, 0);
         }
     }
 
@@ -344,23 +428,23 @@ public sealed class ConPtyConnection : ITerminalConnection
         lock (_stateLock)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (!IsRunning || _inputStream is null)
+            if (!IsRunning || _session is null)
             {
                 throw new InvalidOperationException("The ConPTY connection is not running.");
             }
 
-            return _inputStream;
+            return _session.Input;
         }
     }
 
-    private void ReadLoop(FileStream stream, CancellationToken cancellationToken)
+    private void ReadLoop(SessionResources session)
     {
         var buffer = new byte[16 * 1024];
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
+            while (!session.Lifetime.IsCancellationRequested)
             {
-                var read = stream.Read(buffer);
+                var read = session.Output.Read(buffer);
                 if (read == 0)
                 {
                     break;
@@ -369,46 +453,230 @@ public sealed class ConPtyConnection : ITerminalConnection
                 OutputReceived?.Invoke(this, buffer.AsMemory(0, read).ToArray());
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (session.Lifetime.IsCancellationRequested)
         {
         }
-        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested || _disposed)
+        catch (ObjectDisposedException) when (session.Lifetime.IsCancellationRequested || _disposed)
         {
         }
-        catch (IOException ex) when (cancellationToken.IsCancellationRequested || _disposed)
+        catch (IOException) when (session.Lifetime.IsCancellationRequested || _disposed)
         {
-            _ = ex;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Faulted?.Invoke(this, ex);
+            PublishFault(session, ex);
         }
     }
 
-    private void WaitLoop(SafeKernelObjectHandle process)
+    private void WaitLoop(SessionResources session)
     {
-        var waitResult = Kernel32.WaitForSingleObject(process, Kernel32.Infinite);
+        var waitResult = Kernel32.WaitForSingleObject(session.Process, Kernel32.Infinite);
         if (waitResult == Kernel32.WaitFailed)
         {
-            Faulted?.Invoke(this, new Win32Exception(Marshal.GetLastPInvokeError()));
+            PublishFault(session, new Win32Exception(Marshal.GetLastPInvokeError()));
             return;
         }
 
-        if (!Kernel32.GetExitCodeProcess(process, out var code))
+        if (!Kernel32.GetExitCodeProcess(session.Process, out var code))
         {
-            Faulted?.Invoke(this, new Win32Exception(Marshal.GetLastPInvokeError()));
+            PublishFault(session, new Win32Exception(Marshal.GetLastPInvokeError()));
             return;
         }
 
+        TerminalExitInfo exit;
         lock (_stateLock)
         {
-            IsRunning = false;
+            if (session.ExitPublished)
+            {
+                return;
+            }
+
+            session.ExitPublished = true;
+            var reason = session.RequestedExitReason ?? TerminalExitReason.ProcessExited;
+            var exitCode = unchecked((int)code);
+            exit = new TerminalExitInfo(
+                session.Metadata,
+                exitCode,
+                reason,
+                TerminalCloseOnExit.ShouldClose(
+                    session.Options.CloseOnExit,
+                    reason,
+                    exitCode,
+                    session.Options.IsDefaultTerminalSession),
+                DateTimeOffset.UtcNow);
+            if (ReferenceEquals(_session, session))
+            {
+                IsRunning = false;
+                State = reason == TerminalExitReason.ProcessExited && exitCode != 0
+                    ? TerminalConnectionState.Failed
+                    : TerminalConnectionState.Closed;
+                LastExitInfo = exit;
+            }
         }
 
-        Exited?.Invoke(this, unchecked((int)code));
+        _ = CleanupCompletedSessionAsync(session);
+        SessionExited?.Invoke(this, exit);
+        Exited?.Invoke(this, exit.ExitCode.GetValueOrDefault());
     }
 
-    private static SafeKernelObjectHandle StartProcess(
+    private void PublishFault(SessionResources session, Exception exception)
+    {
+        TerminalExitInfo exit;
+        lock (_stateLock)
+        {
+            if (!ReferenceEquals(_session, session) || session.ExitPublished)
+            {
+                return;
+            }
+
+            session.ExitPublished = true;
+            session.RequestedExitReason = TerminalExitReason.ConnectionFailure;
+            exit = new TerminalExitInfo(
+                session.Metadata,
+                null,
+                TerminalExitReason.ConnectionFailure,
+                TerminalCloseOnExit.ShouldClose(
+                    session.Options.CloseOnExit,
+                    TerminalExitReason.ConnectionFailure,
+                    null,
+                    session.Options.IsDefaultTerminalSession),
+                DateTimeOffset.UtcNow);
+            IsRunning = false;
+            State = TerminalConnectionState.Failed;
+            LastExitInfo = exit;
+        }
+
+        _ = CleanupFailedSessionAsync(session);
+        SessionExited?.Invoke(this, exit);
+        Faulted?.Invoke(this, exception);
+    }
+
+    private async Task CleanupCompletedSessionAsync(SessionResources session)
+    {
+        await _lifecycleLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            lock (_stateLock)
+            {
+                if (!ReferenceEquals(_session, session))
+                {
+                    return;
+                }
+            }
+
+            var errors = await CleanupSessionResourcesAsync(
+                session,
+                observeWaitTask: false,
+                drainOutput: true).ConfigureAwait(false);
+            if (errors.Count > 0)
+            {
+                Faulted?.Invoke(
+                    this,
+                    new AggregateException("ConPTY completed-session cleanup failed.", errors));
+            }
+        }
+        finally
+        {
+            _lifecycleLock.Release();
+        }
+    }
+
+    private async Task CleanupFailedSessionAsync(SessionResources session)
+    {
+        await _lifecycleLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            lock (_stateLock)
+            {
+                if (!ReferenceEquals(_session, session))
+                {
+                    return;
+                }
+            }
+
+            await session.Lifetime.CancelAsync().ConfigureAwait(false);
+            if (!session.Process.IsInvalid &&
+                !session.Process.IsClosed &&
+                session.WaitTask?.IsCompleted != true)
+            {
+                _ = Kernel32.TerminateProcess(session.Process, 1);
+            }
+
+            var errors = await CleanupSessionResourcesAsync(
+                session,
+                observeWaitTask: true,
+                drainOutput: false).ConfigureAwait(false);
+            if (errors.Count > 0)
+            {
+                Faulted?.Invoke(
+                    this,
+                    new AggregateException("ConPTY failed-session cleanup failed.", errors));
+            }
+        }
+        finally
+        {
+            _lifecycleLock.Release();
+        }
+    }
+
+    private async Task<List<Exception>> CleanupSessionResourcesAsync(
+        SessionResources session,
+        bool observeWaitTask,
+        bool drainOutput)
+    {
+        session.CancellationRegistration.Dispose();
+        await _writeLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            session.Input.Dispose();
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+
+        var taskErrors = new List<Exception>();
+        if (drainOutput)
+        {
+            if (session.ReadTask is not null)
+            {
+                _ = await Task.WhenAny(
+                    session.ReadTask,
+                    Task.Delay(TimeSpan.FromMilliseconds(250))).ConfigureAwait(false);
+            }
+
+            await session.Lifetime.CancelAsync().ConfigureAwait(false);
+            session.Output.Dispose();
+            session.PseudoConsole.Dispose();
+            await ObserveAsync(session.ReadTask, taskErrors).ConfigureAwait(false);
+        }
+        else
+        {
+            await session.Lifetime.CancelAsync().ConfigureAwait(false);
+            session.Output.Dispose();
+            session.PseudoConsole.Dispose();
+            await ObserveAsync(session.ReadTask, taskErrors).ConfigureAwait(false);
+        }
+
+        if (observeWaitTask)
+        {
+            await ObserveAsync(session.WaitTask, taskErrors).ConfigureAwait(false);
+        }
+
+        session.Process.Dispose();
+        session.Lifetime.Dispose();
+        lock (_stateLock)
+        {
+            if (ReferenceEquals(_session, session))
+            {
+                _session = null;
+            }
+        }
+
+        return taskErrors;
+    }
+
+    private static ProcessResult StartProcess(
         TerminalLaunchOptions options,
         SafePseudoConsoleHandle pseudoConsole)
     {
@@ -442,7 +710,7 @@ public sealed class ConPtyConnection : ITerminalConnection
         var commandBuffer = (options.CommandLine + '\0').ToCharArray();
         var currentDirectory = string.IsNullOrWhiteSpace(options.WorkingDirectory)
             ? null
-            : options.WorkingDirectory;
+            : Environment.ExpandEnvironmentVariables(options.WorkingDirectory);
         var environment = CreateEnvironmentBlock(options);
         try
         {
@@ -462,7 +730,9 @@ public sealed class ConPtyConnection : ITerminalConnection
             }
 
             using var thread = new SafeKernelObjectHandle(info.hThread);
-            return new SafeKernelObjectHandle(info.hProcess);
+            return new ProcessResult(
+                new SafeKernelObjectHandle(info.hProcess),
+                info.dwProcessId);
         }
         finally
         {
@@ -514,6 +784,22 @@ public sealed class ConPtyConnection : ITerminalConnection
         }
     }
 
+    private static void ValidateOptions(
+        TerminalLaunchOptions options,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.CommandLine);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("ConPTY requires Windows.");
+        }
+
+        _ = ValidateDimension(options.Columns, nameof(options.Columns));
+        _ = ValidateDimension(options.Rows, nameof(options.Rows));
+    }
+
     private static int ValidateDimension(int value, string parameterName)
     {
         if (value is < 1 or > short.MaxValue)
@@ -526,6 +812,11 @@ public sealed class ConPtyConnection : ITerminalConnection
 
         return value;
     }
+
+    private static string ResolveWorkingDirectory(string? workingDirectory) =>
+        string.IsNullOrWhiteSpace(workingDirectory)
+            ? Environment.CurrentDirectory
+            : Path.GetFullPath(Environment.ExpandEnvironmentVariables(workingDirectory));
 
     private static async Task ObserveAsync(Task? task, ICollection<Exception> errors)
     {
@@ -549,4 +840,32 @@ public sealed class ConPtyConnection : ITerminalConnection
             errors.Add(ex);
         }
     }
+
+    private sealed class SessionResources(
+        long generation,
+        TerminalLaunchOptions options,
+        TerminalProcessMetadata metadata,
+        SafePseudoConsoleHandle pseudoConsole,
+        SafeKernelObjectHandle process,
+        FileStream input,
+        FileStream output,
+        CancellationTokenSource lifetime)
+    {
+        public long Generation { get; } = generation;
+        public TerminalLaunchOptions Options { get; } = options;
+        public TerminalProcessMetadata Metadata { get; } = metadata;
+        public SafePseudoConsoleHandle PseudoConsole { get; } = pseudoConsole;
+        public SafeKernelObjectHandle Process { get; } = process;
+        public FileStream Input { get; } = input;
+        public FileStream Output { get; } = output;
+        public CancellationTokenSource Lifetime { get; } = lifetime;
+        public CancellationTokenRegistration CancellationRegistration { get; set; }
+        public Task? ReadTask { get; set; }
+        public Task? WaitTask { get; set; }
+        public TerminalExitReason? RequestedExitReason { get; set; }
+        public bool ExitPublished { get; set; }
+    }
+
+    private sealed record ProcessResult(SafeKernelObjectHandle Handle, int ProcessId);
+    private sealed record CancellationState(ConPtyConnection Connection, long Generation);
 }

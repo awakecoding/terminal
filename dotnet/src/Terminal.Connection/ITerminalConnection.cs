@@ -17,3 +17,16 @@ public interface ITerminalConnection : IAsyncDisposable
     ValueTask WriteAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default);
     void Resize(int columns, int rows);
 }
+
+public interface IRestartableTerminalConnection : ITerminalConnection
+{
+    event EventHandler<TerminalExitInfo>? SessionExited;
+
+    TerminalConnectionCapabilities Capabilities { get; }
+    TerminalConnectionState State { get; }
+    TerminalProcessMetadata? ProcessMetadata { get; }
+    TerminalExitInfo? LastExitInfo { get; }
+
+    Task RestartAsync(TerminalLaunchOptions? options = null, CancellationToken cancellationToken = default);
+    Task CloseAsync(CancellationToken cancellationToken = default);
+}

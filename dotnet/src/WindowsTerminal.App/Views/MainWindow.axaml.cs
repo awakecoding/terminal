@@ -71,7 +71,7 @@ public partial class MainWindow : Window
                 Title = tab.Title;
             }
         };
-        control.ProcessExited += async (_, _) =>
+        control.CloseRequested += async (_, _) =>
         {
             await CloseTabAsync(tab).ConfigureAwait(true);
         };
