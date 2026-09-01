@@ -185,4 +185,17 @@ public sealed class AdvancedProtocolEngineTests
 
         Assert.Equal(0, Assert.Single(engine.CreateSnapshot().Images).AnchorRow);
     }
+
+    [Fact]
+    public void EnteringClearedAlternateBufferRemovesOldAlternateImages()
+    {
+        var engine = new TerminalEngine();
+        engine.Feed("\u001b[?1049h\u001bP7q~\u001b\\\u001b[?1049l");
+        Assert.Single(engine.Images);
+
+        engine.Feed("\u001b[?1049h");
+
+        Assert.Empty(engine.Images);
+        Assert.Empty(engine.CreateSnapshot().Images);
+    }
 }

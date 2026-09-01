@@ -123,11 +123,36 @@ public static class SettingsLoader
         ApplyFragmentUpdates(merged, pendingFragmentUpdates);
         var settings = Resolve(merged, userDocument, inheritedProfileIds, actionMap);
         settings.InheritedProfileIds = inheritedProfileIds;
-        settings.UserDocument = userDocument is null ? null : (JsonObject)userDocument.DeepClone();
+        if (userDocument is not null)
+        {
+            var cleanUserDocument = (JsonObject)userDocument.DeepClone();
+            RemoveInternalMetadata(cleanUserDocument);
+            settings.UserDocument = cleanUserDocument;
+        }
         settings.Diagnostics.AddRange(diagnostics);
         Validate(settings);
         settings.ResolvedSnapshot = SerializeResolvedSettings(settings);
         return settings;
+    }
+
+    private static void RemoveInternalMetadata(JsonNode node)
+    {
+        if (node is JsonObject obj)
+        {
+            obj.Remove("$terminalOrigin");
+            obj.Remove("$terminalSource");
+            foreach (var child in obj.Select(static pair => pair.Value).Where(static value => value is not null).ToArray())
+            {
+                RemoveInternalMetadata(child!);
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (var child in array.Where(static value => value is not null))
+            {
+                RemoveInternalMetadata(child!);
+            }
+        }
     }
 
     [UnconditionalSuppressMessage(

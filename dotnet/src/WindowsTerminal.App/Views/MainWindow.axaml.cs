@@ -181,8 +181,16 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         RebuildTabs();
 
         var (columns, rows) = InitialTerminalSize();
-        await pane.Control.StartAsync(profile, columns, rows).ConfigureAwait(true);
-        pane.Control.Focus();
+        try
+        {
+            await pane.Control.StartAsync(profile, columns, rows).ConfigureAwait(true);
+            pane.Control.Focus();
+        }
+        catch (Exception ex) when (IsLaunchFailure(ex))
+        {
+            await RemoveFailedPaneAsync(tab, pane).ConfigureAwait(true);
+            await ShowLaunchErrorAsync(profile, ex).ConfigureAwait(true);
+        }
     }
 
     private TerminalPane CreatePane(ProfileSettings profile)
@@ -246,8 +254,16 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
         RebuildTerminalHost();
         var (columns, rows) = InitialTerminalSize();
-        await newPane.Control.StartAsync(newPane.Profile, columns / 2, rows).ConfigureAwait(true);
-        newPane.Control.Focus();
+        try
+        {
+            await newPane.Control.StartAsync(newPane.Profile, columns / 2, rows).ConfigureAwait(true);
+            newPane.Control.Focus();
+        }
+        catch (Exception ex) when (IsLaunchFailure(ex))
+        {
+            await RemoveFailedPaneAsync(tab, newPane).ConfigureAwait(true);
+            await ShowLaunchErrorAsync(newPane.Profile, ex).ConfigureAwait(true);
+        }
     }
 
     private void ActivateTab(TerminalTab tab)
@@ -776,11 +792,12 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
         if (!string.IsNullOrWhiteSpace(terminal.Profile))
         {
+            var hasRequestedGuid = Guid.TryParse(terminal.Profile, out var requestedGuid);
             var profile = _settings.Profiles.FirstOrDefault(profile =>
                        profile.Name.Equals(terminal.Profile, StringComparison.OrdinalIgnoreCase) ||
-                       profile.Guid?.ToString().Equals(
-                           terminal.Profile.Trim('{', '}'),
-                           StringComparison.OrdinalIgnoreCase) == true)
+                       (hasRequestedGuid &&
+                        Guid.TryParse(profile.Guid, out var profileGuid) &&
+                        profileGuid == requestedGuid))
                    ?? _settings.GetDefaultProfile();
             return profile.WithOverrides(terminal);
         }
@@ -1140,6 +1157,85 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private TerminalTab? FindTab(TerminalPane pane) =>
         _tabs.FirstOrDefault(tab => !tab.IsClosing && tab.Panes.Leaves().Contains(pane));
+
+    private async Task RemoveFailedPaneAsync(TerminalTab tab, TerminalPane pane)
+    {
+        tab.Panes.Close(pane);
+        await pane.Control.CloseAsync().ConfigureAwait(true);
+        if (tab.Panes.Count > 0)
+        {
+            SynchronizeTitle(tab);
+            RebuildTerminalHost();
+            tab.Panes.ActiveContent?.Control.Focus();
+            return;
+        }
+
+        tab.IsClosing = true;
+        _tabs.Remove(tab);
+        if (ReferenceEquals(_activeTab, tab))
+        {
+            _activeTab = null;
+            TerminalHost.Children.Clear();
+            var replacement = _tabs.LastOrDefault(static candidate => !candidate.IsClosing);
+            if (replacement is not null)
+            {
+                ActivateTab(replacement);
+            }
+            else
+            {
+                Title = "Windows Terminal";
+                RebuildTabs();
+            }
+        }
+    }
+
+    private async Task ShowLaunchErrorAsync(ProfileSettings profile, Exception error)
+    {
+        var close = new Button
+        {
+            Content = "Close",
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        var dialog = new Window
+        {
+            Title = "Unable to launch profile",
+            Width = 520,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 16,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = $"Windows Terminal could not launch '{profile.Name}'.",
+                        FontSize = 18,
+                        FontWeight = FontWeight.SemiBold,
+                    },
+                    new TextBlock
+                    {
+                        Text = error.Message,
+                        TextWrapping = TextWrapping.Wrap,
+                    },
+                    close,
+                },
+            },
+        };
+        close.Click += (_, _) => dialog.Close();
+        await dialog.ShowDialog(this).ConfigureAwait(true);
+    }
+
+    private static bool IsLaunchFailure(Exception error) =>
+        error is
+            System.ComponentModel.Win32Exception or
+            IOException or
+            UnauthorizedAccessException or
+            ArgumentException or
+            InvalidOperationException or
+            PlatformNotSupportedException or
+            System.Runtime.InteropServices.COMException;
 
     private void SynchronizeTitle(TerminalTab tab)
     {

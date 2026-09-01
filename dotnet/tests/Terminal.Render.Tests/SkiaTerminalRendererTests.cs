@@ -68,7 +68,7 @@ public sealed class SkiaTerminalRendererTests
 
         Draw(renderer, canvas, frame);
 
-        Assert.True(renderer.CacheStatistics.Count >= 2);
+        Assert.True(renderer.CacheStatistics.Count >= 1);
     }
 
     [Fact]

@@ -100,4 +100,17 @@ public sealed class GraphemeClusterTests
         Assert.Equal("A", engine.Buffer.GetCell(2, 0).Text);
         Assert.Equal("B", engine.Buffer.GetCell(3, 0).Text);
     }
+
+    [Theory]
+    [InlineData("🚀")]
+    [InlineData("⌚")]
+    public void EmojiPresentationCharactersOccupyTwoCells(string emoji)
+    {
+        var engine = new TerminalEngine(10, 2);
+
+        engine.Feed(emoji + "X");
+
+        Assert.Equal(3, engine.CursorX);
+        Assert.Equal("X", engine.Buffer.GetCell(2, 0).Text);
+    }
 }

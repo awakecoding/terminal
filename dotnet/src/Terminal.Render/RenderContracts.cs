@@ -85,6 +85,7 @@ public sealed record TerminalRendererSettings
         ["Cascadia Mono", "Consolas", "Segoe UI Emoji"];
     public IReadOnlyList<TerminalFontSource> FontSources { get; init; } = [];
     public int GlyphCacheCapacity { get; init; } = 4096;
+    public long DecodedImageCacheByteCapacity { get; init; } = 128L * 1024 * 1024;
 }
 
 public sealed record TerminalFontSource(

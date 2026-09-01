@@ -122,6 +122,21 @@ public sealed class TextBufferTests
         Assert.Equal(0, engine.Buffer.HistoryCount);
     }
 
+    [Fact]
+    public void ResizeMapsPendingWrapAfterLastCharacter()
+    {
+        var engine = new TerminalEngine(6, 3);
+        engine.Feed("abcdef");
+
+        engine.Resize(4, 3);
+        engine.Feed("X");
+
+        var allText = TerminalBufferExport.ToPlainText(engine.CreateSnapshot(includeHistory: true).Buffer)
+            .Replace(Environment.NewLine, string.Empty, StringComparison.Ordinal)
+            .TrimEnd();
+        Assert.Equal("abcdefX", allText);
+    }
+
     private static string RowText(TextBuffer buffer, int row) =>
         string.Concat(buffer.GetRow(row).Where(cell => !cell.IsWideContinuation).Select(cell => cell.Text)).TrimEnd();
 }

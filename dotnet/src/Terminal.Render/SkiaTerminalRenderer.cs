@@ -20,8 +20,9 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
     private TerminalRendererSettings _settings;
     private FontResolver _fonts;
     private BoundedResourceCache<GlyphKey, CachedGlyph> _glyphs;
-    private readonly Dictionary<long, SKBitmap> _images = [];
+    private readonly Dictionary<long, CachedImage> _images = [];
     private readonly HashSet<long> _invalidImages = [];
+    private long _imageBytes;
     private readonly Func<GlyphKey, CachedGlyph> _shapeFactory;
     private RenderViewport _viewport;
     private float _baseline;
@@ -201,6 +202,7 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
                 }
 
                 _images.Clear();
+                _imageBytes = 0;
             }
 
             return;
@@ -209,6 +211,7 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
         var activeIds = frame.Images.Select(static image => image.Id).ToHashSet();
         foreach (var staleId in _images.Keys.Where(id => !activeIds.Contains(id)).ToArray())
         {
+            _imageBytes -= _images[staleId].ByteSize;
             _images[staleId].Dispose();
             _images.Remove(staleId);
         }
@@ -229,22 +232,46 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
                 continue;
             }
 
-            if (!_images.TryGetValue(image.Id, out var bitmap))
+            var left = padding + (image.AnchorColumn * (float)CellSize.Width);
+            var top = padding + (image.AnchorRow * (float)CellSize.Height);
+            if (left >= viewport.Right || top >= viewport.Bottom)
             {
-                bitmap = DecodeImage(image);
-                if (bitmap is null)
+                continue;
+            }
+
+            if (!_images.TryGetValue(image.Id, out var cached))
+            {
+                var decoded = DecodeImage(image);
+                if (decoded is null)
                 {
                     _invalidImages.Add(image.Id);
                     continue;
                 }
 
-                _images.Add(image.Id, bitmap);
+                var byteSize = checked((long)decoded.RowBytes * decoded.Height);
+                if (byteSize > _settings.DecodedImageCacheByteCapacity)
+                {
+                    decoded.Dispose();
+                    _invalidImages.Add(image.Id);
+                    continue;
+                }
+
+                while (_images.Count > 0 &&
+                       _imageBytes + byteSize > _settings.DecodedImageCacheByteCapacity)
+                {
+                    var oldest = _images.First();
+                    oldest.Value.Dispose();
+                    _imageBytes -= oldest.Value.ByteSize;
+                    _images.Remove(oldest.Key);
+                }
+
+                cached = new CachedImage(decoded, byteSize);
+                _images.Add(image.Id, cached);
+                _imageBytes += byteSize;
             }
 
-            var left = padding + (image.AnchorColumn * (float)CellSize.Width);
-            var top = padding + (image.AnchorRow * (float)CellSize.Height);
-            var destination = ImageDestination(image, bitmap, left, top, viewport);
-            canvas.DrawBitmap(bitmap, destination, _paint);
+            var destination = ImageDestination(image, cached.Bitmap, left, top, viewport);
+            canvas.DrawBitmap(cached.Bitmap, destination, _paint);
         }
 
         canvas.Restore();
@@ -749,6 +776,7 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
         }
 
         _images.Clear();
+        _imageBytes = 0;
         _invalidImages.Clear();
     }
 
@@ -764,6 +792,9 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
             FontSize = Math.Max(1, settings.FontSize),
             FontWeight = Math.Clamp(settings.FontWeight, 100, 1000),
             GlyphCacheCapacity = Math.Max(1, settings.GlyphCacheCapacity),
+            DecodedImageCacheByteCapacity = Math.Max(
+                4L * 1024 * 1024,
+                settings.DecodedImageCacheByteCapacity),
         };
 
     private static bool IsWhitespace(ReadOnlySpan<char> text)
@@ -835,6 +866,13 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
             hash.Add(Text, StringComparer.Ordinal);
             return hash.ToHashCode();
         }
+    }
+
+    private sealed class CachedImage(SKBitmap bitmap, long byteSize) : IDisposable
+    {
+        public SKBitmap Bitmap { get; } = bitmap;
+        public long ByteSize { get; } = byteSize;
+        public void Dispose() => Bitmap.Dispose();
     }
 
     private sealed class CachedGlyph(SKTextBlob blob, float width, string familyName) : IDisposable

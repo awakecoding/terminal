@@ -89,6 +89,7 @@ public sealed class TextBuffer
         var oldColumns = Columns;
         var oldViewport = ViewportStart;
         var cursorAbsoluteLine = oldViewport + CursorY;
+        var wasWrapPending = WrapPending;
         var source = _lines.ToList();
         var activeMark = _activeMark;
 
@@ -100,7 +101,14 @@ public sealed class TextBuffer
         WrapPending = false;
         ScrollOffset = 0;
 
-        var reflowed = Reflow(source, oldColumns, columns, cursorAbsoluteLine, CursorX, out var cursorLine, out var cursorColumn);
+        var reflowed = Reflow(
+            source,
+            oldColumns,
+            columns,
+            cursorAbsoluteLine,
+            CursorX + (wasWrapPending ? 1 : 0),
+            out var cursorLine,
+            out var cursorColumn);
         while (reflowed.Count < rows)
         {
             reflowed.Add(NewBlankLine(CellAttributes.Default));
@@ -124,6 +132,7 @@ public sealed class TextBuffer
 
         CursorY = Math.Clamp(cursorLine - viewport, 0, rows - 1);
         CursorX = Math.Clamp(cursorColumn, 0, columns - 1);
+        WrapPending = wasWrapPending && CursorX == columns - 1;
 
     }
 
@@ -835,12 +844,15 @@ public sealed class TextBuffer
             IsExtendedPictographic(rune) &&
             (IsExtendedPictographic(previous.Rune) ||
              previous.CombiningCharacters.EnumerateRunes().Any(IsExtendedPictographic));
+        var emojiPresentationSelector =
+            rune.Value == 0xFE0F &&
+            IsExtendedPictographic(previous.Rune);
         var regionalPair =
             IsRegionalIndicator(previous.Rune) &&
             IsRegionalIndicator(rune) &&
             (previous.CombiningCharacters is null ||
              !previous.CombiningCharacters.EnumerateRunes().Any(IsRegionalIndicator));
-        if (!joinedByZwj && !regionalPair)
+        if (!joinedByZwj && !emojiPresentationSelector && !regionalPair)
         {
             return null;
         }

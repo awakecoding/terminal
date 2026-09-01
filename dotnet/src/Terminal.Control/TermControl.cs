@@ -129,17 +129,28 @@ public sealed class TermControl : Avalonia.Controls.Control
         connection.OutputReceived += OnOutput;
         connection.SessionExited += OnSessionExited;
         _connection = connection;
-        await connection.StartAsync(
-            new TerminalLaunchOptions
-            {
-                CommandLine = profile.ExpandCommandline(),
-                WorkingDirectory = profile.ExpandStartingDirectory(),
-                Columns = columns,
-                Rows = rows,
-                InheritEnvironment = profile.ReloadEnvironmentVariables,
-                EnvironmentVariables = profile.Environment,
-                CloseOnExit = ToConnectionPolicy(profile.CloseOnExit),
-            }).ConfigureAwait(true);
+        try
+        {
+            await connection.StartAsync(
+                new TerminalLaunchOptions
+                {
+                    CommandLine = profile.ExpandCommandline(),
+                    WorkingDirectory = profile.ExpandStartingDirectory(),
+                    Columns = columns,
+                    Rows = rows,
+                    InheritEnvironment = profile.ReloadEnvironmentVariables,
+                    EnvironmentVariables = profile.Environment,
+                    CloseOnExit = ToConnectionPolicy(profile.CloseOnExit),
+                }).ConfigureAwait(true);
+        }
+        catch
+        {
+            connection.OutputReceived -= OnOutput;
+            connection.SessionExited -= OnSessionExited;
+            _connection = null;
+            await connection.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     public async Task RestartAsync(CancellationToken cancellationToken = default)

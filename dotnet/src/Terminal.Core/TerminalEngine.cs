@@ -1048,6 +1048,7 @@ public sealed class TerminalEngine : IVtDispatch
             if (clearOnEnter)
             {
                 _alternate.Reset(keepHistory: false);
+                RemoveImages(alternateBuffer: true);
             }
 
             _alternate.CurrentAttributes = _sgr;
@@ -1060,6 +1061,22 @@ public sealed class TerminalEngine : IVtDispatch
                 _primary.RestoreCursor();
                 _sgr = _primary.CurrentAttributes;
             }
+        }
+    }
+
+    private void RemoveImages(bool alternateBuffer)
+    {
+        for (var index = _images.Count - 1; index >= 0; index--)
+        {
+            if (_images[index].AlternateBuffer != alternateBuffer)
+            {
+                continue;
+            }
+
+            var image = _images[index];
+            _retainedImageBytes -=
+                image.Sixel?.EstimatedByteSize ?? image.InlineImage?.EstimatedByteSize ?? 0;
+            _images.RemoveAt(index);
         }
     }
 

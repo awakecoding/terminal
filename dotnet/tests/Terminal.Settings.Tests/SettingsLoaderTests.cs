@@ -561,6 +561,24 @@ public sealed class SettingsLoaderTests
         Assert.Contains("\"useMica\": true", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SerializationStripsInternalOriginMetadata()
+    {
+        const string user = """
+            {
+                "schemes": [{ "name": "User Scheme", "background": "#010203" }],
+                "themes": [{ "name": "User Theme", "window": { "useMica": true } }]
+            }
+            """;
+        var settings = SettingsLoader.Load(Defaults, user, userSource: @"C:\private\settings.json");
+
+        var output = SettingsLoader.SerializeUserDocument(settings);
+
+        Assert.DoesNotContain("$terminalOrigin", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("$terminalSource", output, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"C:\\private", output, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("true", CloseOnExitMode.Graceful)]
     [InlineData("false", CloseOnExitMode.Never)]

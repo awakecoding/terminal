@@ -71,6 +71,20 @@ public sealed class TerminalRenderPlannerTests
     }
 
     [Fact]
+    public void KeepsContextualScriptRunInOneShapingCluster()
+    {
+        var engine = new TerminalEngine(8, 2);
+        engine.Feed("سلام");
+
+        var frame = TerminalRenderPlanner.Create(engine.CreateSnapshot(), engine.Scheme);
+        var clusters = frame.RowsData[0].Runs[0].Clusters;
+
+        var contextual = Assert.Single(clusters, cluster => cluster.TextLength > 1);
+        Assert.Equal("سلام".Length, contextual.TextLength);
+        Assert.Equal(4, contextual.CellCount);
+    }
+
+    [Fact]
     public void TracksHyperlinkBoundaries()
     {
         var engine = new TerminalEngine(12, 2);

@@ -117,6 +117,16 @@ public sealed class CliParserTests
     }
 
     [Fact]
+    public void HelpSwitchAfterImplicitCommandBelongsToTerminalCommand()
+    {
+        var result = Parse("cmd.exe", "/?");
+        var terminal = Assert.IsType<NewTerminalArgs>(
+            Assert.IsType<NewTabArgs>(Assert.Single(result.Actions).Args).ContentArgs);
+
+        Assert.Equal("cmd.exe /?", terminal.Commandline);
+    }
+
+    [Fact]
     public void EmptyAndTrailingBackslashArgumentsAreQuotedLosslessly()
     {
         var result = Parse("new-tab", "--", "tool.exe", "", @"C:\Program Files\");

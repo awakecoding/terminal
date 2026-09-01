@@ -622,6 +622,11 @@ public sealed class CliParser
                 continue;
             }
 
+            if (!commandSeen && !argument.StartsWith('-'))
+            {
+                return false;
+            }
+
             if (commandSeen && !argument.StartsWith('-'))
             {
                 return false;

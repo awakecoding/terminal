@@ -89,6 +89,7 @@ public static class TerminalRenderPlanner
             var resolved = Resolve(first.Attributes, first.HyperlinkUri, scheme, reverseScreen);
             var text = new StringBuilder();
             var clusters = new List<TerminalTextCluster>();
+            Rune? previousRune = null;
             do
             {
                 var cell = cells[column];
@@ -97,8 +98,12 @@ public static class TerminalRenderPlanner
                     var offset = text.Length;
                     text.Append(cell.Rune);
                     text.Append(cell.CombiningCharacters);
-                    var cellWidth = Math.Max(1, WcWidth.Width(cell.Rune));
-                    if (clusters.Count > 0 && EndsWithJoiner(text, offset))
+                    var cellWidth = cell.DisplayWidth;
+                    if (clusters.Count > 0 &&
+                        (EndsWithJoiner(text, offset) ||
+                         (previousRune is { } prior &&
+                          IsContextualScript(prior) &&
+                          IsContextualScript(cell.Rune))))
                     {
                         var previous = clusters[^1];
                         clusters[^1] = previous with
@@ -115,6 +120,8 @@ public static class TerminalRenderPlanner
                             column,
                             cellWidth));
                     }
+
+                    previousRune = cell.Rune;
                 }
 
                 column++;
@@ -135,6 +142,11 @@ public static class TerminalRenderPlanner
 
     private static bool EndsWithJoiner(StringBuilder text, int currentOffset) =>
         currentOffset > 0 && text[currentOffset - 1] == '\u200D';
+
+    private static bool IsContextualScript(Rune rune) =>
+        rune.Value is >= 0x0590 and <= 0x109F or
+            >= 0x1780 and <= 0x17FF or
+            >= 0xA840 and <= 0xA8FF;
 
     private static uint Fade(uint argb)
     {
