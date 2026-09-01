@@ -55,7 +55,7 @@
       <Extensions>
         <uap3:Extension
           Category="windows.appExecutionAlias"
-          Executable="WindowsTerminal.exe"
+          Executable="wt.exe"
           EntryPoint="Windows.FullTrustApplication">
           <uap3:AppExecutionAlias>
             <desktop:ExecutionAlias Alias="wt.exe" />

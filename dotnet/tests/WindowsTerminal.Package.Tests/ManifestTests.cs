@@ -43,11 +43,25 @@ public sealed class ManifestTests
         Assert.Equal("mediumIL", (string?)application.Attribute(Uap10 + "TrustLevel"));
         Assert.Contains("wt.exe", aliases);
         Assert.Contains("WindowsTerminal.exe", aliases);
+        AssertAliasTargets(document, "wt.exe", "wt.exe");
+        AssertAliasTargets(document, "WindowsTerminal.exe", "wt.exe");
         Assert.Equal(
             "wt-dotnet",
             (string?)document.Descendants(Uap3 + "Protocol").Single().Attribute("Name"));
         Assert.Single(
             document.Descendants(RestrictedCapabilities + "Capability"),
             capability => (string?)capability.Attribute("Name") == "runFullTrust");
+    }
+
+    private static void AssertAliasTargets(
+        XDocument document,
+        string aliasName,
+        string executable)
+    {
+        var alias = document.Descendants(Desktop + "ExecutionAlias")
+            .Single(element => (string?)element.Attribute("Alias") == aliasName);
+        var extension = alias.Ancestors(Uap3 + "Extension").Single();
+
+        Assert.Equal(executable, (string?)extension.Attribute("Executable"));
     }
 }
