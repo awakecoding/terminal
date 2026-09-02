@@ -8,6 +8,28 @@ namespace Terminal.Settings.Tests;
 public sealed class DynamicProfileGeneratorTests
 {
     [Fact]
+    public async Task LinuxShellsUseShellAndPathExecutables()
+    {
+        using var fixture = new DirectoryFixture();
+        var bash = fixture.Touch("path", "bash");
+        fixture.Touch("path", "zsh");
+        var environment = fixture.Environment(isLinux: true, shell: bash);
+
+        var result = await new LinuxShellProfileGenerator(environment).GenerateAsync(default);
+
+        Assert.Collection(
+            result.Profiles,
+            profile =>
+            {
+                Assert.Equal("Bash", profile.Name);
+                Assert.Equal(bash, profile.Commandline);
+                Assert.Equal(DynamicProfileSource.Linux, profile.Source);
+                Assert.Equal(environment.UserProfile, profile.StartingDirectory);
+            },
+            profile => Assert.Equal("Zsh", profile.Name));
+    }
+
+    [Fact]
     public async Task PowerShellProfilesAreStableAndBestVersionGetsLegacyGuid()
     {
         using var fixture = new DirectoryFixture();
@@ -483,8 +505,13 @@ public sealed class DynamicProfileGeneratorTests
         public DynamicProfileEnvironment Environment(
             bool readFiles = false,
             Architecture architecture = Architecture.X64,
-            bool enableSshProfiles = false) => new()
+            bool enableSshProfiles = false,
+            bool isLinux = false,
+            string? shell = null) => new()
         {
+            IsWindows = !isLinux,
+            IsLinux = isLinux,
+            Shell = shell,
             ProgramFiles = PathOf("ProgramFiles"),
             ProgramFilesX86 = PathOf("ProgramFilesX86"),
             UserProfile = PathOf("home"),

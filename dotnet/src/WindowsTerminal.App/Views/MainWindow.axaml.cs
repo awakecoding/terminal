@@ -85,11 +85,6 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             _notificationTimer.Stop();
             NotificationToast.IsVisible = false;
         };
-        if (!OperatingSystem.IsWindows())
-        {
-            throw new PlatformNotSupportedException("Windows Terminal requires Windows.");
-        }
-
         _connectionFactory = new TerminalConnectionFactory(
             new AzureCloudShellAuthenticationCallbacks
             {
@@ -513,11 +508,6 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private IRestartableTerminalConnection CreateConnection(ProfileSettings profile)
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            throw new PlatformNotSupportedException("Terminal connections require Windows.");
-        }
-
         return _connectionFactory.Create(profile);
     }
 
@@ -3012,6 +3002,12 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private void SetNativeWindowTitle(string title)
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            Title = title;
+            return;
+        }
+
         var handle = TryGetPlatformHandle()?.Handle ?? 0;
         if (handle != 0)
         {

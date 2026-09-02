@@ -1,10 +1,8 @@
 using Microsoft.Terminal.Connection;
 using Microsoft.Terminal.Settings;
-using System.Runtime.Versioning;
 
 namespace WindowsTerminal.Connections;
 
-[SupportedOSPlatform("windows")]
 public sealed class TerminalConnectionFactory
 {
     public const string AzureClientIdEnvironmentVariable = "WT_AZURE_CLIENT_ID";
@@ -34,7 +32,12 @@ public sealed class TerminalConnectionFactory
         if (!Guid.TryParse(profile.ConnectionType, out var connectionType) ||
             connectionType != AzureCloudShellConnection.ConnectionTypeGuid)
         {
-            return new ConPtyConnection();
+            return OperatingSystem.IsWindows()
+                ? new ConPtyConnection()
+                : OperatingSystem.IsLinux()
+                    ? new LinuxPtyConnection()
+                    : throw new PlatformNotSupportedException(
+                        "Local terminal sessions require Windows ConPTY or a Linux PTY.");
         }
 
         var clientIdValue = Environment.GetEnvironmentVariable(AzureClientIdEnvironmentVariable);

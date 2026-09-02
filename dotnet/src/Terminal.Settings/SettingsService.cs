@@ -5,17 +5,17 @@ namespace Microsoft.Terminal.Settings;
 
 public static class SettingsService
 {
-    public static string SettingsDirectory { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "WindowsTerminal.NET");
+    public static string SettingsDirectory { get; } = ResolveSettingsDirectory();
+    public static string StateDirectory { get; } = ResolveStateDirectory();
 
     public static string SettingsPath =>
         Environment.GetEnvironmentVariable("WT_DOTNET_SETTINGS_PATH") ??
         Path.Combine(SettingsDirectory, "settings.json");
 
-    public static string StatePath => Path.Combine(
-        Path.GetDirectoryName(Path.GetFullPath(SettingsPath))!,
-        "state.json");
+    public static string StatePath =>
+        Environment.GetEnvironmentVariable("WT_DOTNET_SETTINGS_PATH") is { Length: > 0 }
+            ? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(SettingsPath))!, "state.json")
+            : Path.Combine(StateDirectory, "state.json");
 
     public static IReadOnlyList<SettingsDiagnostic> LastDiagnostics { get; private set; } = [];
 
@@ -65,6 +65,7 @@ public static class SettingsService
             SettingsPath,
             cancellationToken).ConfigureAwait(false);
         var settings = loaded.Settings;
+        ApplyPlatformProfiles(settings);
         settings.Diagnostics.AddRange(fragmentDiscovery.Diagnostics);
         if (readDiagnostic is not null)
         {
@@ -135,7 +136,69 @@ public static class SettingsService
         SettingsLoader.Load(SettingsLoader.ReadEmbeddedDefaults());
 
     public static ApplicationStateStore LoadApplicationState() =>
-        ApplicationStateStore.ForSettingsPath(SettingsPath);
+        new(Path.GetDirectoryName(Path.GetFullPath(StatePath))!);
+
+    private static string ResolveSettingsDirectory()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "WindowsTerminal.NET");
+        }
+
+        var root = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            root = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".config");
+        }
+
+        return Path.Combine(root, "windows-terminal-dotnet");
+    }
+
+    private static string ResolveStateDirectory()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return SettingsDirectory;
+        }
+
+        var root = Environment.GetEnvironmentVariable("XDG_STATE_HOME");
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            root = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".local",
+                "state");
+        }
+
+        return Path.Combine(root, "windows-terminal-dotnet");
+    }
+
+    private static void ApplyPlatformProfiles(AppSettings settings)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        foreach (var profile in settings.Profiles.Where(static profile =>
+                     profile.Origin == SettingsOrigin.Inbox &&
+                     profile.Commandline.Contains("%SystemRoot%", StringComparison.OrdinalIgnoreCase)))
+        {
+            profile.Hidden = true;
+        }
+
+        if (settings.GetDefaultProfile().Hidden &&
+            settings.Profiles.FirstOrDefault(static profile =>
+                !profile.Hidden &&
+                profile.Source == DynamicProfileSource.Linux) is { } linuxDefault)
+        {
+            settings.DefaultProfile = linuxDefault.Guid;
+        }
+    }
 
     private static SettingsDiagnostic ReadDiagnostic(Exception exception) => new(
         SettingsDiagnosticSeverity.Error,

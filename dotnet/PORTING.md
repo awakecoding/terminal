@@ -20,7 +20,7 @@ The original C++ tree stays in place. All new work lives under `dotnet/`.
 | --- | --- |
 | `Terminal.Core` | Circular scrollback/reflow, grapheme-aware cells, shell marks/search/export, complete daily-driver VT plus bounded DCS/Sixel/DRCS/macros/VT52/rectangular operations |
 | `Terminal.Render` | Immutable plans, HarfBuzz shaping, fallback fonts, bounded Skia text-blob and image caching, dirty-row contracts |
-| `Terminal.Connection` | Restartable NativeAOT-safe ConPTY and Azure Cloud Shell HTTP/WebSocket connections |
+| `Terminal.Connection` | Restartable NativeAOT-safe ConPTY, Linux PTY, and Azure Cloud Shell HTTP/WebSocket connections |
 | `Terminal.Settings` | Complete MTSM projection, tri-state inheritance, migrations, fragments, profile generators, state persistence, plus the 92-action inventory, typed action arguments, normalized key chords, current/legacy binding parsing, and source-generated NativeAOT-safe JSON |
 | `Terminal.Control` | Avalonia `TermControl`: Skia rendering, search, shell-region selection, clipboard/paste policy, mouse/touch/IME, accessibility, and event-driven output draining |
 | `WindowsTerminal.App` | Persistent tabs/panes, all-action dispatch, action/command-line/history/tab palettes, settings UI, Azure auth UI, scratchpad, and notifications |
@@ -100,14 +100,34 @@ Layer rules:
 
 - **Core has no Avalonia, no Win32 UI.** Parser and buffer must be testable
   on any `net10.0` RID.
-- **Connection is Windows-only** (`LibraryImport` ConPTY). Guard with
-  `[SupportedOSPlatform("windows")]`.
+- **Connection selects an OS transport.** Windows uses ConPTY; Linux uses the
+  bundled `forkpty` relay. Keep each implementation behind its corresponding
+  supported-platform annotation.
 - **Control talks to Core + Connection.** It owns rendering, input, selection,
   search box, scrollbar.
 - **App owns ActionMap, panes, tabs, command palette, CLI.**
 - **NativeAOT:** `LibraryImport` not `DllImport`; source-generated JSON;
   no runtime XAML loading; no reflection DI; `IsAotCompatible=true` on
   production projects.
+
+## Linux
+
+Linux uses the same Avalonia/Skia UI and built-in or Ghostty terminal engines as
+Windows. Local processes are hosted by `wt-pty-host`, a small bundled `forkpty`
+relay that preserves interactive shell, resize, signal, and process-group
+semantics. Dynamic profiles discover `$SHELL`, bash, zsh, fish, PowerShell, and
+`sh`; settings and state follow XDG directory conventions.
+
+Build a deterministic NativeAOT archive on Linux:
+
+```bash
+dotnet/scripts/Build-LinuxPackage.sh linux-x64
+dotnet/scripts/Build-LinuxPackage.sh linux-arm64
+```
+
+ARM64 cross-publish from x64 requires the GNU AArch64 linker/binutils packages.
+The resulting archive preserves executable permissions for `WindowsTerminal`,
+`wt`, and `wt-pty-host`.
 
 Do not take a C++/CLI or C++/WinRT interop dependency on `Microsoft.Terminal.*`
 DLLs. That reintroduces the runtime we are leaving.

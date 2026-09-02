@@ -15,13 +15,24 @@ public sealed class TerminalConnectionFactoryTests
     };
 
     [Fact]
-    public async Task CreatesConPtyForLocalProfile()
+    public async Task CreatesPlatformConnectionForLocalProfile()
     {
         var factory = new TerminalConnectionFactory(Callbacks);
 
         await using var connection = factory.Create(ProfileSettings.CreateCmd());
 
-        Assert.IsType<ConPtyConnection>(connection);
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.IsType<ConPtyConnection>(connection);
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            Assert.IsType<LinuxPtyConnection>(connection);
+        }
+        else
+        {
+            Assert.IsAssignableFrom<ITerminalConnection>(connection);
+        }
     }
 
     [Fact]

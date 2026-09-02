@@ -2,6 +2,7 @@
 # Set default behavior to automatically normalize line endings.
 ###############################################################################
 * -text
+dotnet/scripts/*.sh text eol=lf
 
 *.inc linguist-language=cpp
 

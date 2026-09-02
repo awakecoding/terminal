@@ -8,12 +8,18 @@ namespace WindowsTerminal.Broker;
 
 public sealed class BrokerHost : IAsyncDisposable
 {
+    private const int AcceptLoopCount = 8;
+    private const int MaximumCachedResponses = 1024;
+    private static readonly TimeSpan ResponseRetryWindow = TimeSpan.FromSeconds(5);
+
     private readonly BrokerEndpointStore _endpointStore;
     private readonly IBrokerRequestHandler _handler;
     private readonly BrokerElection _election;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<int, Task> _connections = [];
-    private readonly Task _acceptLoop;
+    private readonly ConcurrentDictionary<string, CachedResponse> _responses = [];
+    private readonly ConcurrentQueue<string> _responseOrder = [];
+    private readonly Task[] _acceptLoops;
     private int _connectionId;
 
     private BrokerHost(
@@ -27,7 +33,9 @@ public sealed class BrokerHost : IAsyncDisposable
         _election = election;
         Endpoint = endpoint;
         _endpointStore.Write(endpoint);
-        _acceptLoop = AcceptLoopAsync(_shutdown.Token);
+        _acceptLoops = Enumerable.Range(0, AcceptLoopCount)
+            .Select(_ => AcceptLoopAsync(_shutdown.Token))
+            .ToArray();
     }
 
     public BrokerEndpoint Endpoint { get; }
@@ -61,16 +69,28 @@ public sealed class BrokerHost : IAsyncDisposable
         _shutdown.Cancel();
         try
         {
-            await _acceptLoop.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-        }
+            try
+            {
+                await Task.WhenAll(_acceptLoops).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
 
-        await Task.WhenAll(_connections.Values).ConfigureAwait(false);
-        _endpointStore.DeleteIfMatches(Endpoint);
-        _election.Dispose();
-        _shutdown.Dispose();
+            try
+            {
+                await Task.WhenAll(_connections.Values).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+        finally
+        {
+            _endpointStore.DeleteIfMatches(Endpoint);
+            _election.Dispose();
+            _shutdown.Dispose();
+        }
     }
 
     private async Task AcceptLoopAsync(CancellationToken cancellationToken)
@@ -120,7 +140,7 @@ public sealed class BrokerHost : IAsyncDisposable
             try
             {
                 var request = await ReadAsync(pipe, cancellationToken).ConfigureAwait(false);
-                response = await DispatchAsync(request, cancellationToken).ConfigureAwait(false);
+                response = await DispatchOnceAsync(request, cancellationToken).ConfigureAwait(false);
             }
             catch (InvalidDataException ex)
             {
@@ -156,6 +176,43 @@ public sealed class BrokerHost : IAsyncDisposable
                 // The client may time out or exit after sending a valid request.
             }
         }
+    }
+
+    private async ValueTask<BrokerResponse> DispatchOnceAsync(
+        BrokerRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.RequestId))
+        {
+            return await DispatchAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+
+        var candidate = new CachedResponse(
+            new Lazy<Task<BrokerResponse>>(
+                () => DispatchAsync(request, _shutdown.Token).AsTask(),
+                LazyThreadSafetyMode.ExecutionAndPublication),
+            DateTimeOffset.UtcNow);
+        var operation = _responses.GetOrAdd(request.RequestId, candidate);
+        if (ReferenceEquals(operation, candidate))
+        {
+            _responseOrder.Enqueue(request.RequestId);
+            while (_responses.Count > MaximumCachedResponses &&
+                   _responseOrder.TryDequeue(out var expired))
+            {
+                if (_responses.TryGetValue(expired, out var cached) &&
+                    (!cached.Operation.IsValueCreated ||
+                     !cached.Operation.Value.IsCompleted ||
+                     DateTimeOffset.UtcNow - cached.CreatedAt < ResponseRetryWindow))
+                {
+                    _responseOrder.Enqueue(expired);
+                    break;
+                }
+
+                _responses.TryRemove(expired, out _);
+            }
+        }
+
+        return await operation.Operation.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask<BrokerResponse> DispatchAsync(
@@ -260,6 +317,10 @@ public sealed class BrokerHost : IAsyncDisposable
         await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    private sealed record CachedResponse(
+        Lazy<Task<BrokerResponse>> Operation,
+        DateTimeOffset CreatedAt);
 }
 
 internal static class BrokerIdentity

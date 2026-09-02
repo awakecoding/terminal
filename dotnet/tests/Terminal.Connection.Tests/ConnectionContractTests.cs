@@ -9,7 +9,9 @@ namespace Terminal.Connection.Tests;
 [SupportedOSPlatform("windows")]
 public sealed class ConnectionContractTests
 {
-    [Fact]
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task ConPtyStartsStopped()
     {
         await using var connection = new ConPtyConnection();
@@ -22,7 +24,7 @@ public sealed class ConnectionContractTests
         Assert.False(connection.Capabilities.HasFlag(TerminalConnectionCapabilities.Elevation));
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task WriteBeforeStartFails()
     {
         await using var connection = new ConPtyConnection();
@@ -30,7 +32,7 @@ public sealed class ConnectionContractTests
         Assert.Throws<InvalidOperationException>(() => connection.Write("input"));
     }
 
-    [Theory]
+    [Theory(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     [InlineData(0, 24)]
     [InlineData(80, 0)]
     [InlineData(32768, 24)]
@@ -43,7 +45,7 @@ public sealed class ConnectionContractTests
             () => connection.StartAsync("cmd.exe", null, columns, rows));
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task CannotStartTwice()
     {
         await using var connection = new ConPtyConnection();
@@ -53,7 +55,7 @@ public sealed class ConnectionContractTests
             () => connection.StartAsync(EchoCommand("again"), null, 80, 24));
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task CapturesUnicodeOutputAndExitCode()
     {
         await using var connection = new ConPtyConnection();
@@ -86,7 +88,7 @@ public sealed class ConnectionContractTests
         Assert.Equal(TerminalExitReason.ProcessExited, connection.LastExitInfo?.Reason);
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task ResizesRunningPseudoConsole()
     {
         await using var connection = new ConPtyConnection();
@@ -113,7 +115,7 @@ public sealed class ConnectionContractTests
         Assert.Equal(43, connection.Rows);
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task CancellationStopsProcess()
     {
         using var cancellation = new CancellationTokenSource();
@@ -129,7 +131,7 @@ public sealed class ConnectionContractTests
         Assert.Equal(TerminalExitReason.Cancelled, connection.LastExitInfo?.Reason);
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task AppliesEnvironmentOverrides()
     {
         await using var connection = new ConPtyConnection();
@@ -161,7 +163,7 @@ public sealed class ConnectionContractTests
         await WaitForOutputAsync(output, "profile-value");
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task ConcurrentStartAndDisposeCannotPublishAfterDisposal()
     {
         for (var iteration = 0; iteration < 20; iteration++)
@@ -185,7 +187,7 @@ public sealed class ConnectionContractTests
         }
     }
 
-    [Theory]
+    [Theory(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     [InlineData(TerminalCloseOnExitPolicy.Never, 0, false, false)]
     [InlineData(TerminalCloseOnExitPolicy.Graceful, 0, false, true)]
     [InlineData(TerminalCloseOnExitPolicy.Graceful, 1, false, false)]
@@ -213,7 +215,7 @@ public sealed class ConnectionContractTests
                 isDefaultTerminalSession));
     }
 
-    [Theory]
+    [Theory(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     [InlineData(TerminalCloseOnExitPolicy.Never, false, false)]
     [InlineData(TerminalCloseOnExitPolicy.Graceful, false, false)]
     [InlineData(TerminalCloseOnExitPolicy.Always, false, true)]
@@ -233,7 +235,7 @@ public sealed class ConnectionContractTests
                 isDefaultTerminalSession));
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task ExitInfoCarriesProcessMetadataAndCloseDecision()
     {
         await using var connection = new ConPtyConnection();
@@ -260,7 +262,7 @@ public sealed class ConnectionContractTests
         Assert.Equal(TerminalConnectionState.Failed, connection.State);
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task RestartsExitedSessionWithNewIdentity()
     {
         await using var connection = new ConPtyConnection();
@@ -296,7 +298,7 @@ public sealed class ConnectionContractTests
         Assert.Equal(TerminalConnectionState.Closed, connection.State);
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task CloseDoesNotRequestPolicyDrivenTabClose()
     {
         await using var connection = new ConPtyConnection();
@@ -319,7 +321,7 @@ public sealed class ConnectionContractTests
         Assert.Equal(TerminalConnectionState.Closed, connection.State);
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task CanRetryAfterStartupFailure()
     {
         await using var connection = new ConPtyConnection();
@@ -340,7 +342,7 @@ public sealed class ConnectionContractTests
         Assert.Equal(0, await exited.Task.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task RepeatedSessionsDoNotLeakProcessHandles()
     {
         await RunShortSessionAsync();
@@ -363,7 +365,7 @@ public sealed class ConnectionContractTests
         Assert.InRange(final - baseline, int.MinValue, 12);
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task ExitedSessionsReleaseHandlesBeforeConnectionDisposal()
     {
         await RunShortSessionAsync();
@@ -408,7 +410,7 @@ public sealed class ConnectionContractTests
         }
     }
 
-    [Theory]
+    [Theory(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     [InlineData(@"\\wsl.localhost\Ubuntu\home\user\src", "Ubuntu", "/home/user/src")]
     [InlineData(@"\\wsl$\Debian", "Debian", "/")]
     public void ParsesWslUncPaths(string path, string distribution, string linuxPath)
@@ -418,7 +420,7 @@ public sealed class ConnectionContractTests
         Assert.Equal(linuxPath, result?.LinuxPath);
     }
 
-    [Theory]
+    [Theory(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     [InlineData(@"C:\Users\name\source", "/mnt/c/Users/name/source")]
     [InlineData(@"D:\", "/mnt/d/")]
     [InlineData("/home/name", "/home/name")]
@@ -428,7 +430,7 @@ public sealed class ConnectionContractTests
         Assert.Equal(expected, linuxPath);
     }
 
-    [Fact]
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public void BuildsWslCommandLineWithTranslatedWorkingDirectory()
     {
         var commandLine = WslPathTranslator.BuildCommandLine(

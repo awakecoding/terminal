@@ -974,10 +974,15 @@ public static class SettingsLoader
 
     private static string FragmentProvider(string source)
     {
-        var directory = Path.GetDirectoryName(source);
-        return string.IsNullOrWhiteSpace(directory)
-            ? source
-            : Path.GetFileName(directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        var normalized = source.Replace('\\', '/').TrimEnd('/');
+        var fileSeparator = normalized.LastIndexOf('/');
+        if (fileSeparator < 0)
+        {
+            return source;
+        }
+
+        var providerSeparator = normalized.LastIndexOf('/', fileSeparator - 1);
+        return normalized[(providerSeparator + 1)..fileSeparator];
     }
 
     private static string? CanonicalGuid(string? value) =>

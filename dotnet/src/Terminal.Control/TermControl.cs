@@ -190,20 +190,20 @@ public sealed class TermControl : Avalonia.Controls.Control
             profile.AllowOscNotifications);
         ResizeEngine(columns, rows);
 
-        if (!OperatingSystem.IsWindows())
-        {
-            throw new PlatformNotSupportedException("This terminal host requires Windows ConPTY.");
-        }
-
         await StartConnectionAsync(profile, columns, rows).ConfigureAwait(true);
         _blinkTimer.Start();
         InvalidateVisual();
     }
 
-    [SupportedOSPlatform("windows")]
     private async Task StartConnectionAsync(ProfileSettings profile, int columns, int rows)
     {
-        var connection = ConnectionFactory?.Invoke(profile) ?? new ConPtyConnection();
+        var connection = ConnectionFactory?.Invoke(profile) ??
+            (OperatingSystem.IsWindows()
+                ? new ConPtyConnection()
+                : OperatingSystem.IsLinux()
+                    ? new LinuxPtyConnection()
+                    : throw new PlatformNotSupportedException(
+                        "No local PTY implementation is available for this platform."));
         connection.OutputReceived += OnOutput;
         connection.SessionExited += OnSessionExited;
         _connection = connection;

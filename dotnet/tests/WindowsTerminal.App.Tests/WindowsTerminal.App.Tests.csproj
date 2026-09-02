@@ -1,12 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <GhosttyTestRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</GhosttyTestRid>
-    <GhosttyTestRid Condition="'$(GhosttyTestRid)' == '' and '$(PROCESSOR_ARCHITECTURE)' == 'ARM64'">win-arm64</GhosttyTestRid>
-    <GhosttyTestRid Condition="'$(GhosttyTestRid)' == ''">win-x64</GhosttyTestRid>
+    <GhosttyTestRid Condition="'$(GhosttyTestRid)' == ''">$(NETCoreSdkPortableRuntimeIdentifier)</GhosttyTestRid>
+    <GhosttyNativeName Condition="$([System.String]::Copy('$(GhosttyTestRid)').StartsWith('linux-'))">libghostty-vt.so</GhosttyNativeName>
+    <GhosttyNativeName Condition="'$(GhosttyNativeName)' == ''">ghostty-vt.dll</GhosttyNativeName>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="..\..\native\ghostty\$(GhosttyTestRid)\ghostty-vt.dll"
-          Link="ghostty-vt.dll"
+    <None Include="..\..\native\ghostty\$(GhosttyTestRid)\$(GhosttyNativeName)"
+          Link="$(GhosttyNativeName)"
           CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\..\src\WindowsTerminal.App\WindowsTerminal.App.csproj" />
   </ItemGroup>

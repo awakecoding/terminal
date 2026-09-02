@@ -1,8 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsTestProject>true</IsTestProject>
+    <LinuxPtyTestRid Condition="$([System.String]::Copy('$(NETCoreSdkPortableRuntimeIdentifier)').StartsWith('linux-'))">$(NETCoreSdkPortableRuntimeIdentifier)</LinuxPtyTestRid>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Terminal.Connection\Terminal.Connection.csproj" />
+    <None Include="..\..\native\linux-pty\$(LinuxPtyTestRid)\wt-pty-host"
+          Link="wt-pty-host"
+          Condition="'$(LinuxPtyTestRid)' != ''"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

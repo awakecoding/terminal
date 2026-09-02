@@ -88,7 +88,7 @@ public sealed class SkiaTerminalRendererTests
     }
 
     [Fact]
-    public void EmojiUsesTheWindowsColorEmojiFallback()
+    public void EmojiUsesAnInstalledPlatformFallback()
     {
         using var renderer = new SkiaTerminalRenderer();
         var frame = CreateFrame("\U0001F600");
@@ -96,6 +96,12 @@ public sealed class SkiaTerminalRendererTests
         using var canvas = new SKCanvas(bitmap);
 
         Draw(renderer, canvas, frame);
+
+        Assert.False(string.IsNullOrWhiteSpace(renderer.LastResolvedFontFamily));
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
 
         Assert.Equal("Segoe UI Emoji", renderer.LastResolvedFontFamily);
         var hasColorLayer = false;

@@ -10,6 +10,7 @@ public static class DynamicProfileSource
     public const string Ssh = "Windows.Terminal.SSH";
     public const string VisualStudio = "Windows.Terminal.VisualStudio";
     public const string Azure = "Windows.Terminal.Azure";
+    public const string Linux = "Windows.Terminal.Linux";
 }
 
 public interface IDynamicProfileGenerator
@@ -168,13 +169,18 @@ public sealed class DynamicProfileManager
     {
         environment ??= new DynamicProfileEnvironment();
         commandRunner ??= new DynamicProfileCommandRunner();
-        var generators = new List<IDynamicProfileGenerator>
-        {
-            new InboxShellProfileGenerator(environment),
-            new PowerShellCoreProfileGenerator(environment),
-            new WslDistroProfileGenerator(commandRunner, environment),
-            new VisualStudioProfileGenerator(commandRunner, environment),
-        };
+        var generators = environment.IsLinux
+            ? new List<IDynamicProfileGenerator>
+            {
+                new LinuxShellProfileGenerator(environment),
+            }
+            : new List<IDynamicProfileGenerator>
+            {
+                new InboxShellProfileGenerator(environment),
+                new PowerShellCoreProfileGenerator(environment),
+                new WslDistroProfileGenerator(commandRunner, environment),
+                new VisualStudioProfileGenerator(commandRunner, environment),
+            };
         if (environment.EnableSshProfiles)
         {
             generators.Add(new SshHostProfileGenerator(environment));

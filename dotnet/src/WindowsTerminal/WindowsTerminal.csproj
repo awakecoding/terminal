@@ -16,8 +16,11 @@
     <Product>Windows Terminal (.NET)</Product>
     <Description>NativeAOT Avalonia port of Windows Terminal.</Description>
     <GhosttyRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</GhosttyRid>
-    <GhosttyRid Condition="'$(GhosttyRid)' == '' and '$(PROCESSOR_ARCHITECTURE)' == 'ARM64'">win-arm64</GhosttyRid>
-    <GhosttyRid Condition="'$(GhosttyRid)' == ''">win-x64</GhosttyRid>
+    <GhosttyRid Condition="'$(GhosttyRid)' == ''">$(NETCoreSdkPortableRuntimeIdentifier)</GhosttyRid>
+    <GhosttyNativeName Condition="$([System.String]::Copy('$(GhosttyRid)').StartsWith('linux-'))">libghostty-vt.so</GhosttyNativeName>
+    <GhosttyNativeName Condition="'$(GhosttyNativeName)' == ''">ghostty-vt.dll</GhosttyNativeName>
+    <LinuxPtyRid Condition="$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-'))">$(RuntimeIdentifier)</LinuxPtyRid>
+    <LinuxPtyRid Condition="'$(LinuxPtyRid)' == '' and $([System.String]::Copy('$(NETCoreSdkPortableRuntimeIdentifier)').StartsWith('linux-'))">$(NETCoreSdkPortableRuntimeIdentifier)</LinuxPtyRid>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,12 +28,17 @@
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" />
-    <None Include="..\..\native\ghostty\$(GhosttyRid)\ghostty-vt.dll"
-          Link="ghostty-vt.dll"
+    <None Include="..\..\native\ghostty\$(GhosttyRid)\$(GhosttyNativeName)"
+          Link="$(GhosttyNativeName)"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\native\ghostty\LICENSE"
           Link="THIRD-PARTY-NOTICES-GHOSTTY.txt"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\native\linux-pty\$(LinuxPtyRid)\wt-pty-host"
+          Link="wt-pty-host"
+          Condition="'$(LinuxPtyRid)' != ''"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
