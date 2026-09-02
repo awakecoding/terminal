@@ -61,6 +61,34 @@ public static class TerminalInteractionModel
             : new NormalizedSelection(active, anchor, selection.Mode);
     }
 
+    internal static NormalizedSelection NormalizeCoordinates(
+        int columns,
+        int totalLines,
+        TerminalSelection selection)
+    {
+        var anchor = new TerminalSelectionPoint(
+            Math.Clamp(selection.Anchor.Column, 0, Math.Max(0, columns - 1)),
+            Math.Clamp(selection.Anchor.Line, 0, Math.Max(0, totalLines - 1)));
+        var active = new TerminalSelectionPoint(
+            Math.Clamp(selection.Active.Column, 0, Math.Max(0, columns - 1)),
+            Math.Clamp(selection.Active.Line, 0, Math.Max(0, totalLines - 1)));
+        if (selection.Mode == TerminalSelectionMode.Block)
+        {
+            return new NormalizedSelection(
+                new TerminalSelectionPoint(
+                    Math.Min(anchor.Column, active.Column),
+                    Math.Min(anchor.Line, active.Line)),
+                new TerminalSelectionPoint(
+                    Math.Max(anchor.Column, active.Column),
+                    Math.Max(anchor.Line, active.Line)),
+                selection.Mode);
+        }
+
+        return Compare(anchor, active) <= 0
+            ? new NormalizedSelection(anchor, active, selection.Mode)
+            : new NormalizedSelection(active, anchor, selection.Mode);
+    }
+
     public static string GetSelectedText(
         TextBufferSnapshot snapshot,
         TerminalSelection selection,

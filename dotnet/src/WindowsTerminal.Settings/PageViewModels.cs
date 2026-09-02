@@ -205,12 +205,32 @@ public sealed class ThemeItemViewModel(ThemeSettings theme, Action changed)
 
 public sealed class ProfileItemViewModel(ProfileSettings profile, Action changed) : ObservableObject
 {
+    public static IReadOnlyList<string> TerminalEngineChoices { get; } =
+        ["Inherit", "Built-in", "Ghostty"];
     private string _environmentJson = SerializeEnvironment(profile.Environment);
 
     public string DisplayName => $"{profile.Name} ({profile.Origin})";
     public string Name { get => profile.Name; set => Change(profile.Name, value, v => profile.Name = v); }
     public string? Guid => profile.Guid;
     public string? Source => profile.Source;
+    public string TerminalEngine
+    {
+        get => profile.TerminalEngine switch
+        {
+            TerminalEngineKind.BuiltIn => "Built-in",
+            TerminalEngineKind.Ghostty => "Ghostty",
+            _ => "Inherit",
+        };
+        set => Change(
+            profile.TerminalEngine,
+            value.ToLowerInvariant() switch
+            {
+                "built-in" or "builtin" => TerminalEngineKind.BuiltIn,
+                "ghostty" => TerminalEngineKind.Ghostty,
+                _ => null,
+            },
+            v => profile.TerminalEngine = v);
+    }
     public bool Hidden { get => profile.Hidden; set => Change(profile.Hidden, value, v => profile.Hidden = v); }
     public string Commandline { get => profile.Commandline; set => Change(profile.Commandline, value, v => profile.Commandline = v); }
     public string StartingDirectory { get => profile.StartingDirectory; set => Change(profile.StartingDirectory, value, v => profile.StartingDirectory = v); }
@@ -757,6 +777,17 @@ public sealed class NewTabMenuSettingsViewModel : ObservableObject
 public sealed class RenderingSettingsViewModel(AppSettings settings, Action changed)
     : SettingsPageViewModel("Rendering", "Configure the graphics API and rendering fallbacks.")
 {
+    public IReadOnlyList<string> TerminalEngines { get; } = ["Built-in", "Ghostty"];
+    public string TerminalEngine
+    {
+        get => settings.TerminalEngine == TerminalEngineKind.Ghostty ? "Ghostty" : "Built-in";
+        set => Change(
+            settings.TerminalEngine,
+            value.Equals("Ghostty", StringComparison.OrdinalIgnoreCase)
+                ? TerminalEngineKind.Ghostty
+                : TerminalEngineKind.BuiltIn,
+            v => settings.TerminalEngine = v);
+    }
     public string GraphicsApi { get => settings.GraphicsApi; set => Change(settings.GraphicsApi, value, v => settings.GraphicsApi = v); }
     public bool DisablePartialInvalidation { get => settings.DisablePartialInvalidation; set => Change(settings.DisablePartialInvalidation, value, v => settings.DisablePartialInvalidation = v); }
     public bool SoftwareRendering { get => settings.SoftwareRendering; set => Change(settings.SoftwareRendering, value, v => settings.SoftwareRendering = v); }

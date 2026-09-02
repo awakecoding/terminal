@@ -407,21 +407,27 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private async Task CreateTabAsync(ProfileSettings profile)
     {
-        var pane = CreatePane(profile);
-        var tab = new TerminalTab(pane);
-        _tabCollection.Add(tab);
-        ActivateTab(tab);
-        RebuildTabs();
-
-        var (columns, rows) = InitialTerminalSize();
+        TerminalPane? pane = null;
+        TerminalTab? tab = null;
         try
         {
+            pane = CreatePane(profile);
+            tab = new TerminalTab(pane);
+            _tabCollection.Add(tab);
+            ActivateTab(tab);
+            RebuildTabs();
+
+            var (columns, rows) = InitialTerminalSize();
             await pane.Control.StartAsync(profile, columns, rows).ConfigureAwait(true);
             pane.Control.Focus();
         }
         catch (Exception ex) when (IsLaunchFailure(ex))
         {
-            await RemoveFailedPaneAsync(tab, pane).ConfigureAwait(true);
+            if (pane is not null && tab is not null)
+            {
+                await RemoveFailedPaneAsync(tab, pane).ConfigureAwait(true);
+            }
+
             await ShowLaunchErrorAsync(profile, ex).ConfigureAwait(true);
         }
     }
@@ -431,7 +437,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         TerminalSessionDescriptor? session = null,
         PanePresentationState? presentation = null)
     {
-        var control = new TermControl();
+        var control = new TermControl(TerminalEngineFactory.Create(_settings, profile));
         control.ConnectionFactory = CreateConnection;
         control.InteractionOptions = TerminalInteractionOptions.FromSettings(_settings);
         control.Cursor = new Cursor(StandardCursorType.Ibeam);
@@ -498,9 +504,11 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         var executable = closingQuote > 1
             ? commandLine[1..closingQuote]
             : commandLine.Split(' ', 2)[0];
-        return normalizedTitle.Equals(
-            executable.Trim().Trim('"'),
-            StringComparison.OrdinalIgnoreCase);
+        executable = executable.Trim().Trim('"');
+        return normalizedTitle.Equals(executable, StringComparison.OrdinalIgnoreCase) ||
+               Path.GetFileName(normalizedTitle).Equals(
+                   Path.GetFileName(executable),
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     private IRestartableTerminalConnection CreateConnection(ProfileSettings profile)
@@ -526,25 +534,32 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             return;
         }
 
-        var newPane = CreatePane(profile ?? activePane.Profile);
-        var normalizedSize = Math.Clamp(splitSize, 0.1, 0.9);
-        var firstPaneRatio = newPaneFirst ? normalizedSize : 1 - normalizedSize;
-        if (!tab.Panes.SplitActive(newPane, orientation, firstPaneRatio, newPaneFirst))
-        {
-            return;
-        }
-
-        RebuildTerminalHost();
-        var (columns, rows) = InitialTerminalSize();
+        var paneProfile = profile ?? activePane.Profile;
+        TerminalPane? newPane = null;
         try
         {
+            newPane = CreatePane(paneProfile);
+            var normalizedSize = Math.Clamp(splitSize, 0.1, 0.9);
+            var firstPaneRatio = newPaneFirst ? normalizedSize : 1 - normalizedSize;
+            if (!tab.Panes.SplitActive(newPane, orientation, firstPaneRatio, newPaneFirst))
+            {
+                await newPane.Control.CloseAsync().ConfigureAwait(true);
+                return;
+            }
+
+            RebuildTerminalHost();
+            var (columns, rows) = InitialTerminalSize();
             await newPane.Control.StartAsync(newPane.Profile, columns / 2, rows).ConfigureAwait(true);
             newPane.Control.Focus();
         }
         catch (Exception ex) when (IsLaunchFailure(ex))
         {
-            await RemoveFailedPaneAsync(tab, newPane).ConfigureAwait(true);
-            await ShowLaunchErrorAsync(newPane.Profile, ex).ConfigureAwait(true);
+            if (newPane is not null)
+            {
+                await RemoveFailedPaneAsync(tab, newPane).ConfigureAwait(true);
+            }
+
+            await ShowLaunchErrorAsync(paneProfile, ex).ConfigureAwait(true);
         }
     }
 
@@ -780,11 +795,11 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         void UpdateScrollBar()
         {
             updatingScrollBar = true;
-            var history = pane.Control.Engine.Buffer.HistoryCount;
+            var history = pane.Control.Engine.HistoryCount;
             scrollBar.Maximum = history;
             scrollBar.ViewportSize = pane.Control.Engine.Rows;
             scrollBar.LargeChange = Math.Max(1, pane.Control.Engine.Rows - 1);
-            scrollBar.Value = history - pane.Control.Engine.Buffer.ScrollOffset;
+            scrollBar.Value = history - pane.Control.Engine.ScrollOffset;
             scrollBar.IsVisible = !pane.Profile.ScrollbarState.Equals(
                 "hidden",
                 StringComparison.OrdinalIgnoreCase);
@@ -796,7 +811,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             if (!updatingScrollBar)
             {
                 pane.Control.SetScrollOffset(
-                    pane.Control.Engine.Buffer.HistoryCount - (int)Math.Round(scrollBar.Value));
+                    pane.Control.Engine.HistoryCount - (int)Math.Round(scrollBar.Value));
             }
         };
         pane.Control.ViewportChanged += (_, _) => UpdateScrollBar();
@@ -2972,6 +2987,9 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             UnauthorizedAccessException or
             ArgumentException or
             InvalidOperationException or
+            DllNotFoundException or
+            EntryPointNotFoundException or
+            BadImageFormatException or
             PlatformNotSupportedException or
             AzureCloudShellException or
             System.Runtime.InteropServices.COMException;

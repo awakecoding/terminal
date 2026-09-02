@@ -395,11 +395,17 @@
           <CheckBox Classes="field" Width="240" Content="Allow OSC notifications" IsChecked="{Binding SelectedProfile.AllowOscNotifications}" />
         </WrapPanel>
         <Border Classes="settings-card">
-          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto">
-          <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Drag/drop delimiter" />
-          <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.DragDropDelimiter}" />
-          <TextBlock Grid.Row="1" Classes="fieldLabel" Text="Path translation style" />
-          <TextBox Grid.Row="1" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.PathTranslationStyle}" />
+          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto">
+          <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Terminal emulation engine" />
+          <ComboBox Grid.Row="0"
+                    Grid.Column="1"
+                    Classes="field"
+                    ItemsSource="{x:Static vm:ProfileItemViewModel.TerminalEngineChoices}"
+                    SelectedItem="{Binding SelectedProfile.TerminalEngine}" />
+          <TextBlock Grid.Row="1" Classes="fieldLabel" Text="Drag/drop delimiter" />
+          <TextBox Grid.Row="1" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.DragDropDelimiter}" />
+          <TextBlock Grid.Row="2" Classes="fieldLabel" Text="Path translation style" />
+          <TextBox Grid.Row="2" Grid.Column="1" Classes="field" Text="{Binding SelectedProfile.PathTranslationStyle}" />
           </Grid>
         </Border>
         <TextBlock Margin="0,16,0,6" FontSize="18" FontWeight="SemiBold" Text="Environment JSON" />
@@ -509,12 +515,18 @@
         <TextBlock Classes="pageTitle" Text="{Binding Title}" />
         <TextBlock Classes="pageDescription" Text="{Binding Description}" />
         <Border Classes="settings-card">
-          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto">
-          <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Graphics API" />
-          <TextBox Grid.Row="0" Grid.Column="1" Classes="field" Text="{Binding GraphicsApi}" />
-          <CheckBox Grid.Row="1" Grid.Column="1" Classes="field" Content="Disable partial invalidation" IsChecked="{Binding DisablePartialInvalidation}" />
-          <CheckBox Grid.Row="2" Grid.Column="1" Classes="field" Content="Software rendering" IsChecked="{Binding SoftwareRendering}" />
-          <CheckBox Grid.Row="3" Grid.Column="1" Classes="field" Content="Use background image for window" IsChecked="{Binding UseBackgroundImageForWindow}" />
+          <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+          <TextBlock Grid.Row="0" Classes="fieldLabel" Text="Terminal emulation engine" />
+          <ComboBox Grid.Row="0"
+                    Grid.Column="1"
+                    Classes="field"
+                    ItemsSource="{Binding TerminalEngines}"
+                    SelectedItem="{Binding TerminalEngine}" />
+          <TextBlock Grid.Row="1" Classes="fieldLabel" Text="Graphics API" />
+          <TextBox Grid.Row="1" Grid.Column="1" Classes="field" Text="{Binding GraphicsApi}" />
+          <CheckBox Grid.Row="2" Grid.Column="1" Classes="field" Content="Disable partial invalidation" IsChecked="{Binding DisablePartialInvalidation}" />
+          <CheckBox Grid.Row="3" Grid.Column="1" Classes="field" Content="Software rendering" IsChecked="{Binding SoftwareRendering}" />
+          <CheckBox Grid.Row="4" Grid.Column="1" Classes="field" Content="Use background image for window" IsChecked="{Binding UseBackgroundImageForWindow}" />
           </Grid>
         </Border>
       </StackPanel>

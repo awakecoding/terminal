@@ -55,6 +55,12 @@ public enum CopyFormat
     All = Html | Rtf,
 }
 
+public enum TerminalEngineKind
+{
+    BuiltIn,
+    Ghostty,
+}
+
 public enum NewTabMenuEntryType
 {
     Invalid,
@@ -151,6 +157,7 @@ public sealed class AppSettings
     public string GraphicsApi { get; set; } = "automatic";
     public bool DisablePartialInvalidation { get; set; }
     public bool SoftwareRendering { get; set; }
+    public TerminalEngineKind TerminalEngine { get; set; }
     public string TextMeasurement { get; set; } = "graphemes";
     public string AmbiguousWidth { get; set; } = "narrow";
     public string DefaultInputScope { get; set; } = "default";
@@ -277,6 +284,7 @@ public sealed class ProfileSettings
     }
 
     public string? ConnectionType { get; set; }
+    public TerminalEngineKind? TerminalEngine { get; set; }
     public string DarkColorScheme { get; set; } = "Campbell";
     public string LightColorScheme { get; set; } = "Campbell";
     public string ColorScheme

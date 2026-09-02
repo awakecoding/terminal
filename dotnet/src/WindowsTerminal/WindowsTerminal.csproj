@@ -15,6 +15,9 @@
     <AssemblyName>WindowsTerminal</AssemblyName>
     <Product>Windows Terminal (.NET)</Product>
     <Description>NativeAOT Avalonia port of Windows Terminal.</Description>
+    <GhosttyRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</GhosttyRid>
+    <GhosttyRid Condition="'$(GhosttyRid)' == '' and '$(PROCESSOR_ARCHITECTURE)' == 'ARM64'">win-arm64</GhosttyRid>
+    <GhosttyRid Condition="'$(GhosttyRid)' == ''">win-x64</GhosttyRid>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,6 +25,14 @@
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" />
+    <None Include="..\..\native\ghostty\$(GhosttyRid)\ghostty-vt.dll"
+          Link="ghostty-vt.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\native\ghostty\LICENSE"
+          Link="THIRD-PARTY-NOTICES-GHOSTTY.txt"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="PublishWtCli" AfterTargets="Publish">

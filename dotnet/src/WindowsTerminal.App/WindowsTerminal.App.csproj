@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Terminal.Control\Terminal.Control.csproj" />
     <ProjectReference Include="..\Terminal.Connection\Terminal.Connection.csproj" />
+    <ProjectReference Include="..\Terminal.Ghostty\Terminal.Ghostty.csproj" />
     <ProjectReference Include="..\Terminal.Settings\Terminal.Settings.csproj" />
     <ProjectReference Include="..\WindowsTerminal.Settings\WindowsTerminal.Settings.csproj" />
   </ItemGroup>

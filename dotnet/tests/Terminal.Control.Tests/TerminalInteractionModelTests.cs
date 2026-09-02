@@ -12,6 +12,19 @@ namespace Terminal.Control.Tests;
 public sealed class TerminalInteractionModelTests
 {
     [Fact]
+    public void CoordinateOnlyNormalizationDoesNotRequireHistorySnapshot()
+    {
+        var selection = new TerminalSelection(
+            new TerminalSelectionPoint(50, 20),
+            new TerminalSelectionPoint(-1, -2));
+
+        var normalized = TerminalInteractionModel.NormalizeCoordinates(10, 12, selection);
+
+        Assert.Equal(new TerminalSelectionPoint(0, 0), normalized.Start);
+        Assert.Equal(new TerminalSelectionPoint(9, 11), normalized.End);
+    }
+
+    [Fact]
     public void LinearSelectionPreservesWrappedLines()
     {
         var engine = new TerminalEngine(5, 3);

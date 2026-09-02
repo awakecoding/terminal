@@ -3,6 +3,7 @@
     <Project Path="src/Terminal.Connection/Terminal.Connection.csproj" />
     <Project Path="src/Terminal.Control/Terminal.Control.csproj" />
     <Project Path="src/Terminal.Core/Terminal.Core.csproj" />
+    <Project Path="src/Terminal.Ghostty/Terminal.Ghostty.csproj" />
     <Project Path="src/Terminal.Render/Terminal.Render.csproj" />
     <Project Path="src/Terminal.Settings/Terminal.Settings.csproj" />
     <Project Path="src/WindowsTerminal.Broker/WindowsTerminal.Broker.csproj" />
@@ -17,6 +18,7 @@
     <Project Path="tests/Terminal.Connection.Tests/Terminal.Connection.Tests.csproj" />
     <Project Path="tests/Terminal.Control.Tests/Terminal.Control.Tests.csproj" />
     <Project Path="tests/Terminal.Core.Tests/Terminal.Core.Tests.csproj" />
+    <Project Path="tests/Terminal.Ghostty.Tests/Terminal.Ghostty.Tests.csproj" />
     <Project Path="tests/Terminal.Render.Tests/Terminal.Render.Tests.csproj" />
     <Project Path="tests/Terminal.Settings.Tests/Terminal.Settings.Tests.csproj" />
     <Project Path="tests/WindowsTerminal.Broker.Tests/WindowsTerminal.Broker.Tests.csproj" />

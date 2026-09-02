@@ -3,9 +3,10 @@
 A C# reimplementation of the Windows Terminal shell experience:
 
 - **.NET 10** with **NativeAOT**
-- **Avalonia 11** UI instead of WinUI/XAML Islands
+- **Avalonia 12** UI instead of WinUI/XAML Islands
 - **ConPTY** for local shells and Azure Cloud Shell for remote Azure sessions
-- VT/xterm parser, text buffer, tabs/panes, settings-driven actions and keybindings
+- selectable built-in or **Ghostty** VT engine
+- text buffer, tabs/panes, settings-driven actions and keybindings
 
 The original C++/WinUI tree is unchanged. This port lives entirely under `dotnet/`.
 
@@ -51,6 +52,10 @@ last-definition-wins conflicts match the settings model.
 Settings are stored at `%LOCALAPPDATA%\WindowsTerminal.NET\settings.json`.
 Set `WT_DOTNET_SETTINGS_PATH` to load a specific Windows Terminal settings file.
 Runtime application state is stored atomically in `state.json` beside that file.
+Set `"experimental.terminalEngine": "ghostty"` to use the pinned
+`libghostty-vt` engine globally. A profile can override it with the same key
+set to `"builtin"` or `"ghostty"`. ConPTY remains the Windows process transport
+for both engines; the setting controls VT parsing, state, modes, and reflow.
 The settings loader applies embedded defaults, generated profiles, extension
 fragments, then the user layer. Its typed action map covers the complete
 generated action inventory; actions not yet implemented by the Avalonia shell
@@ -80,6 +85,7 @@ The compiled-XAML settings editor and host integration are documented in
 
 ```
 Terminal.Core         VT parser + text buffer + terminal engine
+Terminal.Ghostty      NativeAOT-safe libghostty-vt engine adapter
 Terminal.Render       Immutable plans + HarfBuzz/Skia glyph renderer
 Terminal.Connection   ConPTY + Azure Cloud Shell (HTTP/WebSocket, NativeAOT)
 Terminal.Settings     Layered Windows Terminal-compatible JSON settings

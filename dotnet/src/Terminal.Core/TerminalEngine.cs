@@ -31,7 +31,7 @@ public enum TerminalMouseTrackingMode
     AllMotion,
 }
 
-public sealed class TerminalEngine : IVtDispatch
+public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
 {
     private readonly VtParser _parser;
     private readonly SixelDecoder _sixelDecoder = new();
@@ -110,6 +110,8 @@ public sealed class TerminalEngine : IVtDispatch
     public int Rows => Buffer.Rows;
     public int CursorX => Buffer.CursorX;
     public int CursorY => Buffer.CursorY;
+    public int HistoryCount => Buffer.HistoryCount;
+    public int ScrollOffset => Buffer.ScrollOffset;
     public IReadOnlyList<TerminalImageOverlay> Images => _images;
     public IReadOnlyDictionary<int, DrcsGlyph> DrcsGlyphs => _readOnlyDrcsGlyphs;
     public int MacroCount => _macros.Count(static macro => macro is not null);
@@ -124,6 +126,11 @@ public sealed class TerminalEngine : IVtDispatch
     public event EventHandler? Bell;
     public event EventHandler<byte[]>? ResponseReady;
 
+    public void Dispose()
+    {
+        GC.SuppressFinalize(this);
+    }
+
     public void Feed(ReadOnlySpan<byte> data)
     {
         _parser.Process(data);
@@ -132,12 +139,15 @@ public sealed class TerminalEngine : IVtDispatch
 
     public void Feed(string text) => Feed(Encoding.UTF8.GetBytes(text));
 
-    public void Resize(int columns, int rows)
+    public void Resize(int columns, int rows, double cellWidth = 1, double cellHeight = 1)
     {
         _primary.Resize(columns, rows);
         _alternate.Resize(columns, rows);
         Invalidated?.Invoke(this, EventArgs.Empty);
     }
+
+    public void SetScrollOffset(int offset) =>
+        Buffer.ScrollOffset = Math.Clamp(offset, 0, Buffer.HistoryCount);
 
     public void Reset()
     {

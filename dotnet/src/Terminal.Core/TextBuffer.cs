@@ -19,6 +19,11 @@ public sealed record TextBufferSnapshot(
     int ScrollOffset,
     IReadOnlyList<TextBufferLineSnapshot> Lines);
 
+public sealed record TextBufferProjectionRow(
+    Cell[] Cells,
+    bool Wrapped,
+    IReadOnlyList<ShellMark> Marks);
+
 public sealed class TextBuffer
 {
     private sealed class BufferLine
@@ -171,6 +176,36 @@ public sealed class TextBuffer
 
         return new TextBufferSnapshot(Columns, Rows, CursorX, CursorY, HistoryCount, ScrollOffset, copies);
     }
+
+    public void ReplaceViewport(
+        IReadOnlyList<TextBufferProjectionRow> rows,
+        int cursorX,
+        int cursorY)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        var replacement = new List<BufferLine>(Rows);
+        for (var y = 0; y < Rows; y++)
+        {
+            var projection = y < rows.Count
+                ? rows[y]
+                : new TextBufferProjectionRow([], false, []);
+            var source = projection.Cells;
+            var cells = Enumerable.Repeat(Cell.Blank, Columns).ToArray();
+            Array.Copy(source, cells, Math.Min(source.Length, cells.Length));
+            var line = new BufferLine(cells) { Wrapped = projection.Wrapped };
+            line.Marks.AddRange(projection.Marks.Select(static mark =>
+                new ShellMark(mark.StartColumn, mark.ExitCode)));
+            replacement.Add(line);
+        }
+
+        _lines.ResetCapacity(Rows + _historySize, replacement);
+        CursorX = Math.Clamp(cursorX, 0, Columns - 1);
+        CursorY = Math.Clamp(cursorY, 0, Rows - 1);
+        ScrollOffset = 0;
+        WrapPending = false;
+    }
+
+    public void AdvanceCoordinateVersion() => CoordinateVersion++;
 
     public int GetPrintAdvance(Rune rune)
     {

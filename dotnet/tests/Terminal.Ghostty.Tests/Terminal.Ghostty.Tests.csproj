@@ -5,9 +5,10 @@
     <GhosttyTestRid Condition="'$(GhosttyTestRid)' == ''">win-x64</GhosttyTestRid>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Terminal.Ghostty\Terminal.Ghostty.csproj" />
+    <ProjectReference Include="..\..\src\Terminal.Control\Terminal.Control.csproj" />
     <None Include="..\..\native\ghostty\$(GhosttyTestRid)\ghostty-vt.dll"
           Link="ghostty-vt.dll"
           CopyToOutputDirectory="PreserveNewest" />
-    <ProjectReference Include="..\..\src\WindowsTerminal.App\WindowsTerminal.App.csproj" />
   </ItemGroup>
 </Project>

@@ -51,6 +51,8 @@ public sealed class TermControl : Avalonia.Controls.Control
     private IReadOnlyList<int> _lastDirtyRows = [];
     private double _cellWidth = 8;
     private double _cellHeight = 16;
+    private uint _engineCellWidthPixels;
+    private uint _engineCellHeightPixels;
     private bool _cursorOn = true;
     private bool _selecting;
     private TerminalSelection? _selection;
@@ -65,9 +67,9 @@ public sealed class TermControl : Avalonia.Controls.Control
     private bool _selectionAlternateBuffer;
     private bool _rendererDisposed;
 
-    public TermControl()
+    public TermControl(ITerminalEngine? engine = null)
     {
-        Engine = new TerminalEngine();
+        Engine = engine ?? new TerminalEngine();
         _textInputMethodClient = new TerminalTextInputMethodClient(this);
         _search = new TerminalSearchSession(Engine);
         _search.Changed += (_, _) =>
@@ -113,7 +115,7 @@ public sealed class TermControl : Avalonia.Controls.Control
             Dispatcher.UIThread.Post(() => NotificationRequested?.Invoke(this, notification));
     }
 
-    public TerminalEngine Engine { get; }
+    public ITerminalEngine Engine { get; }
     public TerminalSearchSession Search => _search;
     public CellSize CellSize => _renderer.CellSize;
     public Func<ProfileSettings, IRestartableTerminalConnection>? ConnectionFactory { get; set; }
@@ -179,12 +181,14 @@ public sealed class TermControl : Avalonia.Controls.Control
         _defaultFontSize = profile.FontSize <= 0 ? 12 : profile.FontSize;
         _fontSize = _defaultFontSize;
         ConfigureRenderer(profile);
+        var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
+        _renderer.Resize(new RenderViewport(columns, rows, scale));
+        MeasureGlyph();
         Engine.Scheme = profile.ResolveScheme();
         Engine.ConfigureOptionalFeatures(
             profile.AllowVtClipboardWrite,
             profile.AllowOscNotifications);
-        Engine.Resize(columns, rows);
-        MeasureGlyph();
+        ResizeEngine(columns, rows);
 
         if (!OperatingSystem.IsWindows())
         {
@@ -268,6 +272,7 @@ public sealed class TermControl : Avalonia.Controls.Control
 
         _renderer.Dispose();
         _search.Dispose();
+        Engine.Dispose();
         _rendererDisposed = true;
     }
 
@@ -410,13 +415,29 @@ public sealed class TermControl : Avalonia.Controls.Control
         int viewportRow,
         TerminalSelectionMode mode = TerminalSelectionMode.Linear)
     {
-        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
-        var point = ViewportToBuffer(snapshot, viewportColumn, viewportRow);
-        SetSelection(TerminalInteractionModel.SelectAt(
-            snapshot,
-            point,
-            mode,
-            InteractionOptions.WordDelimiters));
+        if (mode is TerminalSelectionMode.Command or TerminalSelectionMode.Output)
+        {
+            var history = Engine.CreateSnapshot(includeHistory: true).Buffer;
+            SetSelection(TerminalInteractionModel.SelectAt(
+                history,
+                ViewportToBuffer(history, viewportColumn, viewportRow),
+                mode,
+                InteractionOptions.WordDelimiters));
+        }
+        else
+        {
+            var viewport = Engine.CreateSnapshot().Buffer;
+            var local = TerminalInteractionModel.Clamp(
+                viewport,
+                new TerminalSelectionPoint(viewportColumn, viewportRow));
+            var selected = TerminalInteractionModel.SelectAt(
+                viewport,
+                local,
+                mode,
+                InteractionOptions.WordDelimiters);
+            SetSelection(OffsetSelection(selected, Engine.HistoryCount - Engine.ScrollOffset));
+        }
+
         _selecting = true;
     }
 
@@ -427,8 +448,13 @@ public sealed class TermControl : Avalonia.Controls.Control
             return;
         }
 
-        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
-        var point = ViewportToBuffer(snapshot, viewportColumn, viewportRow);
+        var viewport = Engine.CreateSnapshot().Buffer;
+        var local = TerminalInteractionModel.Clamp(
+            viewport,
+            new TerminalSelectionPoint(viewportColumn, viewportRow));
+        var point = new TerminalSelectionPoint(
+            local.Column,
+            Engine.HistoryCount - Engine.ScrollOffset + local.Line);
         SetSelection(_selection.ActiveEndpoint == TerminalSelectionEndpoint.Active
             ? _selection with { Active = point }
             : _selection with { Anchor = point });
@@ -663,14 +689,14 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     public void ScrollBy(int rows)
     {
-        SetScrollOffset(Engine.Buffer.ScrollOffset + rows);
+        SetScrollOffset(Engine.ScrollOffset + rows);
     }
 
     public void ScrollPage(int direction) => ScrollBy(direction * Math.Max(1, Engine.Rows - 1));
 
     public void ScrollToTop()
     {
-        SetScrollOffset(Engine.Buffer.HistoryCount);
+        SetScrollOffset(Engine.HistoryCount);
     }
 
     public void ScrollToBottom()
@@ -680,13 +706,13 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     public void SetScrollOffset(int offset)
     {
-        var normalized = Math.Clamp(offset, 0, Engine.Buffer.HistoryCount);
-        if (Engine.Buffer.ScrollOffset == normalized)
+        var normalized = Math.Clamp(offset, 0, Engine.HistoryCount);
+        if (Engine.ScrollOffset == normalized)
         {
             return;
         }
 
-        Engine.Buffer.ScrollOffset = normalized;
+        Engine.SetScrollOffset(normalized);
         ViewportChanged?.Invoke(this, EventArgs.Empty);
         InvalidateVisual();
     }
@@ -764,13 +790,36 @@ public sealed class TermControl : Avalonia.Controls.Control
         const double padding = 8;
         var cols = Math.Max(1, (int)((finalSize.Width - (padding * 2)) / _cellWidth));
         var rows = Math.Max(1, (int)((finalSize.Height - (padding * 2)) / _cellHeight));
-        if (cols != Engine.Columns || rows != Engine.Rows)
+        var gridChanged = cols != Engine.Columns || rows != Engine.Rows;
+        ResizeEngine(cols, rows);
+        if (gridChanged)
         {
-            Engine.Resize(cols, rows);
             _connection?.Resize(cols, rows);
         }
 
         return finalSize;
+    }
+
+    private void ResizeEngine(int columns, int rows)
+    {
+        var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
+        var cellWidthPixels = checked((uint)Math.Max(1, Math.Round(_renderer.CellSize.Width * scale)));
+        var cellHeightPixels = checked((uint)Math.Max(1, Math.Round(_renderer.CellSize.Height * scale)));
+        if (columns == Engine.Columns &&
+            rows == Engine.Rows &&
+            cellWidthPixels == _engineCellWidthPixels &&
+            cellHeightPixels == _engineCellHeightPixels)
+        {
+            return;
+        }
+
+        Engine.Resize(
+            columns,
+            rows,
+            cellWidthPixels,
+            cellHeightPixels);
+        _engineCellWidthPixels = cellWidthPixels;
+        _engineCellHeightPixels = cellHeightPixels;
     }
 
     public override void Render(DrawingContext context)
@@ -780,6 +829,10 @@ public sealed class TermControl : Avalonia.Controls.Control
             return;
         }
 
+        var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
+        _renderer.Resize(new RenderViewport(Engine.Columns, Engine.Rows, scale));
+        MeasureGlyph();
+        ResizeEngine(Engine.Columns, Engine.Rows);
         var profile = Profile;
         var frame = TerminalRenderPlanner.Create(
             Engine.CreateSnapshot(),
@@ -789,9 +842,6 @@ public sealed class TermControl : Avalonia.Controls.Control
                 CursorStyle = ParseCursorStyle(profile?.CursorShape),
                 CursorHeightPercentage = profile?.CursorHeight ?? 25,
             });
-        var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
-        _renderer.Resize(new RenderViewport(frame.Columns, frame.Rows, scale));
-        MeasureGlyph();
 
         var selection = CreateSelectionOverlays(frame);
         var overlays = new TerminalRenderOverlays(
@@ -799,7 +849,7 @@ public sealed class TermControl : Avalonia.Controls.Control
             _searchHighlights,
             _hoveredHyperlink)
         {
-            Composition = Engine.Buffer.ScrollOffset == 0 ? _composition : null,
+            Composition = Engine.ScrollOffset == 0 ? _composition : null,
         };
         _lastDirtyRows = TerminalFrameDiffer.GetDirtyRows(_lastFrame, frame);
         _lastFrame = frame;
@@ -1044,7 +1094,7 @@ public sealed class TermControl : Avalonia.Controls.Control
         }
 
         var delta = (int)Math.Round(e.Delta.Y * 3);
-        SetScrollOffset(Engine.Buffer.ScrollOffset + delta);
+        SetScrollOffset(Engine.ScrollOffset + delta);
         e.Handled = true;
         base.OnPointerWheelChanged(e);
     }
@@ -1135,7 +1185,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     private void UpdateSearchHighlights()
     {
         var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
-        var viewportTop = snapshot.HistoryCount - Engine.Buffer.ScrollOffset;
+        var viewportTop = snapshot.HistoryCount - Engine.ScrollOffset;
         var ranges = new List<TerminalCellRange>();
         foreach (var match in _search.Matches)
         {
@@ -1175,11 +1225,22 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     public TerminalHyperlinkContext? HitTestHyperlink(int viewportColumn, int viewportRow)
     {
-        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
-        return TerminalInteractionModel.HitTestHyperlink(
-            snapshot,
-            ViewportToBuffer(snapshot, viewportColumn, viewportRow),
+        var viewport = Engine.CreateSnapshot().Buffer;
+        var hyperlink = TerminalInteractionModel.HitTestHyperlink(
+            viewport,
+            new TerminalSelectionPoint(viewportColumn, viewportRow),
             InteractionOptions.SafeUriSchemes);
+        if (hyperlink is null)
+        {
+            return null;
+        }
+
+        var offset = Engine.HistoryCount - Engine.ScrollOffset;
+        return hyperlink with
+        {
+            Start = hyperlink.Start with { Line = hyperlink.Start.Line + offset },
+            End = hyperlink.End with { Line = hyperlink.End.Line + offset },
+        };
     }
 
     public async Task<bool> OpenHyperlinkAsync(TerminalHyperlinkContext hyperlink)
@@ -1392,9 +1453,11 @@ public sealed class TermControl : Avalonia.Controls.Control
             return [];
         }
 
-        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
-        var range = TerminalInteractionModel.Normalize(snapshot, _selection);
-        var viewportTop = snapshot.HistoryCount - snapshot.ScrollOffset;
+        var range = TerminalInteractionModel.NormalizeCoordinates(
+            frame.Columns,
+            Engine.HistoryCount + frame.Rows,
+            _selection);
+        var viewportTop = Engine.HistoryCount - Engine.ScrollOffset;
         var startRow = range.Start.Line - viewportTop;
         var endRow = range.End.Line - viewportTop;
         if (range.Mode != TerminalSelectionMode.Block)
@@ -1466,6 +1529,13 @@ public sealed class TermControl : Avalonia.Controls.Control
             snapshot,
             new TerminalSelectionPoint(viewportColumn, top + viewportRow));
     }
+
+    private static TerminalSelection OffsetSelection(TerminalSelection selection, int lineOffset) =>
+        selection with
+        {
+            Anchor = selection.Anchor with { Line = selection.Anchor.Line + lineOffset },
+            Active = selection.Active with { Line = selection.Active.Line + lineOffset },
+        };
 
     private bool HandleMarkModeKey(KeyEventArgs e)
     {

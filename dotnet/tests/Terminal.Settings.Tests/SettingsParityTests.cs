@@ -474,6 +474,58 @@ public sealed class SettingsParityTests
     }
 
     [Fact]
+    public void TerminalEngineCanBeSelectedGloballyAndPerProfile()
+    {
+        const string user = """
+            {
+                "experimental.terminalEngine": "ghostty",
+                "profiles": {
+                    "list": [
+                        {
+                            "guid": "{11111111-1111-1111-1111-111111111111}",
+                            "name": "Inbox",
+                            "experimental.terminalEngine": "builtin"
+                        }
+                    ]
+                }
+            }
+            """;
+
+        var settings = SettingsLoader.Load(Defaults, user);
+
+        Assert.Equal(TerminalEngineKind.Ghostty, settings.TerminalEngine);
+        Assert.Equal(TerminalEngineKind.BuiltIn, Assert.Single(settings.Profiles).TerminalEngine);
+
+        var serialized = SettingsLoader.SerializeUserDocument(settings);
+        Assert.Contains("\"experimental.terminalEngine\": \"ghostty\"", serialized);
+        Assert.Contains("\"experimental.terminalEngine\": \"builtin\"", serialized);
+    }
+
+    [Fact]
+    public void InheritedTerminalEngineRemovesProfileOverride()
+    {
+        const string user = """
+            {
+                "profiles": {
+                    "list": [
+                        {
+                            "guid": "{11111111-1111-1111-1111-111111111111}",
+                            "name": "Inbox",
+                            "experimental.terminalEngine": "ghostty"
+                        }
+                    ]
+                }
+            }
+            """;
+        var settings = SettingsLoader.Load(Defaults, user);
+        Assert.Single(settings.Profiles).TerminalEngine = null;
+
+        var serialized = SettingsLoader.SerializeUserDocument(settings);
+
+        Assert.DoesNotContain("\"experimental.terminalEngine\": \"ghostty\"", serialized);
+    }
+
+    [Fact]
     public void ParsesNewTabMenuAndFiltersUnknownEntries()
     {
         const string user = """

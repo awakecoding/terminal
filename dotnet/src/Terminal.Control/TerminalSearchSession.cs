@@ -4,13 +4,13 @@ namespace Microsoft.Terminal.Control;
 
 public sealed class TerminalSearchSession : IDisposable
 {
-    private readonly TerminalEngine _engine;
+    private readonly ITerminalEngine _engine;
     private IReadOnlyList<BufferRange> _matches = [];
     private int _currentIndex = -1;
     private TextBufferSnapshot? _snapshot;
     private bool _stale;
 
-    public TerminalSearchSession(TerminalEngine engine)
+    public TerminalSearchSession(ITerminalEngine engine)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _engine.Invalidated += OnEngineInvalidated;
@@ -231,7 +231,7 @@ public sealed class TerminalSearchSession : IDisposable
             current.Start.Line - (snapshot.Rows / 2),
             0,
             liveViewportStart);
-        _engine.Buffer.ScrollOffset = liveViewportStart - desiredTop;
+        _engine.SetScrollOffset(liveViewportStart - desiredTop);
     }
 
     private sealed record SearchAnchor(

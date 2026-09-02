@@ -67,6 +67,11 @@ begin {
             $manifestPath = Join-Path $extractPath "AppxManifest.xml"
             Assert-Condition (Test-Path -LiteralPath $manifestPath) "AppxManifest.xml is missing from '$Path'."
             Assert-Condition (Test-Path -LiteralPath (Join-Path $extractPath "WindowsTerminal.exe")) "WindowsTerminal.exe is missing from '$Path'."
+            $ghosttyPath = Join-Path $extractPath "ghostty-vt.dll"
+            Assert-Condition (Test-Path -LiteralPath $ghosttyPath) "ghostty-vt.dll is missing from '$Path'."
+            Assert-Condition (
+                Test-Path -LiteralPath (Join-Path $extractPath "THIRD-PARTY-NOTICES-GHOSTTY.txt")
+            ) "The Ghostty license notice is missing from '$Path'."
 
             [xml] $manifest = Get-Content -LiteralPath $manifestPath
             $namespace = [Xml.XmlNamespaceManager]::new($manifest.NameTable)
@@ -81,6 +86,16 @@ begin {
             Assert-Condition ($identity.Name -eq "Awakecoding.WindowsTerminal.Dev") "Unexpected package identity name."
             Assert-Condition ($identity.Publisher -eq "CN=Awakecoding Windows Terminal Development") "Unexpected package publisher."
             Assert-Condition ($identity.ProcessorArchitecture -in @("x64", "arm64")) "Unexpected package architecture '$($identity.ProcessorArchitecture)'."
+            $expectedGhosttyHash = if ($identity.ProcessorArchitecture -eq "arm64") {
+                "691A331E92D0CE17B8407DD370D26394090B14AB8A7C398DF497442293D4ED72"
+            }
+            else {
+                "DCB3274F9D8C945AC765A11903614C5DA4BC0CC2EF4EBC23E8CD70C130B7B458"
+            }
+            $actualGhosttyHash = (Get-FileHash -LiteralPath $ghosttyPath -Algorithm SHA256).Hash
+            Assert-Condition (
+                $actualGhosttyHash -eq $expectedGhosttyHash
+            ) "ghostty-vt.dll architecture/hash mismatch in '$Path'."
 
             $application = $manifest.SelectSingleNode("/f:Package/f:Applications/f:Application", $namespace)
             Assert-Condition ($application.Executable -eq "WindowsTerminal.exe") "Unexpected application executable."
