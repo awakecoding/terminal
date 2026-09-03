@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Devolutions.Terminal.Ghostty;
@@ -13,37 +12,31 @@ public static class GhosttyAbi
 
     public static string TypeManifest => ValidatedManifest.Value;
 
+    public static string NativeLibraryFileName => OperatingSystem.IsWindows()
+        ? "ghostty-vt.dll"
+        : OperatingSystem.IsMacOS()
+            ? "libghostty-vt.dylib"
+            : "libghostty-vt.so";
+
+    public static bool IsNativeLibraryPresent =>
+        File.Exists(Path.Combine(AppContext.BaseDirectory, NativeLibraryFileName));
+
     public static void Validate() => _ = ValidatedManifest.Value;
 
     private static string ValidateCore()
     {
-        var expectedHash = (OperatingSystem.IsWindows(), RuntimeInformation.ProcessArchitecture) switch
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
         {
-            (true, Architecture.X64) => "DCB3274F9D8C945AC765A11903614C5DA4BC0CC2EF4EBC23E8CD70C130B7B458",
-            (true, Architecture.Arm64) => "691A331E92D0CE17B8407DD370D26394090B14AB8A7C398DF497442293D4ED72",
-            (false, Architecture.X64) when OperatingSystem.IsLinux() =>
-                "46AC64A83F91542D38D60BC0DC169157E9475958566349D7D0B4EEE621C5F929",
-            (false, Architecture.Arm64) when OperatingSystem.IsLinux() =>
-                "0D2CB6B391592CF772A166D9393DA859884C46614B219B64E3792B4BC989DADC",
-            _ when OperatingSystem.IsMacOS() => throw new PlatformNotSupportedException(
-                "The Ghostty engine is not bundled for macOS yet; use the built-in engine or add libghostty-vt.dylib."),
-            _ => throw new PlatformNotSupportedException(
-                $"The Ghostty engine does not support {RuntimeInformation.OSDescription} {RuntimeInformation.ProcessArchitecture}."),
-        };
-        var libraryName = OperatingSystem.IsWindows()
-            ? "ghostty-vt.dll"
-            : OperatingSystem.IsMacOS()
-                ? "libghostty-vt.dylib"
-                : "libghostty-vt.so";
-        var libraryPath = Path.Combine(AppContext.BaseDirectory, libraryName);
-        using (var stream = File.OpenRead(libraryPath))
+            throw new PlatformNotSupportedException(
+                $"The Ghostty engine does not support {RuntimeInformation.OSDescription} {RuntimeInformation.ProcessArchitecture}.");
+        }
+
+        var libraryPath = Path.Combine(AppContext.BaseDirectory, NativeLibraryFileName);
+        if (!File.Exists(libraryPath))
         {
-            var actualHash = Convert.ToHexString(SHA256.HashData(stream));
-            if (!actualHash.Equals(expectedHash, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"ghostty-vt.dll does not match pinned commit {Commit}. Expected {expectedHash}, got {actualHash}.");
-            }
+            throw new FileNotFoundException(
+                $"libghostty-vt was not restored for this RID. Build it with native/Restore-NativeLibraries.ps1 (commit {Commit}).",
+                libraryPath);
         }
 
         var pointer = GhosttyNative.TypeJson();

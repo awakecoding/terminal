@@ -1,0 +1,54 @@
+<Project>
+  <PropertyGroup>
+    <NativeRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))</NativeRoot>
+    <GhosttyRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</GhosttyRid>
+    <GhosttyRid Condition="'$(GhosttyRid)' == ''">$(NETCoreSdkPortableRuntimeIdentifier)</GhosttyRid>
+    <GhosttyNativeName Condition="$([System.String]::Copy('$(GhosttyRid)').StartsWith('linux-'))">libghostty-vt.so</GhosttyNativeName>
+    <GhosttyNativeName Condition="$([System.String]::Copy('$(GhosttyRid)').StartsWith('osx-'))">libghostty-vt.dylib</GhosttyNativeName>
+    <GhosttyNativeName Condition="'$(GhosttyNativeName)' == ''">ghostty-vt.dll</GhosttyNativeName>
+    <UnixPtyRid Condition="$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')) or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('osx-'))">$(RuntimeIdentifier)</UnixPtyRid>
+    <UnixPtyRid Condition="'$(UnixPtyRid)' == '' and ($([System.String]::Copy('$(NETCoreSdkPortableRuntimeIdentifier)').StartsWith('linux-')) or $([System.String]::Copy('$(NETCoreSdkPortableRuntimeIdentifier)').StartsWith('osx-')))">$(NETCoreSdkPortableRuntimeIdentifier)</UnixPtyRid>
+    <NativeRestore Condition="'$(NativeRestore)' == ''">all</NativeRestore>
+    <NativeRestoreShell Condition="$([MSBuild]::IsOSPlatform('Windows'))">powershell.exe</NativeRestoreShell>
+    <NativeRestoreShell Condition="$([MSBuild]::IsOSPlatform('Linux'))">pwsh</NativeRestoreShell>
+    <NativeRestoreShell Condition="$([MSBuild]::IsOSPlatform('OSX'))">pwsh</NativeRestoreShell>
+  </PropertyGroup>
+
+  <Target Name="RestoreNativeLibraries"
+          BeforeTargets="BeforeBuild"
+          Condition="'$(SkipNativeRestore)' != 'true' and '$(DesignTimeBuild)' != 'true' and '$(NativeRestore)' != 'none'">
+    <Exec
+      Command="$(NativeRestoreShell) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(NativeRoot)Restore-NativeLibraries.ps1&quot; -Rid $(GhosttyRid) -Component $(NativeRestore)"
+      LogStandardErrorAsError="true" />
+  </Target>
+
+  <Target Name="CopyRestoredNativeLibraries"
+          AfterTargets="CopyFilesToOutputDirectory"
+          Condition="'$(NativeRestore)' != 'none'">
+    <Copy
+      SourceFiles="$(NativeRoot)ghostty\$(GhosttyRid)\$(GhosttyNativeName)"
+      DestinationFiles="$(TargetDir)$(GhosttyNativeName)"
+      SkipUnchangedFiles="true"
+      Condition="'$(NativeRestore)' != 'pty' and Exists('$(NativeRoot)ghostty\$(GhosttyRid)\$(GhosttyNativeName)')" />
+    <Copy
+      SourceFiles="$(NativeRoot)linux-pty\$(UnixPtyRid)\dt-pty-host"
+      DestinationFiles="$(TargetDir)dt-pty-host"
+      SkipUnchangedFiles="true"
+      Condition="'$(NativeRestore)' != 'ghostty' and '$(UnixPtyRid)' != '' and Exists('$(NativeRoot)linux-pty\$(UnixPtyRid)\dt-pty-host')" />
+  </Target>
+
+  <Target Name="PublishRestoredNativeLibraries"
+          AfterTargets="Publish"
+          Condition="'$(NativeRestore)' != 'none' and '$(PublishDir)' != ''">
+    <Copy
+      SourceFiles="$(NativeRoot)ghostty\$(GhosttyRid)\$(GhosttyNativeName)"
+      DestinationFiles="$(PublishDir)$(GhosttyNativeName)"
+      SkipUnchangedFiles="true"
+      Condition="'$(NativeRestore)' != 'pty' and Exists('$(NativeRoot)ghostty\$(GhosttyRid)\$(GhosttyNativeName)')" />
+    <Copy
+      SourceFiles="$(NativeRoot)linux-pty\$(UnixPtyRid)\dt-pty-host"
+      DestinationFiles="$(PublishDir)dt-pty-host"
+      SkipUnchangedFiles="true"
+      Condition="'$(NativeRestore)' != 'ghostty' and '$(UnixPtyRid)' != '' and Exists('$(NativeRoot)linux-pty\$(UnixPtyRid)\dt-pty-host')" />
+  </Target>
+</Project>

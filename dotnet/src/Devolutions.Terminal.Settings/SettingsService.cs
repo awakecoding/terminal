@@ -5,8 +5,10 @@ namespace Devolutions.Terminal.Settings;
 
 public static class SettingsService
 {
-    public static string SettingsDirectory { get; } = ResolveSettingsDirectory();
-    public static string StateDirectory { get; } = ResolveStateDirectory();
+    public const string BaseSettingsPathVariable = "WT_BASE_SETTINGS_PATH";
+
+    public static string SettingsDirectory => ResolveSettingsDirectory();
+    public static string StateDirectory => ResolveStateDirectory();
 
     public static string SettingsPath =>
         SettingsPathOverride ?? Path.Combine(SettingsDirectory, "settings.json");
@@ -139,6 +141,12 @@ public static class SettingsService
 
     private static string ResolveSettingsDirectory()
     {
+        var basePath = FirstNonEmpty(Environment.GetEnvironmentVariable(BaseSettingsPathVariable));
+        if (basePath is not null)
+        {
+            return Path.GetFullPath(Environment.ExpandEnvironmentVariables(basePath));
+        }
+
         if (!OperatingSystem.IsLinux())
         {
             return Path.Combine(
@@ -160,6 +168,11 @@ public static class SettingsService
 
     private static string ResolveStateDirectory()
     {
+        if (FirstNonEmpty(Environment.GetEnvironmentVariable(BaseSettingsPathVariable)) is not null)
+        {
+            return SettingsDirectory;
+        }
+
         if (!OperatingSystem.IsLinux())
         {
             return SettingsDirectory;

@@ -7,13 +7,11 @@ on:
     paths:
       - "dotnet/**"
       - ".github/workflows/build-terminal.yml"
-      - "!dotnet/native/ghostty/**"
       - "!dotnet/.github/workflows/build-ghostty.yml"
   pull_request:
     paths:
       - "dotnet/**"
       - ".github/workflows/build-terminal.yml"
-      - "!dotnet/native/ghostty/**"
       - "!dotnet/.github/workflows/build-ghostty.yml"
 
 permissions:
@@ -30,6 +28,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Cache native libraries
+        uses: actions/cache@v4
+        with:
+          path: |
+            dotnet/artifacts/tools
+            dotnet/artifacts/ghostty-src
+            dotnet/native/ghostty
+            dotnet/native/linux-pty
+            dotnet/native/noto-emoji/NotoColorEmoji.ttf
+          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dotnet/native/ghostty/ghostty-upstream.json', 'dotnet/native/linux-pty/dt-pty-host.c', 'dotnet/native/noto-emoji/noto-emoji.json') }}
+          restore-keys: |
+            native-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Set up .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
@@ -58,6 +69,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Cache native libraries
+        uses: actions/cache@v4
+        with:
+          path: |
+            dotnet/artifacts/tools
+            dotnet/artifacts/ghostty-src
+            dotnet/native/ghostty
+            dotnet/native/linux-pty
+            dotnet/native/noto-emoji/NotoColorEmoji.ttf
+          key: native-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rid }}-${{ hashFiles('dotnet/native/ghostty/ghostty-upstream.json', 'dotnet/native/linux-pty/dt-pty-host.c', 'dotnet/native/noto-emoji/noto-emoji.json') }}
+          restore-keys: |
+            native-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Set up .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
@@ -84,6 +108,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Cache native libraries
+        uses: actions/cache@v4
+        with:
+          path: |
+            dotnet/artifacts/tools
+            dotnet/artifacts/ghostty-src
+            dotnet/native/ghostty
+            dotnet/native/linux-pty
+            dotnet/native/noto-emoji/NotoColorEmoji.ttf
+          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dotnet/native/ghostty/ghostty-upstream.json', 'dotnet/native/linux-pty/dt-pty-host.c', 'dotnet/native/noto-emoji/noto-emoji.json') }}
+          restore-keys: |
+            native-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Set up .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
@@ -116,6 +153,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Cache native libraries
+        uses: actions/cache@v4
+        with:
+          path: |
+            dotnet/artifacts/tools
+            dotnet/artifacts/ghostty-src
+            dotnet/native/ghostty
+            dotnet/native/linux-pty
+            dotnet/native/noto-emoji/NotoColorEmoji.ttf
+          key: native-${{ runner.os }}-${{ runner.arch }}-${{ matrix.rid }}-${{ hashFiles('dotnet/native/ghostty/ghostty-upstream.json', 'dotnet/native/linux-pty/dt-pty-host.c', 'dotnet/native/noto-emoji/noto-emoji.json') }}
+          restore-keys: |
+            native-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Set up .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4

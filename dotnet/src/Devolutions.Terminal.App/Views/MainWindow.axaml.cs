@@ -54,6 +54,7 @@ public partial class MainWindow :
     private Point _dragStart;
     private PaletteMode _paletteMode;
     private bool _layoutPersisted;
+    private bool _focusMode;
     private bool _persistenceBlockedByInvalidLayout;
     private ActionDispatchResult? _lastDispatchResult;
     private ProfileSettings? _initialProfile;
@@ -108,6 +109,11 @@ public partial class MainWindow :
         _windowNameValidator = windowNameValidator;
         _windowIdentityProvider = windowIdentityProvider;
         InitializeComponent();
+        if (OperatingSystem.IsWindows())
+        {
+            Win32ParentWindow.Attach(this);
+        }
+
         AutomationProperties.SetName(AboutOverlay, "About Devolutions Terminal dialog");
         AutomationProperties.SetControlTypeOverride(AboutOverlay, AutomationControlType.Window);
         _notificationTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
@@ -128,6 +134,7 @@ public partial class MainWindow :
             : DynamicProfileManager.CreateDefault();
         _settings = SettingsService.LoadWithDynamicProfiles(_dynamicProfileManager);
         _settingsChanged?.Invoke(_settings);
+        ApplyWindowChrome();
         RefreshJumpList();
         _stateStore = stateStore ?? SettingsService.LoadApplicationState();
         var defaultProfile = _settings.GetDefaultProfile();
@@ -299,7 +306,8 @@ public partial class MainWindow :
             WindowState = WindowState.Maximized;
         }
 
-        TitleBar.IsVisible = !activation.LaunchMode.HasFlag(TerminalWindowLaunchMode.Focus);
+        _focusMode = activation.LaunchMode.HasFlag(TerminalWindowLaunchMode.Focus);
+        ApplyWindowChrome();
     }
 
     private ProfileSettings? ResolveLaunchProfile(TerminalWindowActivation activation)
@@ -966,6 +974,8 @@ public partial class MainWindow :
         {
             Dispatcher.UIThread.Post(activeButton.BringIntoView, DispatcherPriority.Loaded);
         }
+
+        ApplyWindowChrome();
     }
 
     private double TabWidth()
@@ -1867,12 +1877,14 @@ public partial class MainWindow :
         });
         Register(ShortcutAction.ToggleFocusMode, ActionScope.Window, _ => true, _ =>
         {
-            TitleBar.IsVisible = !TitleBar.IsVisible;
+            _focusMode = !_focusMode;
+            ApplyWindowChrome();
             return Task.CompletedTask;
         });
         Register(ShortcutAction.SetFocusMode, ActionScope.Window, action => action.Args is SetFocusModeArgs, action =>
         {
-            TitleBar.IsVisible = !((SetFocusModeArgs)action.Args!).IsFocusMode;
+            _focusMode = ((SetFocusModeArgs)action.Args!).IsFocusMode;
+            ApplyWindowChrome();
             return Task.CompletedTask;
         });
     }
@@ -2631,10 +2643,34 @@ public partial class MainWindow :
     private void UpdateFullscreenChrome()
     {
         var isFullscreen = WindowState == WindowState.FullScreen;
-        ExitFullscreenButton.IsVisible = isFullscreen;
+        ExitFullscreenButton.IsVisible = isFullscreen && !Win32ParentWindow.IsRequested;
         TitleBarLayout.Margin = isFullscreen
             ? new Thickness(8, 0, 8, 0)
             : new Thickness(8, 0, 138, 0);
+        ApplyWindowChrome();
+    }
+
+    private void ApplyWindowChrome()
+    {
+        var embedded = OperatingSystem.IsWindows() && Win32ParentWindow.IsRequested;
+        var fullscreen = WindowState == WindowState.FullScreen;
+        var showTabs = !_focusMode &&
+                       WindowChrome.ShouldShowTabRow(_settings, _tabs.Count, fullscreen);
+        TabScrollViewer.IsVisible = showTabs;
+        NewTabButton.IsVisible = showTabs;
+        MenuButton.IsVisible = showTabs;
+
+        if (embedded)
+        {
+            TitleBar.IsVisible = showTabs;
+            Win32ParentWindow.ApplyEmbeddedChrome(this);
+            Topmost = false;
+            return;
+        }
+
+        var customTitlebar = WindowChrome.ShouldUseCustomTitlebar(_settings, embedded: false);
+        ExtendClientAreaToDecorationsHint = customTitlebar && !_focusMode;
+        TitleBar.IsVisible = !_focusMode && (showTabs || customTitlebar);
     }
 
     private async Task SummonAsync(GlobalSummonArgs args, bool quake)
@@ -3096,24 +3132,27 @@ public partial class MainWindow :
         {
             case LaunchMode.Maximized:
                 WindowState = WindowState.Maximized;
-                TitleBar.IsVisible = true;
+                _focusMode = false;
                 break;
             case LaunchMode.Fullscreen:
                 WindowState = WindowState.FullScreen;
+                _focusMode = false;
                 break;
             case LaunchMode.Focus:
                 WindowState = WindowState.Normal;
-                TitleBar.IsVisible = false;
+                _focusMode = true;
                 break;
             case LaunchMode.MaximizedFocus:
                 WindowState = WindowState.Maximized;
-                TitleBar.IsVisible = false;
+                _focusMode = true;
                 break;
             default:
                 WindowState = WindowState.Normal;
-                TitleBar.IsVisible = true;
+                _focusMode = false;
                 break;
         }
+
+        ApplyWindowChrome();
     }
 
     private async Task<TerminalTab> RestoreTabAsync(

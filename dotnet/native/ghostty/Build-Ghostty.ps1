@@ -6,11 +6,15 @@ param(
     [string] $LlvmStripPath,
     [switch] $InstallZig,
     [switch] $SkipHashCheck,
-    [switch] $SkipCopy
+    [switch] $VerifyHash,
+    [switch] $SkipCopy,
+    [switch] $Force
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+. (Join-Path $PSScriptRoot "..\Zig.ps1")
 
 $nativeRoot = $PSScriptRoot
 $manifestPath = Join-Path $nativeRoot "ghostty-upstream.json"
@@ -19,88 +23,7 @@ $commit = [string]$manifest.commit
 $zigVersion = [string]$manifest.zig
 $dotnetRoot = [IO.Path]::GetFullPath((Join-Path $nativeRoot "..\.."))
 $artifacts = Join-Path $dotnetRoot "artifacts"
-
-function Test-HostWindows {
-    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
-        [System.Runtime.InteropServices.OSPlatform]::Windows)
-}
-
-function Test-HostLinux {
-    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
-        [System.Runtime.InteropServices.OSPlatform]::Linux)
-}
-
-function Test-HostMacOS {
-    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
-        [System.Runtime.InteropServices.OSPlatform]::OSX)
-}
-
-function Get-HostZigTriple {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
-    $archName = switch ($arch) {
-        "X64" { "x86_64" }
-        "Arm64" { "aarch64" }
-        default { throw "Unsupported host architecture '$arch'." }
-    }
-
-    if (Test-HostWindows) {
-        return "$archName-windows"
-    }
-
-    if (Test-HostLinux) {
-        return "$archName-linux"
-    }
-
-    if (Test-HostMacOS) {
-        return "$archName-macos"
-    }
-
-    throw "Unsupported host OS."
-}
-
-function Install-Zig {
-    param([string] $Version)
-
-    $triple = Get-HostZigTriple
-    $extension = if (Test-HostWindows) { "zip" } else { "tar.xz" }
-    $archiveName = "zig-$triple-$Version.$extension"
-    $url = "https://ziglang.org/download/$Version/$archiveName"
-    $toolRoot = Join-Path $artifacts "tools"
-    $extractRoot = Join-Path $toolRoot "zig-$Version"
-    $marker = Join-Path $extractRoot ".downloaded"
-    New-Item -ItemType Directory -Force -Path $toolRoot | Out-Null
-
-    if (-not (Test-Path -LiteralPath $marker)) {
-        $archivePath = Join-Path $toolRoot $archiveName
-        Write-Host "Downloading $url"
-        Invoke-WebRequest -Uri $url -OutFile $archivePath
-        if (Test-Path -LiteralPath $extractRoot) {
-            Remove-Item -LiteralPath $extractRoot -Recurse -Force
-        }
-
-        New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
-        if ($extension -eq "zip") {
-            Expand-Archive -LiteralPath $archivePath -DestinationPath $extractRoot
-        }
-        else {
-            & tar -xJf $archivePath -C $extractRoot
-            if ($LASTEXITCODE -ne 0) {
-                throw "Failed to extract $archivePath."
-            }
-        }
-
-        Set-Content -LiteralPath $marker -Value $url
-    }
-
-    $zigName = if (Test-HostWindows) { "zig.exe" } else { "zig" }
-    $found = Get-ChildItem -LiteralPath $extractRoot -Filter $zigName -Recurse -File |
-        Select-Object -First 1
-    if ($null -eq $found) {
-        throw "Zig $Version was extracted but '$zigName' was not found under '$extractRoot'."
-    }
-
-    return $found.FullName
-}
+$SkipHashCheck = $SkipHashCheck -or -not $VerifyHash
 
 function Resolve-LlvmStrip {
     param([string] $Explicit)
@@ -172,34 +95,11 @@ if ([string]::IsNullOrWhiteSpace($SourceDirectory)) {
     $SourceDirectory = Join-Path $artifacts "ghostty-src"
 }
 
-if ([string]::IsNullOrWhiteSpace($ZigPath)) {
-    if ($InstallZig) {
-        $ZigPath = Install-Zig -Version $zigVersion
-    }
-    else {
-        $command = Get-Command zig -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -ne $command) {
-            $ZigPath = $command.Source
-        }
-        else {
-            $fallback = Join-Path $artifacts "tools\zig-$zigVersion"
-            $zigName = if (Test-HostWindows) { "zig.exe" } else { "zig" }
-            $found = Get-ChildItem -LiteralPath $fallback -Filter $zigName -Recurse -File -ErrorAction SilentlyContinue |
-                Select-Object -First 1
-            if ($null -ne $found) {
-                $ZigPath = $found.FullName
-            }
-        }
-    }
-}
-
-if ([string]::IsNullOrWhiteSpace($ZigPath) -or -not (Test-Path -LiteralPath $ZigPath)) {
-    throw "Zig $zigVersion was not found. Pass -ZigPath or -InstallZig."
-}
+$ZigPath = Resolve-ZigPath -ZigPath $ZigPath -Version $zigVersion -DotnetRoot $dotnetRoot -Install
 
 $selected = @()
 if ($Rid.Count -eq 0) {
-    $selected = @($manifest.targets.PSObject.Properties.Name)
+    $selected = @(Get-HostRid)
 }
 else {
     foreach ($value in $Rid) {
@@ -210,6 +110,24 @@ else {
         $selected += $value
     }
 }
+
+$pending = @()
+foreach ($currentRid in $selected) {
+    $fileName = [string]$manifest.targets.$currentRid.file
+    $destination = Join-Path $nativeRoot "$currentRid\$fileName"
+    if (-not $Force -and -not $SkipCopy -and (Test-Path -LiteralPath $destination)) {
+        Write-Host "Skipping $currentRid (already built)"
+        continue
+    }
+
+    $pending += $currentRid
+}
+
+if ($pending.Count -eq 0) {
+    return
+}
+
+$selected = $pending
 
 if (-not (Test-Path -LiteralPath (Join-Path $SourceDirectory ".git"))) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $SourceDirectory) | Out-Null

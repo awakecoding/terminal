@@ -9,41 +9,27 @@ The optional Ghostty terminal engine uses `libghostty-vt` built from
 - configuration: `ReleaseFast`, SIMD enabled
 - license: MIT (see `LICENSE`)
 
-CI (`build-ghostty.yml`) is the producer. It builds every RID, uploads
-`libghostty-vt-<rid>` artifacts plus a combined `libghostty-vt` bundle, and
-prints SHA-256 sums. Tracked `win-*` / `linux-*` binaries in this folder are a
-cache so `dotnet test` works offline; replace them from a green Ghostty workflow
-run when bumping the pin. macOS dylibs are not tracked.
+Binaries are **not** committed. `dotnet build` / `dotnet test` restore the host
+RID via [`../Restore-NativeLibraries.ps1`](../Restore-NativeLibraries.ps1),
+which downloads Zig 0.16.0 if needed and compiles `libghostty-vt` into
+`native/ghostty/<rid>/` (gitignored). ABI checks use the type manifest, not a
+file hash.
 
-| RID | SHA-256 |
-| --- | --- |
-| `win-x64` | `DCB3274F9D8C945AC765A11903614C5DA4BC0CC2EF4EBC23E8CD70C130B7B458` |
-| `win-arm64` | `691A331E92D0CE17B8407DD370D26394090B14AB8A7C398DF497442293D4ED72` |
-| `linux-x64` | `46AC64A83F91542D38D60BC0DC169157E9475958566349D7D0B4EEE621C5F929` |
-| `linux-arm64` | `0D2CB6B391592CF772A166D9393DA859884C46614B219B64E3792B4BC989DADC` |
-| `osx-arm64` | *(CI artifact; pin after the first green macOS build)* |
-| `osx-x64` | *(CI artifact; pin after the first green macOS build)* |
+Linux: glibc **2.31+**. macOS: **13.0+** (`aarch64-macos.13.0` /
+`x86_64-macos.13.0`). Windows: MSVC.
 
 ## Rebuild locally
 
 ```powershell
-# One RID, download Zig if needed, skip hash check while iterating
-./native/ghostty/Build-Ghostty.ps1 -Rid win-x64 -InstallZig -SkipHashCheck
+# Host RID (also run automatically by MSBuild)
+./native/Restore-NativeLibraries.ps1
 
-# All RIDs the current host can target (needs Zig 0.16.0 on PATH)
-./native/ghostty/Build-Ghostty.ps1
+# One RID
+./native/ghostty/Build-Ghostty.ps1 -Rid win-x64
 ```
 
-The script clones the pinned commit into `artifacts/ghostty-src` and copies
-libraries into `native/ghostty/<rid>/`. Linux hashes require `llvm-strip`.
+The script clones the pinned commit into `artifacts/ghostty-src`.
 
-## Restore CI artifacts
-
-Download the `libghostty-vt` artifact from a `build-ghostty` run, then:
-
-```powershell
-./native/ghostty/Restore-GhosttyNative.ps1 -SourceDirectory artifacts/libghostty-vt
-```
-
-After a CI hash is stable, copy it into `ghostty-upstream.json` and
-`GhosttyAbi.cs`, then drop `-SkipHashCheck`.
+`build-ghostty.yml` still builds every RID and uploads `libghostty-vt` artifacts.
+Optional fast path: download that artifact and run
+`Restore-GhosttyNative.ps1 -SourceDirectory artifacts/libghostty-vt`.

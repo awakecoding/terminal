@@ -45,12 +45,14 @@ Do not point that tool at this repository.
 
 ## Native helpers
 
-- Linux PTY host: `native/linux-pty`
-- Ghostty VT library: `native/ghostty` (built by `build-ghostty.yml`)
-- Windows Explorer/toast helpers: `native/windows-shell`
+- Linux/macOS PTY host: `native/linux-pty` (`dt-pty-host.c`, Zig `cc`)
+- Ghostty VT library: `native/ghostty` (Zig build of pinned Ghostty)
+- Windows Explorer/toast helpers: `native/windows-shell` (MSVC, gitignored `bin/`)
 
-Rebuild Ghostty natives with `native/ghostty/Build-Ghostty.ps1` or restore a
-`libghostty-vt` CI artifact. See [`native/ghostty/README.md`](native/ghostty/README.md).
+`dotnet build` restores Ghostty and `dt-pty-host` for the host RID (Zig is
+downloaded into `artifacts/tools` on first use). See
+[`native/ghostty/README.md`](native/ghostty/README.md). Pass
+`-p:SkipNativeRestore=true` to skip.
 
 ## macOS
 

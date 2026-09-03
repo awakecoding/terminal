@@ -3,6 +3,7 @@
         x:Class="Devolutions.Terminal.App.Views.MainWindow"
         x:CompileBindings="True"
         Title=""
+        Icon="/Assets/ProfileIcons/terminal.png"
         Width="1100"
         Height="700"
         MinWidth="480"
@@ -30,7 +31,8 @@
                        Orientation="Horizontal"
                        Spacing="0" />
           </ScrollViewer>
-          <Button Classes="icon"
+          <Button x:Name="NewTabButton"
+                 Classes="icon"
                  Width="31"
                  Height="24"
                  Margin="0,4"

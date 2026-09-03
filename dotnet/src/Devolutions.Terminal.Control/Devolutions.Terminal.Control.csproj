@@ -21,4 +21,6 @@
     <AvaloniaResource Include="..\..\native\noto-emoji\NotoColorEmoji.ttf"
                       Link="Assets\Fonts\NotoColorEmoji.ttf" />
   </ItemGroup>
+  <Import Project="..\..\native\noto-emoji\NotoEmoji.targets" />
 </Project>
+

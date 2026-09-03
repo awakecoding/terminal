@@ -1,13 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsTestProject>true</IsTestProject>
-    <UnixPtyTestRid Condition="$([System.String]::Copy('$(NETCoreSdkPortableRuntimeIdentifier)').StartsWith('linux-')) or $([System.String]::Copy('$(NETCoreSdkPortableRuntimeIdentifier)').StartsWith('osx-'))">$(NETCoreSdkPortableRuntimeIdentifier)</UnixPtyTestRid>
+    <NativeRestore>pty</NativeRestore>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Devolutions.Terminal.Connection\Devolutions.Terminal.Connection.csproj" />
-    <None Include="..\..\native\linux-pty\$(UnixPtyTestRid)\dt-pty-host"
-          Link="dt-pty-host"
-          Condition="'$(UnixPtyTestRid)' != '' and Exists('..\..\native\linux-pty\$(UnixPtyTestRid)\dt-pty-host')"
-          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <Import Project="..\..\native\NativeLibraries.targets" />
 </Project>

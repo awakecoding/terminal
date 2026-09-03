@@ -15,13 +15,6 @@
     <AssemblyName>Devolutions.Terminal</AssemblyName>
     <Product>Devolutions Terminal</Product>
     <Description>NativeAOT Avalonia terminal emulator.</Description>
-    <GhosttyRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</GhosttyRid>
-    <GhosttyRid Condition="'$(GhosttyRid)' == ''">$(NETCoreSdkPortableRuntimeIdentifier)</GhosttyRid>
-    <GhosttyNativeName Condition="$([System.String]::Copy('$(GhosttyRid)').StartsWith('linux-'))">libghostty-vt.so</GhosttyNativeName>
-    <GhosttyNativeName Condition="$([System.String]::Copy('$(GhosttyRid)').StartsWith('osx-'))">libghostty-vt.dylib</GhosttyNativeName>
-    <GhosttyNativeName Condition="'$(GhosttyNativeName)' == ''">ghostty-vt.dll</GhosttyNativeName>
-    <UnixPtyRid Condition="$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')) or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('osx-'))">$(RuntimeIdentifier)</UnixPtyRid>
-    <UnixPtyRid Condition="'$(UnixPtyRid)' == '' and ($([System.String]::Copy('$(NETCoreSdkPortableRuntimeIdentifier)').StartsWith('linux-')) or $([System.String]::Copy('$(NETCoreSdkPortableRuntimeIdentifier)').StartsWith('osx-')))">$(NETCoreSdkPortableRuntimeIdentifier)</UnixPtyRid>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,11 +22,6 @@
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" />
-    <None Include="..\..\native\ghostty\$(GhosttyRid)\$(GhosttyNativeName)"
-          Link="$(GhosttyNativeName)"
-          Condition="Exists('..\..\native\ghostty\$(GhosttyRid)\$(GhosttyNativeName)')"
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\native\ghostty\LICENSE"
           Link="THIRD-PARTY-NOTICES-GHOSTTY.txt"
           CopyToOutputDirectory="PreserveNewest"
@@ -42,12 +30,9 @@
           Link="THIRD-PARTY-NOTICES-NOTO-EMOJI.txt"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
-    <None Include="..\..\native\linux-pty\$(UnixPtyRid)\dt-pty-host"
-          Link="dt-pty-host"
-          Condition="'$(UnixPtyRid)' != '' and Exists('..\..\native\linux-pty\$(UnixPtyRid)\dt-pty-host')"
-          CopyToOutputDirectory="PreserveNewest"
-          CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Import Project="..\..\native\NativeLibraries.targets" />
 
   <Target Name="PublishDtCli" AfterTargets="Publish">
     <PropertyGroup>

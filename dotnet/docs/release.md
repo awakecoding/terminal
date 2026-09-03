@@ -17,10 +17,10 @@ are shared.
 
 CI workflows:
 
-- `build-ghostty.yml` — compile `libghostty-vt` for win/linux/macOS RIDs and
-  upload artifacts. Pin hashes from a green run before dropping
-  `-SkipHashCheck`.
-- `build-terminal.yml` — restore, test, NativeAOT, Linux packages, MSIX.
+- `build-ghostty.yml` — compile `libghostty-vt` for every RID and upload
+  artifacts (optional cache; not required to develop).
+- `build-terminal.yml` — restore natives from source, test, NativeAOT, Linux
+  packages, MSIX.
 
 ## Developer build
 

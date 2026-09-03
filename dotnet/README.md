@@ -63,9 +63,12 @@ Development signing, trust, install, validation, and uninstall commands are in
 Settings are stored at `%LOCALAPPDATA%\Devolutions\Terminal\settings.json` on
 Windows and under `$XDG_CONFIG_HOME/devolutions-terminal` on Linux, with the
 usual `~/.config` fallback.
-Set `DTERM_SETTINGS_PATH` (or the compatibility alias `WT_DOTNET_SETTINGS_PATH`)
-to load a specific settings file. Runtime state is stored atomically in
-`state.json` beside that file.
+Set `WT_BASE_SETTINGS_PATH` to use a directory for `settings.json` and
+`state.json` (same contract as Devolutions' Windows Terminal distribution).
+Set `DTERM_SETTINGS_PATH` (or `WT_DOTNET_SETTINGS_PATH`) to load a specific
+settings file. On Windows, `WT_PARENT_WINDOW_HANDLE` embeds the window as a
+child of that HWND. `alwaysShowTabs: false` hides the tab row when only one
+tab is open.
 
 Set `"experimental.terminalEngine": "ghostty"` to use the pinned
 `libghostty-vt` engine globally. A profile can override it with `"builtin"` or

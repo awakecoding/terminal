@@ -17,21 +17,18 @@ on a Mac in this tree.
 
 ## Not bundled yet
 
-- `libghostty-vt.dylib` (built by `build-ghostty.yml` for `osx-arm64` /
-  `osx-x64`; not tracked until a CI hash is pinned)
 - App bundle / notarization / DMG / Homebrew cask
 - Global hotkeys (broker / `dt -w` still work)
 - Default-terminal registration
 
+Ghostty dylibs and `dt-pty-host` are built on restore for `osx-arm64` /
+`osx-x64` (macOS 13+).
+
 ## Build on a Mac
 
 ```bash
-# Unix PTY host (also cross-compilable with Zig)
-# native/linux-pty/Build-LinuxPtyHost.ps1 targets osx-arm64 and osx-x64
-
 dotnet publish src/Devolutions.Terminal -c Release -r osx-arm64 --self-contained
 ```
 
-Copy `macos/Info.plist` into the `.app` bundle when packaging. Until a
-`dt-pty-host` binary exists under `native/linux-pty/osx-arm64/`, publish
-succeeds but local shells fail with a missing Unix PTY host.
+Copy `macos/Info.plist` into the `.app` bundle when packaging. Publish restores
+`dt-pty-host` and `libghostty-vt.dylib` for the RID.

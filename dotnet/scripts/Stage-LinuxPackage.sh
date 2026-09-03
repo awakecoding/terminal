@@ -57,9 +57,7 @@ install -d "$package_root$INSTALL_DIR"
 cp -a "$publish_dir/." "$package_root$INSTALL_DIR/"
 rm -f "$package_root$INSTALL_DIR"/*.dbg "$package_root$INSTALL_DIR"/*.pdb
 while IFS= read -r -d '' path; do
-    # GhosttyAbi pins the whole-file SHA-256, so this library must remain byte-exact.
-    if [[ "$(basename "$path")" != "libghostty-vt.so" ]] &&
-        file -b "$path" | grep -q '^ELF '; then
+    if file -b "$path" | grep -q '^ELF '; then
         "$strip_tool" --strip-unneeded "$path"
     fi
 done < <(find "$package_root$INSTALL_DIR" -maxdepth 1 -type f -print0)

@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <NotoEmojiRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))</NotoEmojiRoot>
+    <NotoEmojiShell Condition="$([MSBuild]::IsOSPlatform('Windows'))">powershell.exe</NotoEmojiShell>
+    <NotoEmojiShell Condition="$([MSBuild]::IsOSPlatform('Linux'))">pwsh</NotoEmojiShell>
+    <NotoEmojiShell Condition="$([MSBuild]::IsOSPlatform('OSX'))">pwsh</NotoEmojiShell>
+  </PropertyGroup>
+
+  <Target Name="RestoreNotoEmoji"
+          BeforeTargets="BeforeBuild"
+          Condition="'$(SkipNativeRestore)' != 'true' and '$(DesignTimeBuild)' != 'true'"
+          Inputs="$(NotoEmojiRoot)noto-emoji.json;$(NotoEmojiRoot)Restore-NotoEmoji.ps1"
+          Outputs="$(NotoEmojiRoot)NotoColorEmoji.ttf">
+    <Exec
+      Command="$(NotoEmojiShell) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(NotoEmojiRoot)Restore-NotoEmoji.ps1&quot;"
+      LogStandardErrorAsError="true" />
+  </Target>
+</Project>

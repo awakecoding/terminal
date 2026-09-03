@@ -33,11 +33,10 @@ setting; an already running session keeps its current engine.
 ## Native integration
 
 `Devolutions.Terminal.Ghostty` uses source-generated `LibraryImport` calls and safe handles.
-RID-specific `libghostty-vt` binaries are copied into JIT, NativeAOT, and MSIX
-outputs. The ABI manifest is validated at startup before a Ghostty engine is
-created. `build-ghostty.yml` compiles the library from
-`native/ghostty/ghostty-upstream.json`; see `native/ghostty` for hashes and
-restore steps.
+RID-specific `libghostty-vt` binaries are **built from source** on restore and
+copied into JIT, NativeAOT, and MSIX outputs. The ABI type manifest is validated
+at startup. See `native/ghostty/ghostty-upstream.json` and
+`native/Restore-NativeLibraries.ps1`.
 
 ## Current rendering boundary
 

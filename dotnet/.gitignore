@@ -25,7 +25,11 @@ TestResults/
 Thumbs.db
 .DS_Store
 
-## Unpinned Ghostty rebuilds (win/linux binaries stay tracked until CI artifacts replace them)
-native/ghostty/osx-arm64/
-native/ghostty/osx-x64/
+## Native libraries built from source (see native/Restore-NativeLibraries.ps1)
+native/ghostty/**/*.dll
+native/ghostty/**/*.so
+native/ghostty/**/*.dylib
 native/ghostty/**/*.sha256
+native/linux-pty/**/dt-pty-host
+native/linux-pty/**/dt-pty-host.exe
+native/noto-emoji/NotoColorEmoji.ttf
