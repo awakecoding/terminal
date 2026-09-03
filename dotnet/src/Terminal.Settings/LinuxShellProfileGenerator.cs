@@ -20,6 +20,9 @@ public sealed class LinuxShellProfileGenerator(DynamicProfileEnvironment environ
 
         var profiles = candidates
             .Distinct(StringComparer.Ordinal)
+            .DistinctBy(
+                static executable => Path.GetFileName(executable),
+                StringComparer.OrdinalIgnoreCase)
             .Select(CreateProfile)
             .ToArray();
         return ValueTask.FromResult(new DynamicProfileGeneratorResult(profiles, []));

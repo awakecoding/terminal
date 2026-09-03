@@ -622,8 +622,8 @@
                           Classes="navigationMenu"
                           AutomationProperties.Name="Search settings"
                           IsChecked="{Binding IsSearchOpen}">
-              <TextBlock Text="&#xE700;"
-                         FontFamily="Segoe Fluent Icons"
+              <TextBlock Text="?"
+                         FontFamily="Cascadia Mono"
                          FontSize="16" />
             </ToggleButton>
             <TextBox Margin="8,0,8,8"
@@ -645,7 +645,7 @@
                              Text="{Binding GroupHeader}" />
                   <TextBlock Text="{Binding Icon}"
                              Grid.Row="1"
-                             FontFamily="Segoe Fluent Icons"
+                             FontFamily="{Binding IconFontFamily}"
                              FontSize="16"
                              HorizontalAlignment="Center"
                              VerticalAlignment="Center" />
@@ -661,7 +661,7 @@
       </Border>
 
       <DockPanel Grid.Column="1">
-        <ScrollViewer Padding="88,12,84,24" HorizontalScrollBarVisibility="Auto">
+        <ScrollViewer Padding="48,12,48,24" HorizontalScrollBarVisibility="Disabled">
           <ContentControl Content="{Binding CurrentPage}" />
         </ScrollViewer>
       </DockPanel>

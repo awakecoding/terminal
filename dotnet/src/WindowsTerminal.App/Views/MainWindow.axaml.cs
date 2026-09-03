@@ -20,6 +20,7 @@ using WindowsTerminal.Actions;
 using WindowsTerminal.Connections;
 using WindowsTerminal.Models;
 using WindowsTerminal.Panes;
+using WindowsTerminal.Platform;
 using WindowsTerminal.Routing;
 using WindowsTerminal.Settings;
 using System.Runtime.CompilerServices;
@@ -27,17 +28,25 @@ using System.Runtime.InteropServices;
 
 namespace WindowsTerminal.Views;
 
-public partial class MainWindow : Window, ITerminalWindowActivationTarget
+public partial class MainWindow :
+    Window,
+    ITerminalWindowActivationTarget,
+    IGlobalWindowActionTarget,
+    IWindowSummonOperations
 {
-    private readonly AppSettings _settings;
+    private static readonly SemaphoreSlim JumpListRefreshGate = new(1, 1);
+    private static string? _lastJumpListFingerprint;
+    private static long _lastSystemToastTick;
+    private AppSettings _settings;
     private readonly ApplicationStateStore _stateStore;
     private readonly TerminalConnectionFactory _connectionFactory;
     private readonly DynamicProfileManager _dynamicProfileManager;
+    private readonly IPlatformLauncher _platformLauncher;
     private readonly ActionDispatcher _actionDispatcher = new();
     private readonly TabCollection<TerminalTab, TabLayoutDescriptor> _tabCollection = new();
     private readonly List<PaletteItem> _paletteItems = [];
     private readonly Dictionary<string, Bitmap> _tabIconCache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConditionalWeakTable<TerminalPane, ScrollBar> _paneScrollBars = new();
+    private readonly ConditionalWeakTable<TerminalPane, PaneScrollBar> _paneScrollBars = new();
     private IReadOnlyList<TerminalTab> _tabs => _tabCollection.Items;
     private uint _nextPaneId;
     private TerminalTab? _activeTab;
@@ -45,6 +54,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     private Point _dragStart;
     private PaletteMode _paletteMode;
     private bool _layoutPersisted;
+    private bool _persistenceBlockedByInvalidLayout;
     private ActionDispatchResult? _lastDispatchResult;
     private ProfileSettings? _initialProfile;
     private IInputElement? _aboutPreviousFocus;
@@ -52,6 +62,12 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     private readonly Action<TerminalWindowActivation>? _newWindowRequested;
     private readonly Action<TabTearOffRequest>? _tabTearOffRequested;
     private readonly Func<string, TerminalCommandLineParseResult>? _commandLineParser;
+    private readonly Action<string>? _workspaceRequested;
+    private readonly Func<string, bool>? _windowNameValidator;
+    private readonly Func<IReadOnlyList<string>>? _windowIdentityProvider;
+    private readonly Func<GlobalSummonArgs, ValueTask<WindowActionResult>>? _summonRequested;
+    private readonly Action<AppSettings>? _settingsChanged;
+    private readonly ISystemMenuService _systemMenuService;
     private readonly TaskCompletionSource<TerminalWindowActivationResult> _initialActivationCompletion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly DispatcherTimer _notificationTimer;
@@ -68,7 +84,15 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         TerminalWindowActivation? initialActivation,
         Action<TerminalWindowActivation>? newWindowRequested = null,
         Action<TabTearOffRequest>? tabTearOffRequested = null,
-        Func<string, TerminalCommandLineParseResult>? commandLineParser = null)
+        Func<string, TerminalCommandLineParseResult>? commandLineParser = null,
+        IPlatformLauncher? platformLauncher = null,
+        Func<string, bool>? windowNameValidator = null,
+        Func<IReadOnlyList<string>>? windowIdentityProvider = null,
+        ApplicationStateStore? stateStore = null,
+        Action<string>? workspaceRequested = null,
+        Func<GlobalSummonArgs, ValueTask<WindowActionResult>>? summonRequested = null,
+        Action<AppSettings>? settingsChanged = null,
+        ISystemMenuService? systemMenuService = null)
     {
         WindowId = windowId;
         WindowName = windowName;
@@ -76,6 +100,13 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         _newWindowRequested = newWindowRequested;
         _tabTearOffRequested = tabTearOffRequested;
         _commandLineParser = commandLineParser;
+        _workspaceRequested = workspaceRequested;
+        _summonRequested = summonRequested;
+        _settingsChanged = settingsChanged;
+        _systemMenuService = systemMenuService ?? SystemMenuService.CreateDefault();
+        _platformLauncher = platformLauncher ?? new PlatformLauncher();
+        _windowNameValidator = windowNameValidator;
+        _windowIdentityProvider = windowIdentityProvider;
         InitializeComponent();
         AutomationProperties.SetName(AboutOverlay, "About Windows Terminal dialog");
         AutomationProperties.SetControlTypeOverride(AboutOverlay, AutomationControlType.Window);
@@ -96,7 +127,9 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
                 AzureCloudShellConnection.ConnectionTypeGuid)
             : DynamicProfileManager.CreateDefault();
         _settings = SettingsService.LoadWithDynamicProfiles(_dynamicProfileManager);
-        _stateStore = SettingsService.LoadApplicationState();
+        _settingsChanged?.Invoke(_settings);
+        RefreshJumpList();
+        _stateStore = stateStore ?? SettingsService.LoadApplicationState();
         var defaultProfile = _settings.GetDefaultProfile();
         var defaultCell = TermControl.MeasureCell(defaultProfile, DisplayScale());
         Width = Math.Max(
@@ -126,10 +159,13 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     }
 
     public int WindowId { get; }
-    public string WindowName { get; }
+    public string WindowName { get; private set; }
     public Task<TerminalWindowActivationResult> InitialActivation => _initialActivationCompletion.Task;
     public IReadOnlyList<TerminalTab> Tabs => _tabCollection.Items;
+    public IReadOnlyCollection<ShortcutAction> RegisteredActions =>
+        _actionDispatcher.RegisteredActions;
     public TerminalTab? ActiveTab => _activeTab;
+    public IReadOnlyList<string> WorkspaceNames => _stateStore.GetWorkspaceNames();
     public bool AlwaysShowNotificationIcon => _settings.AlwaysShowNotificationIcon;
     public bool MinimizeToNotificationArea => _settings.MinimizeToNotificationArea;
     public string? LastPersistenceError { get; private set; }
@@ -141,6 +177,15 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     {
         cancellationToken.ThrowIfCancellationRequested();
         ApplyLaunchOptions(activation);
+        if (activation.SaveRequest is { } saveRequest)
+        {
+            var saveResult = SaveSnippet(saveRequest);
+            if (!saveResult.Succeeded)
+            {
+                return new(false, saveResult.Message, []);
+            }
+        }
+
         var results = new List<ActionDispatchResult>(activation.Actions.Count);
         foreach (var action in activation.Actions)
         {
@@ -148,13 +193,22 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             results.Add(await DispatchActionAsync(action).ConfigureAwait(true));
         }
 
-        Show();
-        Activate();
+        if (!activation.Actions.Any(ManagesWindowVisibility))
+        {
+            Show();
+            Activate();
+        }
         var failure = results.FirstOrDefault(result => result.Status != ActionDispatchStatus.Executed);
         return failure is null
             ? new(true, "Activation completed.", results)
             : new(false, failure.Message ?? $"Action '{failure.Action}' failed.", results);
     }
+
+    private static bool ManagesWindowVisibility(ActionAndArgs action) =>
+        action.Action is ShortcutAction.GlobalSummon or ShortcutAction.QuakeMode ||
+        action.Action == ShortcutAction.MultipleActions &&
+        action.Args is MultipleActionsArgs multiple &&
+        multiple.Actions.Any(ManagesWindowVisibility);
 
     private async void OnOpened(object? sender, EventArgs e)
     {
@@ -162,7 +216,27 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         {
             if (_initialActivation is not null)
             {
-                if (IsDefaultStartupActivation(_initialActivation) &&
+                if (!string.IsNullOrWhiteSpace(_initialActivation.PersistedLayoutDiagnostic))
+                {
+                    LastPersistenceError = _initialActivation.PersistedLayoutDiagnostic;
+                    _persistenceBlockedByInvalidLayout = true;
+                    var fallback = await ActivateAsync(
+                        _initialActivation with { PersistedLayoutDiagnostic = null }).ConfigureAwait(true);
+                    _initialActivationCompletion.SetResult(
+                        fallback with
+                        {
+                            Succeeded = false,
+                            Message = LastPersistenceError,
+                        });
+                }
+                else if (_initialActivation.PersistedLayout is { } requestedLayout &&
+                    await TryRestoreLayoutAsync(requestedLayout).ConfigureAwait(true))
+                {
+                    ApplyLaunchOptions(_initialActivation);
+                    _initialActivationCompletion.SetResult(
+                        new(true, "Saved layout restored.", []));
+                }
+                else if (IsDefaultStartupActivation(_initialActivation) &&
                     await TryRestorePersistedLayoutAsync().ConfigureAwait(true))
                 {
                     ApplyLaunchOptions(_initialActivation);
@@ -248,14 +322,17 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         1;
 
     private static bool IsDefaultStartupActivation(TerminalWindowActivation activation) =>
-        activation.Actions.Count == 0 ||
-        (activation.Actions.Count == 1 &&
-         activation.Actions[0] is
-         {
-             Action: ShortcutAction.NewTab,
-             Args: NewTabArgs { ContentArgs: NewTerminalArgs terminal },
-         } &&
-         terminal == new NewTerminalArgs());
+        activation.SaveRequest is null &&
+        activation.PersistedLayout is null &&
+        activation.WorkspaceName is null &&
+        (activation.Actions.Count == 0 ||
+         (activation.Actions.Count == 1 &&
+          activation.Actions[0] is
+          {
+              Action: ShortcutAction.NewTab,
+              Args: NewTabArgs { ContentArgs: NewTerminalArgs terminal },
+          } &&
+          terminal == new NewTerminalArgs()));
 
     private async void NewTab_OnClick(object? sender, RoutedEventArgs e) =>
         await CreateTabAsync(_settings.GetDefaultProfile()).ConfigureAwait(true);
@@ -648,7 +725,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         {
             if (finalLayout is not null)
             {
-                TryPersistLayout(finalLayout);
+                TryPersistCurrentLayout(finalLayout);
             }
 
             Close();
@@ -769,45 +846,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         return border;
     }
 
-    private static ScrollBar CreatePaneScrollBar(TerminalPane pane)
-    {
-        var scrollBar = new ScrollBar
-        {
-            Orientation = Orientation.Vertical,
-            Width = 12,
-            Minimum = 0,
-            SmallChange = 1,
-            AllowAutoHide = !pane.Profile.ScrollbarState.Equals(
-                "always",
-                StringComparison.OrdinalIgnoreCase),
-        };
-        var updatingScrollBar = false;
-        void UpdateScrollBar()
-        {
-            updatingScrollBar = true;
-            var history = pane.Control.Engine.HistoryCount;
-            scrollBar.Maximum = history;
-            scrollBar.ViewportSize = pane.Control.Engine.Rows;
-            scrollBar.LargeChange = Math.Max(1, pane.Control.Engine.Rows - 1);
-            scrollBar.Value = history - pane.Control.Engine.ScrollOffset;
-            scrollBar.IsVisible = !pane.Profile.ScrollbarState.Equals(
-                "hidden",
-                StringComparison.OrdinalIgnoreCase);
-            updatingScrollBar = false;
-        }
-
-        scrollBar.ValueChanged += (_, _) =>
-        {
-            if (!updatingScrollBar)
-            {
-                pane.Control.SetScrollOffset(
-                    pane.Control.Engine.HistoryCount - (int)Math.Round(scrollBar.Value));
-            }
-        };
-        pane.Control.ViewportChanged += (_, _) => UpdateScrollBar();
-        UpdateScrollBar();
-        return scrollBar;
-    }
+    private static PaneScrollBar CreatePaneScrollBar(TerminalPane pane) => new(pane);
 
     private void RebuildTabs()
     {
@@ -1249,6 +1288,30 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             ActiveControl!.ScrollToBottom();
             return Task.CompletedTask;
         });
+        Register(ShortcutAction.ScrollToMark, ActionScope.Control, _ => ActiveControl is not null, action =>
+        {
+            ActiveControl!.ScrollToMark(
+                (action.Args as ScrollToMarkArgs)?.Direction ?? ScrollToMarkDirection.Previous);
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.AddMark, ActionScope.Control, _ => ActiveControl is not null, action =>
+        {
+            ActiveControl!.AddMark((action.Args as AddMarkArgs)?.Color);
+            ShowNotification(new TerminalNotification("Mark added", "A scroll mark was added at the current line."));
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ClearMark, ActionScope.Control, _ => ActiveControl is not null, _ =>
+        {
+            ActiveControl!.ClearMark();
+            ShowNotification(new TerminalNotification("Mark cleared", "Marks at the current line or selection were cleared."));
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ClearAllMarks, ActionScope.Control, _ => ActiveControl is not null, _ =>
+        {
+            ActiveControl!.ClearAllMarks();
+            ShowNotification(new TerminalNotification("Marks cleared", "All terminal scroll marks were cleared."));
+            return Task.CompletedTask;
+        });
         Register(ShortcutAction.Find, ActionScope.Control, _ => ActiveControl is not null, _ =>
         {
             ShowFind();
@@ -1320,12 +1383,80 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
                 SynchronizeTitle(_activeTab);
                 return Task.CompletedTask;
             });
+        Register(ShortcutAction.OpenTabRenamer, ActionScope.Tab, _ => _activeTab is not null,
+            async _ =>
+            {
+                var title = await PromptForTextAsync(
+                    "Rename tab",
+                    "Tab title",
+                    _activeTab!.CustomTitle ?? _activeTab.Title).ConfigureAwait(true);
+                if (title is not null)
+                {
+                    _activeTab.CustomTitle = title;
+                    SynchronizeTitle(_activeTab);
+                }
+            });
         Register(ShortcutAction.SetTabColor, ActionScope.Tab,
             action => _activeTab is not null && action.Args is SetTabColorArgs,
             action =>
             {
                 _activeTab!.Color = ((SetTabColorArgs)action.Args!).TabColor;
                 RebuildTabs();
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.OpenTabColorPicker, ActionScope.Tab, _ => _activeTab is not null,
+            async _ =>
+            {
+                var color = await PromptForTextAsync(
+                    "Set tab color",
+                    "Hex color, or blank to reset",
+                    _activeTab!.Color ?? string.Empty).ConfigureAwait(true);
+                if (color is null)
+                {
+                    return;
+                }
+
+                if (color.Length == 0 || TryParseColor(color, out var parsedColor))
+                {
+                    _activeTab.Color = color.Length == 0 ? null : color;
+                    RebuildTabs();
+                }
+                else
+                {
+                    ShowNotification(new TerminalNotification(
+                        "Invalid tab color",
+                        $"'{color}' is not a valid color."));
+                }
+            });
+        Register(ShortcutAction.SetColorScheme, ActionScope.Control,
+            action => ActiveControl is not null &&
+                      action.Args is SetColorSchemeArgs args &&
+                      FindColorScheme(args.SchemeName) is not null,
+            action =>
+            {
+                ActiveControl!.Engine.Scheme =
+                    FindColorScheme(((SetColorSchemeArgs)action.Args!).SchemeName)!;
+                ActiveControl.InvalidateVisual();
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.ColorSelection, ActionScope.Control,
+            action => _settings.EnableColorSelection &&
+                      ActiveControl?.HasSelection == true &&
+                      action.Args is ColorSelectionArgs,
+            action =>
+            {
+                var args = (ColorSelectionArgs)action.Args!;
+                ActiveControl!.ColorSelection(
+                    args.Foreground?.Value,
+                    args.Background?.Value,
+                    args.MatchMode);
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.ToggleShaderEffects, ActionScope.Control,
+            _ => ActiveControl?.HasSupportedShaderEffects == true,
+            _ =>
+            {
+                ActiveControl!.ToggleShaderEffects();
                 return Task.CompletedTask;
             });
         Register(ShortcutAction.TabSearch, ActionScope.Window, _ => _tabs.Count > 0, _ =>
@@ -1477,6 +1608,10 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
                     : PaletteMode.Actions);
             return Task.CompletedTask;
         });
+        Register(ShortcutAction.ExecuteCommandline, ActionScope.Window,
+            action => action.Args is ExecuteCommandlineArgs,
+            action => ExecutePaletteCommandLineAsync(
+                ((ExecuteCommandlineArgs)action.Args!).Commandline));
         Register(ShortcutAction.Suggestions, ActionScope.Control, _ => ActiveControl is not null, action =>
         {
             var source = (action.Args as SuggestionsArgs)?.Source ?? SuggestionsSource.Tasks;
@@ -1547,14 +1682,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             _ =>
             {
                 TryGetWorkingDirectory(out var workingDirectory);
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-                        "explorer.exe"),
-                    UseShellExecute = false,
-                    ArgumentList = { workingDirectory! },
-                });
+                OpenDirectoryWithShell(workingDirectory!);
                 return Task.CompletedTask;
             });
         Register(ShortcutAction.QuickFix, ActionScope.Control, _ => ActiveControl is not null, _ =>
@@ -1589,6 +1717,87 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
                 string.IsNullOrWhiteSpace(WindowName)
                     ? $"Window {WindowId}"
                     : $"{WindowName} ({WindowId})"));
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.IdentifyWindows, ActionScope.Window, _ => true, _ =>
+        {
+            var identities = _windowIdentityProvider?.Invoke() ??
+                             [string.IsNullOrWhiteSpace(WindowName)
+                                 ? $"Window {WindowId}"
+                                 : $"{WindowName} ({WindowId})"];
+            ShowNotification(new TerminalNotification(
+                "Terminal windows",
+                string.Join(Environment.NewLine, identities)));
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.RenameWindow, ActionScope.Window,
+            action => action.Args is RenameWindowArgs { Name.Length: > 0 },
+            action =>
+            {
+                TryRenameWindow(((RenameWindowArgs)action.Args!).Name);
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.OpenWindowRenamer, ActionScope.Window, _ => true,
+            async _ =>
+            {
+                var name = await PromptForTextAsync(
+                    "Rename window",
+                    "Window name",
+                    WindowName).ConfigureAwait(true);
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    TryRenameWindow(name);
+                }
+            });
+        Register(ShortcutAction.OpenWorkspace, ActionScope.Application,
+            action => action.Args is OpenWorkspaceArgs { Name.Length: > 0 },
+            action => OpenWorkspaceAsync(((OpenWorkspaceArgs)action.Args!).Name));
+        Register(ShortcutAction.Workspaces, ActionScope.Application, _ => true, _ =>
+        {
+            ShowCommandPalette(PaletteMode.Workspaces);
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.GlobalSummon, ActionScope.Application,
+            action => action.Args is GlobalSummonArgs,
+            action => SummonAsync((GlobalSummonArgs)action.Args!, quake: false));
+        Register(ShortcutAction.QuakeMode, ActionScope.Application, _ => true,
+            action =>
+            {
+                var args = action.Args as GlobalSummonArgs ??
+                           new GlobalSummonArgs(Name: "_quake", DropdownDuration: 200);
+                return SummonAsync(
+                    args with
+                    {
+                        Name = "_quake",
+                        DropdownDuration = args.DropdownDuration == 0 ? 200u : args.DropdownDuration,
+                    },
+                    quake: true);
+            });
+        Register(ShortcutAction.OpenSystemMenu, ActionScope.Window, _ => true, _ =>
+        {
+            OpenSystemMenu();
+            return Task.CompletedTask;
+        });
+        Register(ShortcutAction.ShowContextMenu, ActionScope.Control,
+            _ => ActiveControl is not null && _activeTab is not null,
+            _ =>
+            {
+                CreateTabContextMenu(_activeTab!).Open(ActiveControl);
+                return Task.CompletedTask;
+            });
+        Register(ShortcutAction.BreakIntoDebugger, ActionScope.Application, _ => true, _ =>
+        {
+            if (System.Diagnostics.Debugger.IsAttached)
+            {
+                System.Diagnostics.Debugger.Break();
+            }
+            else
+            {
+                ShowNotification(new TerminalNotification(
+                    "Debugger unavailable",
+                    "No managed debugger is attached."));
+            }
+
             return Task.CompletedTask;
         });
         Register(ShortcutAction.OpenScratchpad, ActionScope.Window, _ => true, _ =>
@@ -1704,6 +1913,54 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             : _settings.GetDefaultProfile();
         return selected.WithOverrides(terminal);
     }
+
+    private ColorScheme? FindColorScheme(string name)
+    {
+        var scheme = _settings.Schemes.FirstOrDefault(candidate =>
+            candidate.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (scheme is null ||
+            !TryParseSchemeColor(scheme.Foreground, out var foreground) ||
+            !TryParseSchemeColor(scheme.Background, out var background) ||
+            !TryParseSchemeColor(scheme.CursorColor, out var cursor) ||
+            !TryParseSchemeColor(scheme.SelectionBackground, out var selection) ||
+            !TryParseSchemeColor(scheme.Black, out var black) ||
+            !TryParseSchemeColor(scheme.Red, out var red) ||
+            !TryParseSchemeColor(scheme.Green, out var green) ||
+            !TryParseSchemeColor(scheme.Yellow, out var yellow) ||
+            !TryParseSchemeColor(scheme.Blue, out var blue) ||
+            !TryParseSchemeColor(scheme.Purple, out var purple) ||
+            !TryParseSchemeColor(scheme.Cyan, out var cyan) ||
+            !TryParseSchemeColor(scheme.White, out var white) ||
+            !TryParseSchemeColor(scheme.BrightBlack, out var brightBlack) ||
+            !TryParseSchemeColor(scheme.BrightRed, out var brightRed) ||
+            !TryParseSchemeColor(scheme.BrightGreen, out var brightGreen) ||
+            !TryParseSchemeColor(scheme.BrightYellow, out var brightYellow) ||
+            !TryParseSchemeColor(scheme.BrightBlue, out var brightBlue) ||
+            !TryParseSchemeColor(scheme.BrightPurple, out var brightPurple) ||
+            !TryParseSchemeColor(scheme.BrightCyan, out var brightCyan) ||
+            !TryParseSchemeColor(scheme.BrightWhite, out var brightWhite))
+        {
+            return null;
+        }
+
+        return new ColorScheme
+        {
+            Name = scheme.Name,
+            Foreground = foreground,
+            Background = background,
+            Cursor = cursor,
+            SelectionBackground = selection,
+            Table =
+            [
+                black, red, green, yellow, blue, purple, cyan, white,
+                brightBlack, brightRed, brightGreen, brightYellow,
+                brightBlue, brightPurple, brightCyan, brightWhite,
+            ],
+        };
+    }
+
+    private static bool TryParseSchemeColor(string value, out uint color) =>
+        ColorScheme.TryParseXtermColor(value, out color);
 
     private ProfileSettings ResolveSplitProfile(SplitPaneArgs? args) =>
         args?.SplitMode == SplitType.Duplicate && _activeTab?.Panes.ActiveContent is { } activePane
@@ -1941,6 +2198,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         {
             PaletteMode.CommandHistory => "Search command history",
             PaletteMode.CommandLine => "Enter a wt command line",
+            PaletteMode.Workspaces => "Search saved workspaces",
             _ => "Search actions",
         };
         RefreshCommandPalette();
@@ -1978,6 +2236,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
                 .ToArray(),
             PaletteMode.CommandHistory => CommandHistoryItems(query),
             PaletteMode.CommandLine => CommandLineItems(query),
+            PaletteMode.Workspaces => WorkspaceItems(query),
             _ => string.IsNullOrWhiteSpace(query)
                 ? _paletteItems
                 : FuzzyMatcher.Rank(_paletteItems, query, static item => item.Name),
@@ -2012,6 +2271,18 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             ? []
             : [new PaletteItem($"Run: {query}", () => ExecutePaletteCommandLineAsync(query))];
 
+    private IReadOnlyList<PaletteItem> WorkspaceItems(string? query)
+    {
+        var items = WorkspaceNames
+            .Select(name => new PaletteItem(
+                name,
+                () => OpenWorkspaceAsync(name)))
+            .ToArray();
+        return string.IsNullOrWhiteSpace(query)
+            ? items
+            : FuzzyMatcher.Rank(items, query, static item => item.Name);
+    }
+
     private async Task ExecutePaletteCommandLineAsync(string commandLine)
     {
         if (_commandLineParser is null)
@@ -2029,6 +2300,18 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
                 "Invalid command line",
                 parsed.Message));
             return;
+        }
+
+        if (parsed.SaveRequest is { } saveRequest)
+        {
+            var saveResult = SaveSnippet(saveRequest);
+            if (!saveResult.Succeeded)
+            {
+                ShowNotification(new TerminalNotification(
+                    "Unable to save command",
+                    saveResult.Message));
+                return;
+            }
         }
 
         foreach (var action in parsed.Actions)
@@ -2172,7 +2455,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             e.KeyModifiers,
             e.PhysicalKey,
             e.KeySymbol,
-            activePane.Control.Engine.ApplicationCursorKeys);
+            activePane.Control.Engine.InputMode);
         if (input is null)
         {
             return activePane.Presentation.IsReadOnly;
@@ -2195,7 +2478,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             e.KeyModifiers,
             e.PhysicalKey,
             e.KeySymbol,
-            activePane.Control.Engine.ApplicationCursorKeys);
+            activePane.Control.Engine.InputMode);
         if (input is null)
         {
             return activePane.Presentation.IsReadOnly;
@@ -2245,6 +2528,91 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         }
     }
 
+    private bool TryRenameWindow(string name)
+    {
+        name = name.Trim();
+        if (name.Length == 0)
+        {
+            return false;
+        }
+
+        if (WindowName.Equals(name, StringComparison.OrdinalIgnoreCase))
+        {
+            WindowName = name;
+            return true;
+        }
+
+        if (_stateStore.GetWorkspaceNames().Contains(name, StringComparer.OrdinalIgnoreCase) ||
+            _windowNameValidator?.Invoke(name) == false)
+        {
+            ShowNotification(new TerminalNotification(
+                "Window name unavailable",
+                $"Another terminal window or saved workspace is already named '{name}'."));
+            return false;
+        }
+
+        WindowName = name;
+        ShowNotification(new TerminalNotification("Window renamed", name));
+        return true;
+    }
+
+    private async Task<string?> PromptForTextAsync(
+        string title,
+        string prompt,
+        string initialValue)
+    {
+        var textBox = new TextBox
+        {
+            Text = initialValue,
+            MinWidth = 320,
+        };
+        var accept = new Button
+        {
+            Content = "Save",
+            IsDefault = true,
+            MinWidth = 80,
+        };
+        var cancel = new Button
+        {
+            Content = "Cancel",
+            IsCancel = true,
+            MinWidth = 80,
+        };
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Spacing = 8,
+            Children = { cancel, accept },
+        };
+        var dialog = new Window
+        {
+            Title = title,
+            CanResize = false,
+            SizeToContent = SizeToContent.WidthAndHeight,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 12,
+                Children =
+                {
+                    new TextBlock { Text = prompt },
+                    textBox,
+                    buttons,
+                },
+            },
+        };
+        accept.Click += (_, _) => dialog.Close(textBox.Text ?? string.Empty);
+        cancel.Click += (_, _) => dialog.Close(null);
+        dialog.Opened += (_, _) =>
+        {
+            textBox.Focus();
+            textBox.SelectAll();
+        };
+        return await dialog.ShowDialog<string?>(this).ConfigureAwait(true);
+    }
+
     private bool CanPaste() =>
         _activeTab?.Panes.ActiveContent is { } activePane &&
         _activeTab.BroadcastInput.ResolveTargets(activePane, _activeTab.Panes.Leaves()).Count > 0;
@@ -2267,6 +2635,171 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         TitleBarLayout.Margin = isFullscreen
             ? new Thickness(8, 0, 8, 0)
             : new Thickness(8, 0, 138, 0);
+    }
+
+    private async Task SummonAsync(GlobalSummonArgs args, bool quake)
+    {
+        var effective = quake
+            ? args with { Name = "_quake" }
+            : args;
+        var result = _summonRequested is not null
+            ? await _summonRequested(effective).ConfigureAwait(true)
+            : await ((IGlobalWindowActionTarget)this).ApplySummonAsync(
+                effective,
+                quake,
+                CancellationToken.None).ConfigureAwait(true);
+        if (!result.Succeeded)
+        {
+            ShowNotification(new TerminalNotification(
+                "Window summon unavailable",
+                result.Message));
+        }
+    }
+
+    async ValueTask<WindowActionResult> IGlobalWindowActionTarget.ApplySummonAsync(
+        GlobalSummonArgs args,
+        bool quake,
+        CancellationToken cancellationToken) =>
+        await new WindowSummonController(this)
+            .SummonAsync(args, quake, cancellationToken)
+            .ConfigureAwait(true);
+
+    bool IWindowSummonOperations.IsWindowVisible => IsVisible;
+    bool IWindowSummonOperations.IsWindowActive => IsActive;
+    bool IWindowSummonOperations.IsWindowMinimized => WindowState == WindowState.Minimized;
+    DesktopPresence IWindowSummonOperations.DesktopPresence => DesktopPresence.Unknown;
+
+    WindowPixelRect IWindowSummonOperations.CurrentBounds
+    {
+        get
+        {
+            var scale = RenderScaling;
+            return new(
+                Position.X,
+                Position.Y,
+                Math.Max(1, (int)Math.Round(Bounds.Width * scale)),
+                Math.Max(1, (int)Math.Round(Bounds.Height * scale)));
+        }
+    }
+
+    MonitorGeometry IWindowSummonOperations.GetMonitor(MonitorBehavior behavior)
+    {
+        PixelPoint point;
+        if (behavior == MonitorBehavior.ToMouse &&
+            OperatingSystem.IsWindows() &&
+            GetCursorPosition(out var cursor))
+        {
+            point = new PixelPoint(cursor.X, cursor.Y);
+        }
+        else
+        {
+            var current = ((IWindowSummonOperations)this).CurrentBounds;
+            point = new PixelPoint(
+                current.X + (current.Width / 2),
+                current.Y + (current.Height / 2));
+        }
+
+        var screen = Screens.ScreenFromPoint(point) ?? Screens.Primary;
+        if (screen is null)
+        {
+            var current = ((IWindowSummonOperations)this).CurrentBounds;
+            return new MonitorGeometry("current", current);
+        }
+        var workArea = screen.WorkingArea;
+        return new MonitorGeometry(
+            screen.DisplayName ?? $"{workArea.X},{workArea.Y}",
+            new WindowPixelRect(
+                workArea.X,
+                workArea.Y,
+                workArea.Width,
+                workArea.Height));
+    }
+
+    WindowActionResult IWindowSummonOperations.MoveToCurrentDesktop() =>
+        WindowActionResult.Unsupported(
+            OperatingSystem.IsLinux()
+                ? "Moving a window between Linux desktops is compositor-specific; the window was summoned without changing desktops."
+                : "The platform has no stable public API for moving this window to the current virtual desktop; the window was summoned in place.");
+
+    void IWindowSummonOperations.HideWindow() => Hide();
+
+    async ValueTask IWindowSummonOperations.ShowWindowAsync(
+        WindowPixelRect bounds,
+        uint dropdownDuration,
+        CancellationToken cancellationToken)
+    {
+        WindowState = WindowState.Normal;
+        ShowInTaskbar = true;
+        var scale = RenderScaling;
+        Width = bounds.Width / scale;
+        Height = bounds.Height / scale;
+        var destination = new PixelPoint(bounds.X, bounds.Y);
+        if (dropdownDuration == 0)
+        {
+            Position = destination;
+            Show();
+            return;
+        }
+
+        var start = new PixelPoint(bounds.X, bounds.Y - bounds.Height);
+        Position = start;
+        Show();
+        var duration = TimeSpan.FromMilliseconds(dropdownDuration);
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(started);
+            var progress = Math.Clamp(elapsed.TotalMilliseconds / duration.TotalMilliseconds, 0, 1);
+            var eased = 1 - Math.Pow(1 - progress, 3);
+            Position = new PixelPoint(
+                destination.X,
+                start.Y + (int)Math.Round((destination.Y - start.Y) * eased));
+            if (progress >= 1)
+            {
+                break;
+            }
+            await Task.Delay(16, cancellationToken).ConfigureAwait(true);
+        }
+        Position = destination;
+    }
+
+    void IWindowSummonOperations.ActivateWindow()
+    {
+        Activate();
+        ActiveControl?.Focus();
+    }
+
+    private void OpenSystemMenu()
+    {
+        var result = _systemMenuService.Open(
+            TryGetPlatformHandle()?.Handle ?? 0,
+            Position.X + 12,
+            Position.Y + 12);
+        if (result.Succeeded)
+        {
+            return;
+        }
+
+        var menu = new ContextMenu
+        {
+            ItemsSource = new object[]
+            {
+                MenuCommand("Restore", () => WindowState = WindowState.Normal),
+                MenuCommand("Minimize", () => WindowState = WindowState.Minimized),
+                MenuCommand("Maximize", () => WindowState = WindowState.Maximized),
+                new Separator(),
+                MenuCommand("Close", Close),
+            },
+        };
+        menu.Open(TitleBar);
+    }
+
+    private static MenuItem MenuCommand(string header, Action action)
+    {
+        var item = new MenuItem { Header = header };
+        item.Click += (_, _) => action();
+        return item;
     }
 
     private void MainWindow_OnSizeChanged(object? sender, SizeChangedEventArgs e)
@@ -2300,11 +2833,11 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             case SettingsTarget.AllFiles:
                 SettingsViewFactory.CreateWindow(
                     () => SettingsService.LoadWithDynamicProfiles(_dynamicProfileManager),
-                    SettingsService.Save,
+                    SaveSettingsAndRefresh,
                     SettingsService.CreateDefault).Show(this);
                 break;
             case SettingsTarget.SettingsFile:
-                SettingsService.Save(SettingsService.LoadWithDynamicProfiles(_dynamicProfileManager));
+                SaveSettingsAndRefresh(SettingsService.LoadWithDynamicProfiles(_dynamicProfileManager));
                 OpenWithShell(SettingsService.SettingsPath);
                 break;
             case SettingsTarget.DefaultsFile:
@@ -2319,17 +2852,114 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
                 var directory = Path.GetDirectoryName(Path.GetFullPath(SettingsService.SettingsPath))
                     ?? SettingsService.SettingsDirectory;
                 Directory.CreateDirectory(directory);
-                OpenWithShell(directory);
+                OpenDirectoryWithShell(directory);
                 break;
         }
     }
 
-    private static void OpenWithShell(string path) =>
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+    private void OpenDirectoryWithShell(string path)
+    {
+        try
         {
-            FileName = path,
-            UseShellExecute = true,
-        });
+            _platformLauncher.OpenDirectory(path);
+        }
+        catch (Exception ex) when (ex is
+            System.ComponentModel.Win32Exception or
+            InvalidOperationException or
+            DirectoryNotFoundException)
+        {
+            ShowNotification(new TerminalNotification(
+                "Unable to open directory",
+                ex.Message));
+        }
+    }
+
+    private void OpenWithShell(string target)
+    {
+        try
+        {
+            _platformLauncher.Open(target);
+        }
+        catch (Exception ex) when (ex is
+            System.ComponentModel.Win32Exception or
+            InvalidOperationException or
+            DirectoryNotFoundException)
+        {
+            ShowNotification(new TerminalNotification(
+                "Unable to open",
+                ex.Message));
+        }
+    }
+
+    private (bool Succeeded, string Message) SaveSnippet(TerminalSaveRequest request)
+    {
+        var commandline = request.Commandline;
+        if (string.IsNullOrWhiteSpace(commandline) &&
+            ActiveControl?.BuildCopyPayload() is { Text.Length: > 0 } selection)
+        {
+            commandline = selection.Text;
+        }
+
+        if (string.IsNullOrWhiteSpace(commandline))
+        {
+            return (false, "A command line or terminal selection is required.");
+        }
+
+        try
+        {
+            var current = SettingsService.LoadWithDynamicProfiles(_dynamicProfileManager);
+            SettingsSnippetStore.Add(
+                current,
+                request.Name,
+                request.KeyChord,
+                commandline);
+            SaveSettingsAndRefresh(current);
+            return (true, $"Saved command '{commandline}'.");
+        }
+        catch (Exception ex) when (ex is
+            ArgumentException or
+            IOException or
+            UnauthorizedAccessException)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    private async Task OpenWorkspaceAsync(string name)
+    {
+        if (_workspaceRequested is not null)
+        {
+            _workspaceRequested(name);
+            return;
+        }
+
+        var saved = _stateStore.GetWorkspace(name);
+        if (saved is null)
+        {
+            ShowNotification(new TerminalNotification(
+                "Workspace unavailable",
+                $"Workspace '{name}' was not found."));
+            return;
+        }
+
+        if (!TerminalLayoutStateStore.TryRead(saved, out _, out var diagnostic))
+        {
+            LastPersistenceError = diagnostic;
+            _persistenceBlockedByInvalidLayout = true;
+            ShowNotification(new TerminalNotification(
+                "Workspace unavailable",
+                diagnostic ?? $"Workspace '{name}' has an invalid layout."));
+            return;
+        }
+
+        var claimed = _stateStore.TakeWorkspace(
+            name,
+            state => TerminalLayoutStateStore.TryRead(state, out _, out _));
+        if (claimed is not null)
+        {
+            await TryRestoreLayoutAsync(claimed).ConfigureAwait(true);
+        }
+    }
 
     private (int Columns, int Rows) InitialTerminalSize()
     {
@@ -2387,10 +3017,41 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private async Task<bool> TryRestorePersistedLayoutAsync()
     {
-        var windowState = TerminalLayoutStateStore.ReadWindowState(_stateStore, WindowId);
-        var layout = TerminalLayoutStateStore.ReadWindow(_stateStore, WindowId);
-        if (layout is null || layout.Tabs.Count == 0)
+        if (!UsesPersistedLayout)
         {
+            return false;
+        }
+
+        var windowState = TerminalLayoutStateStore.ReadWindowState(_stateStore, WindowId);
+        if (windowState is null)
+        {
+            return false;
+        }
+
+        var restored = await TryRestoreLayoutAsync(windowState).ConfigureAwait(true);
+        if (!restored)
+        {
+            // Keep this slot intact so the fallback tab cannot replace data that may
+            // be recoverable by a newer version of the application.
+            _persistenceBlockedByInvalidLayout = true;
+        }
+
+        return restored;
+    }
+
+    private async Task<bool> TryRestoreLayoutAsync(WindowLayoutState windowState)
+    {
+        if (!TerminalLayoutStateStore.TryRead(
+                windowState,
+                out var layout,
+                out var diagnostic) ||
+            layout is null ||
+            layout.Tabs.Count == 0)
+        {
+            LastPersistenceError = diagnostic;
+            ShowNotification(new TerminalNotification(
+                "Saved layout unavailable",
+                diagnostic ?? "The saved terminal layout is invalid."));
             return false;
         }
 
@@ -2406,27 +3067,53 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
             ActivateTab(active);
         }
 
+        LastPersistenceError = null;
         return true;
     }
 
     private void ApplyPersistedWindowState(WindowLayoutState? state)
     {
-        var restoreBounds = state?.LaunchMode is null or LaunchMode.Default;
-        if (restoreBounds &&
-            state?.InitialPosition?.Split(',') is [var xText, var yText] &&
+        if (state?.InitialPosition?.Split(',') is [var xText, var yText] &&
             int.TryParse(xText, out var x) &&
             int.TryParse(yText, out var y))
         {
-            Position = new PixelPoint(x, y);
+            _normalPosition = new PixelPoint(x, y);
+            Position = _normalPosition.Value;
         }
 
-        if (restoreBounds &&
-            state?.InitialSize is { Width: > 0, Height: > 0 } size)
+        if (state?.InitialSize is { Width: > 0, Height: > 0 } size)
         {
-            Width = size.Width;
-            Height = size.Height;
+            _normalSize = new WindowSizeState
+            {
+                Width = size.Width,
+                Height = size.Height,
+            };
+            Width = _normalSize.Width;
+            Height = _normalSize.Height;
         }
 
+        switch (state?.LaunchMode)
+        {
+            case LaunchMode.Maximized:
+                WindowState = WindowState.Maximized;
+                TitleBar.IsVisible = true;
+                break;
+            case LaunchMode.Fullscreen:
+                WindowState = WindowState.FullScreen;
+                break;
+            case LaunchMode.Focus:
+                WindowState = WindowState.Normal;
+                TitleBar.IsVisible = false;
+                break;
+            case LaunchMode.MaximizedFocus:
+                WindowState = WindowState.Maximized;
+                TitleBar.IsVisible = false;
+                break;
+            default:
+                WindowState = WindowState.Normal;
+                TitleBar.IsVisible = true;
+                break;
+        }
     }
 
     private async Task<TerminalTab> RestoreTabAsync(
@@ -2553,14 +3240,58 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private void PersistLayout(TerminalWindowLayoutDescriptor layout)
     {
-        TerminalLayoutStateStore.SaveWindow(
+        if (!TerminalLayoutStateStore.TrySaveWindow(
             _stateStore,
             WindowId,
             layout,
             _normalPosition is { } position ? $"{position.X},{position.Y}" : null,
             _normalSize,
-            LaunchMode.Default);
+            CurrentLaunchMode(),
+            _persistenceBlockedByInvalidLayout))
+        {
+            return;
+        }
         _layoutPersisted = true;
+    }
+
+    private void PersistWorkspace(TerminalWindowLayoutDescriptor layout)
+    {
+        _stateStore.SaveWorkspace(
+            WindowName,
+            TerminalLayoutSerializer.ToApplicationState(
+                layout,
+                _normalPosition is { } position ? $"{position.X},{position.Y}" : null,
+                _normalSize,
+                CurrentLaunchMode()));
+        _layoutPersisted = true;
+    }
+
+    private LaunchMode CurrentLaunchMode() => (WindowState, TitleBar.IsVisible) switch
+    {
+        (WindowState.FullScreen, _) => LaunchMode.Fullscreen,
+        (WindowState.Maximized, false) => LaunchMode.MaximizedFocus,
+        (WindowState.Maximized, true) => LaunchMode.Maximized,
+        (_, false) => LaunchMode.Focus,
+        _ => LaunchMode.Default,
+    };
+
+    private bool UsesPersistedLayout =>
+        TerminalLayoutStateStore.IsPersistedLayoutPreference(
+            _settings.FirstWindowPreference);
+
+    private void TryPersistCurrentLayout(TerminalWindowLayoutDescriptor layout)
+    {
+        if (!string.IsNullOrWhiteSpace(WindowName))
+        {
+            if (!_persistenceBlockedByInvalidLayout)
+            {
+                TryPersistWorkspace(layout);
+            }
+        }
+        else if (UsesPersistedLayout)
+        {
+            TryPersistLayout(layout);
+        }
     }
 
     private void TryPersistLayout(TerminalWindowLayoutDescriptor layout)
@@ -2568,6 +3299,23 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         try
         {
             PersistLayout(layout);
+            LastPersistenceError = null;
+        }
+        catch (IOException ex)
+        {
+            LastPersistenceError = ex.Message;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            LastPersistenceError = ex.Message;
+        }
+    }
+
+    private void TryPersistWorkspace(TerminalWindowLayoutDescriptor layout)
+    {
+        try
+        {
+            PersistWorkspace(layout);
             LastPersistenceError = null;
         }
         catch (IOException ex)
@@ -2961,13 +3709,109 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
 
     private void ShowNotification(TerminalNotification notification)
     {
-        NotificationTitle.Text = string.IsNullOrWhiteSpace(notification.Title)
+        var title = string.IsNullOrWhiteSpace(notification.Title)
             ? "Windows Terminal"
             : notification.Title;
+        NotificationTitle.Text = title;
         NotificationBody.Text = notification.Body;
         NotificationToast.IsVisible = true;
         _notificationTimer.Stop();
         _notificationTimer.Start();
+
+        QueueSystemToast(title, notification.Body);
+    }
+
+    private void QueueSystemToast(string title, string body)
+    {
+        var now = Environment.TickCount64;
+        while (true)
+        {
+            var previous = Interlocked.Read(ref _lastSystemToastTick);
+            if (now - previous < 1000)
+            {
+                System.Diagnostics.Trace.WriteLine("System toast publication was rate-limited.");
+                return;
+            }
+            if (Interlocked.CompareExchange(ref _lastSystemToastTick, now, previous) == previous)
+            {
+                break;
+            }
+        }
+
+        _ = PublishSystemToastAsync(title, body);
+    }
+
+    private async Task PublishSystemToastAsync(string title, string body)
+    {
+        try
+        {
+            var desktopResult = await Task.Run(
+                () => _platformLauncher.ShowNotification(title, body)).ConfigureAwait(false);
+            if (!desktopResult.Succeeded &&
+                !string.IsNullOrWhiteSpace(desktopResult.Diagnostic))
+            {
+                System.Diagnostics.Trace.TraceWarning(desktopResult.Diagnostic);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"System toast publication failed: {ex.Message}");
+        }
+    }
+
+    private void SaveSettingsAndRefresh(AppSettings settings)
+    {
+        SettingsService.Save(settings);
+        _settings = SettingsService.LoadWithDynamicProfiles(_dynamicProfileManager);
+        _settingsChanged?.Invoke(_settings);
+        RefreshJumpList(_settings);
+        PopulateCommandPalette();
+    }
+
+    private void RefreshJumpList(AppSettings? settings = null)
+    {
+        var snapshot = settings ?? _settings;
+        var fingerprint = string.Join(
+            '\u001f',
+            snapshot.Profiles
+                .Where(static profile => !profile.Hidden && !profile.Orphaned)
+                .Select(static profile => $"{profile.Guid}\u001e{profile.Name}\u001e{profile.Icon}"));
+        if (string.Equals(fingerprint, _lastJumpListFingerprint, StringComparison.Ordinal))
+        {
+            return;
+        }
+        _ = RefreshJumpListAsync(snapshot, fingerprint);
+    }
+
+    private async Task RefreshJumpListAsync(AppSettings settings, string fingerprint)
+    {
+        await JumpListRefreshGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (string.Equals(fingerprint, _lastJumpListFingerprint, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var result = await Task.Run(
+                () => _platformLauncher.RefreshJumpList(settings)).ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                _lastJumpListFingerprint = fingerprint;
+            }
+            else
+            {
+                System.Diagnostics.Trace.TraceWarning(result.Diagnostic);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"Jump-list refresh failed: {ex.Message}");
+        }
+        finally
+        {
+            JumpListRefreshGate.Release();
+        }
     }
 
     private static bool IsLaunchFailure(Exception error) =>
@@ -3019,6 +3863,17 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetWindowText(nint windowHandle, string title);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CursorPoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [LibraryImport("user32.dll", EntryPoint = "GetCursorPos")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetCursorPosition(out CursorPoint point);
+
     private void DetachPaneControls(TerminalTab tab)
     {
         foreach (var pane in tab.Panes.Leaves())
@@ -3059,7 +3914,7 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
     {
         if (!_layoutPersisted && _tabs.Count > 0)
         {
-            TryPersistLayout(CaptureLayout());
+            TryPersistCurrentLayout(CaptureLayout());
         }
 
         foreach (var tab in _tabs.ToArray())
@@ -3078,6 +3933,103 @@ public partial class MainWindow : Window, ITerminalWindowActivationTarget
         _tabIconCache.Clear();
 
         base.OnClosed(e);
+    }
+
+    private sealed class PaneScrollBar : Grid
+    {
+        private readonly TerminalPane _pane;
+        private readonly ScrollBar _scrollBar;
+        private readonly Canvas _marks;
+        private bool _updating;
+
+        public PaneScrollBar(TerminalPane pane)
+        {
+            _pane = pane;
+            Width = 12;
+            _scrollBar = new ScrollBar
+            {
+                Orientation = Orientation.Vertical,
+                Width = 12,
+                Minimum = 0,
+                SmallChange = 1,
+                AllowAutoHide = !pane.Profile.ScrollbarState.Equals(
+                    "always",
+                    StringComparison.OrdinalIgnoreCase),
+            };
+            _marks = new Canvas
+            {
+                Width = 12,
+                IsHitTestVisible = false,
+            };
+            Children.Add(_scrollBar);
+            Children.Add(_marks);
+            _scrollBar.ValueChanged += (_, _) =>
+            {
+                if (!_updating)
+                {
+                    pane.Control.SetScrollOffset(
+                        pane.Control.Engine.HistoryCount - (int)Math.Round(_scrollBar.Value));
+                }
+            };
+            pane.Control.ViewportChanged += (_, _) => Update();
+            pane.Control.ScrollMarksChanged += (_, _) => Update();
+            PropertyChanged += (_, args) =>
+            {
+                if (args.Property == BoundsProperty)
+                {
+                    UpdateMarks();
+                }
+            };
+            Update();
+        }
+
+        private void Update()
+        {
+            _updating = true;
+            var history = _pane.Control.Engine.HistoryCount;
+            _scrollBar.Maximum = history;
+            _scrollBar.ViewportSize = _pane.Control.Engine.Rows;
+            _scrollBar.LargeChange = Math.Max(1, _pane.Control.Engine.Rows - 1);
+            _scrollBar.Value = history - _pane.Control.Engine.ScrollOffset;
+            IsVisible = !_pane.Profile.ScrollbarState.Equals(
+                "hidden",
+                StringComparison.OrdinalIgnoreCase);
+            _updating = false;
+            UpdateMarks();
+        }
+
+        private void UpdateMarks()
+        {
+            _marks.Children.Clear();
+            if (!_pane.Profile.ShowMarksOnScrollbar || Bounds.Height <= 0)
+            {
+                return;
+            }
+
+            foreach (var mark in _pane.Control.GetScrollMarks())
+            {
+                var color = mark.Color is { Length: > 0 } value &&
+                            TryParseColor(value, out var parsed)
+                    ? parsed
+                    : mark.Kind switch
+                    {
+                        TerminalScrollMarkKind.CommandError => Color.Parse("#E74856"),
+                        TerminalScrollMarkKind.CommandSuccess => Color.Parse("#16C60C"),
+                        TerminalScrollMarkKind.CurrentSearchMatch => Color.Parse("#F9F1A5"),
+                        TerminalScrollMarkKind.SearchMatch => Color.Parse("#C19C00"),
+                        _ => Color.Parse("#3A96DD"),
+                    };
+                var tick = new Border
+                {
+                    Width = 10,
+                    Height = 3,
+                    Background = new SolidColorBrush(color),
+                };
+                Canvas.SetLeft(tick, 1);
+                Canvas.SetTop(tick, Math.Clamp(mark.Position * Math.Max(0, Bounds.Height - 3), 0, Bounds.Height));
+                _marks.Children.Add(tick);
+            }
+        }
     }
 }
 
@@ -3219,6 +4171,7 @@ internal enum PaletteMode
     Tabs,
     CommandHistory,
     CommandLine,
+    Workspaces,
 }
 
 internal sealed record PaletteItem(string Name, Func<Task> Execute, string? Shortcut = null)

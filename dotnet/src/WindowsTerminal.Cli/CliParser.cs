@@ -55,6 +55,7 @@ public sealed class CliParser
         }
     }
 
+
     public static IReadOnlyList<IReadOnlyList<string>> SplitCommands(IReadOnlyList<string> args)
     {
         var commands = new List<IReadOnlyList<string>>();
@@ -198,6 +199,10 @@ public sealed class CliParser
             (actions.Count == 0 || actions[0].Action != ShortcutAction.NewTab))
         {
             actions.Insert(0, new(ShortcutAction.NewTab, new NewTabArgs()));
+        }
+        else if (save is not null && string.IsNullOrWhiteSpace(targetWindow))
+        {
+            targetWindow = "use-any";
         }
 
         var invocation = new CliInvocation(

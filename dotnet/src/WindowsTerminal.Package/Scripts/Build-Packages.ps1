@@ -13,6 +13,8 @@ param(
 
     [switch] $SkipPublish,
 
+    [switch] $SkipNativeBuild,
+
     [switch] $SkipBundle,
 
     [string] $CertificatePath,
@@ -28,12 +30,14 @@ $dotnetRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot "..\.."))
 $hostProject = Join-Path $dotnetRoot "src\WindowsTerminal\WindowsTerminal.csproj"
 $sourceManifest = Join-Path $packageRoot "Package.appxmanifest"
 $sourceAssets = Join-Path $packageRoot "Assets"
+$nativeRoot = Join-Path $dotnetRoot "native\windows-shell"
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $dotnetRoot "artifacts\msix"
 }
 
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
+$nativeOutput = Join-Path $OutputDirectory "native-shell"
 $layoutRoot = Join-Path $OutputDirectory "layout"
 $packageOutput = Join-Path $OutputDirectory "packages"
 $metadataRoot = Join-Path $OutputDirectory "metadata"
@@ -102,6 +106,16 @@ function Write-VersionedManifest {
 
 Write-VersionedManifest $versionedManifest
 
+if (-not $SkipNativeBuild) {
+    & (Join-Path $nativeRoot "Build-WindowsShellIntegrations.ps1") `
+        -Architectures $Architectures `
+        -Configuration $Configuration `
+        -OutputDirectory $nativeOutput
+    if ($LASTEXITCODE -ne 0) {
+        throw "The native Windows shell integration build failed with exit code $LASTEXITCODE."
+    }
+}
+
 $plainTextPassword = Get-PlainText $CertificatePassword
 try {
     $layouts = @()
@@ -127,6 +141,33 @@ try {
         elseif (-not (Test-Path -LiteralPath (Join-Path $layout "WindowsTerminal.exe"))) {
             throw "Published output for '$runtimeIdentifier' was not found at '$layout'."
         }
+
+        $nativeArchitectureOutput = Join-Path $nativeOutput $architecture
+        foreach ($nativeFile in @(
+            "wt-shell-integration.exe",
+            "WindowsTerminalShellExt.dll"
+        )) {
+            $sourceNativeFile = Join-Path $nativeArchitectureOutput $nativeFile
+            if (-not (Test-Path -LiteralPath $sourceNativeFile -PathType Leaf)) {
+                throw "Native $architecture helper '$sourceNativeFile' was not found. Build it or omit -SkipNativeBuild."
+            }
+            Copy-Item -Force -LiteralPath $sourceNativeFile -Destination (Join-Path $layout $nativeFile)
+        }
+        Copy-Item -Force `
+            -LiteralPath (Join-Path $nativeRoot "SHELL-INTEGRATION-NOTICE.txt") `
+            -Destination (Join-Path $layout "SHELL-INTEGRATION-NOTICE.txt")
+
+        $hashLines = foreach ($nativeFile in @(
+            "WindowsTerminalShellExt.dll",
+            "wt-shell-integration.exe"
+        )) {
+            $hash = (Get-FileHash -LiteralPath (Join-Path $layout $nativeFile) -Algorithm SHA256).Hash
+            "$hash  $nativeFile"
+        }
+        [IO.File]::WriteAllLines(
+            (Join-Path $layout "SHELL-INTEGRATIONS.sha256"),
+            $hashLines,
+            [Text.UTF8Encoding]::new($false))
 
         foreach ($generatedPath in @(
             (Join-Path $layout "Assets"),

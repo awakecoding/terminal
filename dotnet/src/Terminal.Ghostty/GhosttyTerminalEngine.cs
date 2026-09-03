@@ -52,6 +52,22 @@ public sealed unsafe class GhosttyTerminalEngine : ITerminalEngine
     private readonly int _historyLimit;
     private uint _cellWidthPixels = 1;
     private uint _cellHeightPixels = 1;
+    private readonly List<byte> _imageProbe = new(16);
+    private ImageProbeState _imageProbeState;
+    private bool _dcsImageCandidate;
+
+    private enum ImageProbeState : byte
+    {
+        Ground,
+        Escape,
+        DcsHeader,
+        DcsBody,
+        DcsEscape,
+        Osc,
+        OscEscape,
+        OscIgnored,
+        OscIgnoredEscape,
+    }
 
     public GhosttyTerminalEngine(int columns = 120, int rows = 30, int historySize = 9001)
     {
@@ -151,6 +167,7 @@ public sealed unsafe class GhosttyTerminalEngine : ITerminalEngine
     }
 
     public string Title => _title;
+    public TerminalEngineCapabilities Capabilities => TerminalEngineCapabilities.Vt52Keyboard;
     public string? WorkingDirectory => _workingDirectory;
     public bool AlternateBufferActive => QueryInt(TerminalDataActiveScreen) == 1;
     public bool CursorVisible => _cursor.ViewportHasValue != 0 && _cursor.Visible != 0;
@@ -169,6 +186,13 @@ public sealed unsafe class GhosttyTerminalEngine : ITerminalEngine
     public bool AutoWrap => QueryMode(7);
     public bool InsertMode => QueryMode(4, ansi: true);
     public bool ReverseVideo => QueryMode(5);
+    public TerminalInputMode InputMode => new(
+        AnsiMode: QueryMode(2),
+        ApplicationCursorKeys,
+        ApplicationKeypad: QueryMode(66),
+        KittyFlags: KittyKeyboardFlags.None,
+        ModifyOtherKeys: 0,
+        Win32InputMode: false);
     public int Columns => Buffer.Columns;
     public int Rows => Buffer.Rows;
     public int CursorX => Buffer.CursorX;
@@ -184,6 +208,7 @@ public sealed unsafe class GhosttyTerminalEngine : ITerminalEngine
     public event EventHandler? ShellIntegrationChanged;
     public event EventHandler<string>? ClipboardWriteRequested;
     public event EventHandler<TerminalNotification>? NotificationRequested;
+    public event EventHandler<TerminalEngineDiagnostic>? Diagnostic;
     public event EventHandler? Bell;
     public event EventHandler<byte[]>? ResponseReady;
 
@@ -192,6 +217,7 @@ public sealed unsafe class GhosttyTerminalEngine : ITerminalEngine
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            ProbeUnsupportedImages(data);
             var trackedHistory = _historyAnchor is { IsInvalid: false, IsClosed: false };
             var historyBefore = ReadScrollbarCore().HistoryCount;
             fixed (byte* bytes = data)
@@ -292,10 +318,14 @@ public sealed unsafe class GhosttyTerminalEngine : ITerminalEngine
         Invalidated?.Invoke(this, EventArgs.Empty);
     }
 
-    public void ConfigureOptionalFeatures(bool allowClipboardWrite, bool allowNotifications)
+    public void ConfigureOptionalFeatures(
+        bool allowClipboardWrite,
+        bool allowNotifications,
+        bool allowKittyKeyboard = true)
     {
         _allowClipboardWrite = allowClipboardWrite;
         _allowNotifications = allowNotifications;
+        _ = allowKittyKeyboard;
     }
 
     public TerminalSnapshot CreateSnapshot(bool includeHistory = false)
@@ -327,6 +357,173 @@ public sealed unsafe class GhosttyTerminalEngine : ITerminalEngine
             ? "\u001b[200~" + text.Replace("\u001b", string.Empty, StringComparison.Ordinal) + "\u001b[201~"
             : text;
     }
+
+    private void ProbeUnsupportedImages(ReadOnlySpan<byte> data)
+    {
+        foreach (var value in data)
+        {
+            if (_imageProbeState != ImageProbeState.Ground && value is 0x18 or 0x1A)
+            {
+                _imageProbe.Clear();
+                _dcsImageCandidate = false;
+                _imageProbeState = ImageProbeState.Ground;
+                continue;
+            }
+
+            switch (_imageProbeState)
+            {
+                case ImageProbeState.Ground:
+                    if (value == 0x1B)
+                    {
+                        _imageProbeState = ImageProbeState.Escape;
+                    }
+                    else if (value == 0x90)
+                    {
+                        _dcsImageCandidate = true;
+                        _imageProbeState = ImageProbeState.DcsHeader;
+                    }
+                    else if (value == 0x9D)
+                    {
+                        StartOscProbe();
+                    }
+                    break;
+                case ImageProbeState.Escape:
+                    if (value == (byte)'P')
+                    {
+                        _dcsImageCandidate = true;
+                        _imageProbeState = ImageProbeState.DcsHeader;
+                    }
+                    else if (value == (byte)']')
+                    {
+                        StartOscProbe();
+                    }
+                    else
+                    {
+                        _imageProbeState = ImageProbeState.Ground;
+                    }
+                    break;
+                case ImageProbeState.DcsHeader:
+                    if (value is >= 0x40 and <= 0x7E)
+                    {
+                        if (value == (byte)'q' && _dcsImageCandidate)
+                        {
+                            ReportUnsupportedImage(
+                                "image.sixel.unsupported",
+                                "The pinned libghostty-vt C ABI does not expose Sixel image resources.");
+                        }
+                        _imageProbeState = ImageProbeState.DcsBody;
+                    }
+                    else if (value is 0x18 or 0x1A)
+                    {
+                        _imageProbeState = ImageProbeState.Ground;
+                    }
+                    else if (value is >= 0x20 and <= 0x2F)
+                    {
+                        _dcsImageCandidate = false;
+                    }
+                    else if (value is >= 0x3A and <= 0x3F)
+                    {
+                        _dcsImageCandidate = false;
+                    }
+                    break;
+                case ImageProbeState.DcsBody:
+                    if (value == 0x1B)
+                    {
+                        _imageProbeState = ImageProbeState.DcsEscape;
+                    }
+                    else if (value == 0x9C)
+                    {
+                        _imageProbeState = ImageProbeState.Ground;
+                    }
+                    break;
+                case ImageProbeState.DcsEscape:
+                    _imageProbeState = value == (byte)'\\'
+                        ? ImageProbeState.Ground
+                        : ImageProbeState.DcsBody;
+                    break;
+                case ImageProbeState.Osc:
+                    if (value is 0x07 or 0x9C)
+                    {
+                        _imageProbeState = ImageProbeState.Ground;
+                    }
+                    else if (value == 0x1B)
+                    {
+                        _imageProbeState = ImageProbeState.OscEscape;
+                    }
+                    else if (_imageProbe.Count < 16)
+                    {
+                        _imageProbe.Add(value);
+                        DetectUnsupportedOscImage();
+                    }
+                    break;
+                case ImageProbeState.OscEscape:
+                    _imageProbeState = value == (byte)'\\'
+                        ? ImageProbeState.Ground
+                        : ImageProbeState.Osc;
+                    break;
+                case ImageProbeState.OscIgnored:
+                    if (value is 0x07 or 0x9C)
+                    {
+                        _imageProbeState = ImageProbeState.Ground;
+                    }
+                    else if (value == 0x1B)
+                    {
+                        _imageProbeState = ImageProbeState.OscIgnoredEscape;
+                    }
+                    break;
+                case ImageProbeState.OscIgnoredEscape:
+                    _imageProbeState = value == (byte)'\\'
+                        ? ImageProbeState.Ground
+                        : ImageProbeState.OscIgnored;
+                    break;
+            }
+        }
+    }
+
+    private void StartOscProbe()
+    {
+        _imageProbe.Clear();
+        _imageProbeState = ImageProbeState.Osc;
+    }
+
+    private void DetectUnsupportedOscImage()
+    {
+        if (_imageProbe.Count == 5 && MatchesProbe("1337;"u8))
+        {
+            ReportUnsupportedImage(
+                "image.osc1337.unsupported",
+                "The pinned libghostty-vt C ABI does not expose OSC 1337 image resources.");
+            _imageProbeState = ImageProbeState.OscIgnored;
+        }
+        else if (_imageProbe.Count == 7 && MatchesProbe("9;4;st="u8))
+        {
+            ReportUnsupportedImage(
+                "image.conemu.unsupported",
+                "The pinned libghostty-vt C ABI does not expose ConEmu image resources.");
+            _imageProbeState = ImageProbeState.OscIgnored;
+        }
+    }
+
+    private bool MatchesProbe(ReadOnlySpan<byte> expected)
+    {
+        if (_imageProbe.Count != expected.Length)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < expected.Length; index++)
+        {
+            if (_imageProbe[index] != expected[index])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void ReportUnsupportedImage(string code, string message) =>
+        Diagnostic?.Invoke(this, new TerminalEngineDiagnostic(code, message));
 
     public void Dispose()
     {

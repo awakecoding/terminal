@@ -19,7 +19,7 @@ public static class TerminalRenderPlanner
         {
             rows[rowIndex] = PlanRow(
                 rowIndex,
-                snapshot.Buffer.Lines[rowIndex].Cells,
+                snapshot.Buffer.Lines[rowIndex],
                 scheme,
                 snapshot.ReverseVideo);
         }
@@ -41,6 +41,7 @@ public static class TerminalRenderPlanner
             Images = snapshot.Images
                 .Where(image => image.AlternateBuffer == snapshot.AlternateBufferActive)
                 .ToArray(),
+            DrcsGlyphs = snapshot.DrcsGlyphs,
         };
     }
 
@@ -76,10 +77,11 @@ public static class TerminalRenderPlanner
 
     private static TerminalRenderRow PlanRow(
         int rowIndex,
-        IReadOnlyList<Cell> cells,
+        TextBufferLineSnapshot line,
         ColorScheme scheme,
         bool reverseScreen)
     {
+        var cells = line.Cells;
         var runs = new List<TerminalRenderRun>();
         var column = 0;
         while (column < cells.Count)
@@ -137,7 +139,10 @@ public static class TerminalRenderPlanner
                 clusters.ToArray()));
         }
 
-        return new TerminalRenderRow(rowIndex, runs);
+        return new TerminalRenderRow(rowIndex, runs)
+        {
+            Rendition = line.Rendition,
+        };
     }
 
     private static bool EndsWithJoiner(StringBuilder text, int currentOffset) =>

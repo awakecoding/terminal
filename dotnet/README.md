@@ -4,7 +4,8 @@ A C# reimplementation of the Windows Terminal shell experience:
 
 - **.NET 10** with **NativeAOT**
 - **Avalonia 12** UI instead of WinUI/XAML Islands
-- **ConPTY** for local shells and Azure Cloud Shell for remote Azure sessions
+- **ConPTY** on Windows and a real **forkpty** transport on Linux
+- Azure Cloud Shell for remote Azure sessions
 - selectable built-in or **Ghostty** VT engine
 - text buffer, tabs/panes, settings-driven actions and keybindings
 
@@ -28,6 +29,50 @@ dotnet publish src/WindowsTerminal -c Release -r win-x64 --self-contained
 The native executable is written to
 `src/WindowsTerminal/bin/Release/net10.0/win-x64/publish/WindowsTerminal.exe`.
 
+Linux x64 and ARM64 NativeAOT packages are built on Linux with:
+
+```bash
+dotnet/scripts/Build-LinuxPackage.sh linux-x64 0.1.0 artifacts/packages all
+dotnet/scripts/Build-LinuxPackage.sh linux-arm64 0.1.0 artifacts/packages all
+bash dotnet/scripts/Test-LinuxPackage.sh linux-x64 artifacts/packages/*-linux-x64.*
+```
+
+The builder emits `.tar.gz`, `.deb`, `.rpm`, `.AppImage`, and `.sha256` files.
+Pass `tar`, `deb`, `rpm`, or `appimage` as the fourth argument to build one
+format. Every format consumes the same normalized `/opt/windows-terminal-dotnet`
+payload and `/usr` desktop integration layout, including NativeAOT hosts,
+architecture-matched Ghostty/Skia/HarfBuzz/PTY assets, licenses, a deterministic
+inventory, and an SPDX 2.3 SBOM. `SOURCE_DATE_EPOCH` controls all package
+timestamps. RPM output requires `rpmbuild`; AppImage output requires
+`mksquashfs` and a pinned architecture-matched type-2 runtime supplied through
+`APPIMAGE_RUNTIME_FILE`. Packaging performs no runtime or tool download.
+Missing tools produce install instructions before publishing starts.
+
+The archive includes a reversible installer helper under
+`/opt/windows-terminal-dotnet/linux/`. After extracting it at the filesystem
+root:
+
+```bash
+sudo /opt/windows-terminal-dotnet/linux/Install-LinuxDesktopIntegration.sh install
+/opt/windows-terminal-dotnet/linux/Install-LinuxDesktopIntegration.sh register-protocol
+/opt/windows-terminal-dotnet/linux/Install-LinuxDesktopIntegration.sh set-default-terminal
+```
+
+The first command installs the `.desktop` entry, AppStream metadata, hicolor
+icons, and an `x-terminal-emulator` compatibility wrapper. The latter two are
+explicit per-user actions: they register the `wt-dotnet:` handler and prepend
+the desktop ID to the applicable desktop-specific or generic
+`xdg-terminals.list` when `xdg-terminal-exec` is available.
+Use `unregister-protocol`, `unset-default-terminal`, then `uninstall` to reverse
+them. `--destdir` and `DESTDIR` stage integration assets without changing live
+configuration; `--prefix` and `--app-dir` support non-default layouts.
+
+On Debian-family systems without `xdg-terminal-exec`, an administrator may
+explicitly select the compatibility wrapper with
+`set-default-terminal --method alternatives`; the matching unset action restores
+the previous alternative. No install action changes a user's protocol or
+default-terminal choice automatically.
+
 ## MSIX packages
 
 The package project builds unsigned `win-x64` and `win-arm64` MSIX packages and
@@ -49,7 +94,9 @@ scrollback, font, find, settings, and command-palette bindings. User bindings ca
 refer to command IDs or inline commands; normalized chord aliases, unbinding, and
 last-definition-wins conflicts match the settings model.
 
-Settings are stored at `%LOCALAPPDATA%\WindowsTerminal.NET\settings.json`.
+Settings are stored at `%LOCALAPPDATA%\WindowsTerminal.NET\settings.json` on
+Windows and under `$XDG_CONFIG_HOME/windows-terminal-dotnet` on Linux, with the
+usual `~/.config` fallback.
 Set `WT_DOTNET_SETTINGS_PATH` to load a specific Windows Terminal settings file.
 Runtime application state is stored atomically in `state.json` beside that file.
 Set `"experimental.terminalEngine": "ghostty"` to use the pinned
@@ -73,6 +120,26 @@ tenant-selection UI and never receives or persists access/refresh tokens.
 The command palette supports action, `wt` command-line, tab-search, profile-launch,
 and shell command-history flows. Settings-driven notification-area behavior is
 available for unpackaged and packaged runs.
+On Windows, the x64/ARM64 MSIX includes a native `IExplorerCommand` for
+directory/background **Open in Terminal**, profile-derived jump lists refreshed
+after settings saves, and system toasts whose bounded activation payload is
+validated before broker routing. Packaged operations derive the AUMID from
+package identity. Supported unpackaged toast use requires a registered
+Start-menu shortcut plus `WT_DOTNET_AUMID` and
+`WT_DOTNET_TOAST_SHORTCUT`; otherwise diagnostics explicitly report the missing
+identity. The OpenConsole default-terminal handoff remains unavailable behind a
+versioned native helper boundary. Global summon and quake route named windows
+through the broker; Windows hotkeys use collision-safe `RegisterHotKey` and
+re-register after settings saves.
+On Linux, file, directory, and URI opening prefers the freedesktop portal over
+the session D-Bus and falls back to `xdg-open`. System notifications similarly
+prefer the portal and fall back to `notify-send`; the in-app accessible
+notification remains visible if both providers fail. Run
+`WindowsTerminal --diagnose-desktop` or the install helper's `diagnose` action
+for detected providers and actionable missing-package diagnostics. Broker and
+manual summon work on Linux, but global shortcut registration is explicitly
+unsupported until a reflection-free interactive GlobalShortcuts portal session
+provider is bundled.
 Stock visual defaults mirror Windows Terminal: Fluent/Segoe UI chrome, equal-width
 tabs with profile icons and visible profile titles, 12-point packaged Cascadia
 Mono with Atlas-compatible cell rounding, Campbell colors, 8-DIP default
@@ -87,7 +154,7 @@ The compiled-XAML settings editor and host integration are documented in
 Terminal.Core         VT parser + text buffer + terminal engine
 Terminal.Ghostty      NativeAOT-safe libghostty-vt engine adapter
 Terminal.Render       Immutable plans + HarfBuzz/Skia glyph renderer
-Terminal.Connection   ConPTY + Azure Cloud Shell (HTTP/WebSocket, NativeAOT)
+Terminal.Connection   ConPTY + Linux PTY + Azure Cloud Shell
 Terminal.Settings     Layered Windows Terminal-compatible JSON settings
 Terminal.Control      Avalonia TermControl renderer
 WindowsTerminal.App   Tabs, title bar, panes, actions, window behavior
@@ -100,12 +167,15 @@ scrollback with resize reflow, wide/combining cells, main/alternate buffers,
 editing and cursor commands, DEC/ANSI modes and reports, SGR including truecolor,
 OSC color resources/titles/working directories/hyperlinks, and incremental UTF-8.
 Advanced Core protocols add bounded DCS parsing, Sixel indexed/RGBA images,
-DECRQSS/XTGETTCAP reports, and OSC 1337 inline-image metadata.
+DECRQSS/XTGETTCAP reports, OSC 1337/ConEmu inline-image metadata, and stable
+logical-line image ownership through scrollback and reflow.
 `TextBuffer.CreateSnapshot` and `TerminalEngine.CreateSnapshot` provide detached,
 read-only cell snapshots for render and test consumers; the existing live
 `TextBuffer.GetRow` API remains available to `Terminal.Control`.
 
 The full phased plan for a complete port is in [PORTING.md](PORTING.md).
+The measured remaining parity contract is in
+[doc/parity-status.md](doc/parity-status.md).
 Architecture decisions are recorded in [doc/decisions](doc/decisions).
 Renderer contracts, cache ownership, and integration details are documented in
 [doc/renderer.md](doc/renderer.md).

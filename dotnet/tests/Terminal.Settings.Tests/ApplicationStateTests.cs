@@ -97,7 +97,7 @@ public sealed class ApplicationStateTests
         store.SaveWorkspace("old", layout);
         Assert.True(store.RenameWorkspace("old", "new"));
         Assert.False(store.RenameWorkspace("missing", "other"));
-        Assert.Same(layout, store.TakeWorkspace("new"));
+        Assert.Equal("1,2", store.TakeWorkspace("new")?.InitialPosition);
         Assert.Null(store.TakeWorkspace("new"));
         Assert.False(store.RemoveWorkspace("new"));
     }
@@ -165,6 +165,35 @@ public sealed class ApplicationStateTests
         var restored = new ApplicationStateStore(temporary.Path);
         Assert.Contains(profileId, restored.Data.GeneratedProfiles);
         Assert.Equal("5,6", Assert.Single(restored.Data.PersistedWindowLayouts).InitialPosition);
+    }
+
+    [Fact]
+    public void WorkspaceWritesMergeLatestFileAndPersistImmediately()
+    {
+        using var temporary = new TemporaryDirectory();
+        var first = new ApplicationStateStore(temporary.Path);
+        var second = new ApplicationStateStore(temporary.Path);
+
+        first.SaveWorkspace("zeta", new WindowLayoutState { InitialPosition = "1,1" });
+        second.SaveWorkspace("Alpha", new WindowLayoutState { InitialPosition = "2,2" });
+
+        var restored = new ApplicationStateStore(temporary.Path);
+        Assert.Equal(["Alpha", "zeta"], restored.GetWorkspaceNames());
+        Assert.Equal("1,1", restored.GetWorkspace("zeta")?.InitialPosition);
+        Assert.Equal("2,2", restored.GetWorkspace("Alpha")?.InitialPosition);
+    }
+
+    [Fact]
+    public void RejectedWorkspaceClaimDoesNotDeleteSavedData()
+    {
+        using var temporary = new TemporaryDirectory();
+        var store = new ApplicationStateStore(temporary.Path);
+        store.SaveWorkspace("legacy", new WindowLayoutState { InitialPosition = "3,4" });
+
+        Assert.Null(store.TakeWorkspace("legacy", static _ => false));
+
+        var restored = new ApplicationStateStore(temporary.Path);
+        Assert.Equal("3,4", restored.GetWorkspace("legacy")?.InitialPosition);
     }
 
     private sealed class TemporaryDirectory : IDisposable

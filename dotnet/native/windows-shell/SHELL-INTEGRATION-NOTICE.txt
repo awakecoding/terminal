@@ -1,0 +1,7 @@
+Windows Terminal .NET shell integration helpers
+
+Copyright (c) awakecoding and contributors.
+Licensed under the repository MIT license. See LICENSE at the repository root.
+
+The implementation uses Windows SDK interfaces and contains no bundled
+third-party source or binary dependency.

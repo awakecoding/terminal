@@ -28,13 +28,6 @@ public static class Program
                 return 3;
             }
 
-            if (invocation.SaveRequest is not null || invocation.SavedLayout is not null)
-            {
-                await Console.Error.WriteLineAsync(
-                    "wt: this command is not available in the current broker phase.").ConfigureAwait(false);
-                return 4;
-            }
-
             if (TryLaunchHost(args))
             {
                 return 0;

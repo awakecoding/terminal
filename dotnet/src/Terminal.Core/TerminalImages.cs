@@ -15,6 +15,7 @@ public enum TerminalImageProtocol : byte
 {
     Sixel,
     Iterm2Inline,
+    ConEmuInline,
 }
 
 public enum TerminalImageDimensionKind : byte
@@ -64,6 +65,7 @@ public sealed class SixelImage
         int height,
         int pixelAspectRatio,
         bool transparentBackground,
+        int finalCursorRowPixels,
         ushort[] indices,
         uint[] palette)
     {
@@ -71,6 +73,7 @@ public sealed class SixelImage
         Height = height;
         PixelAspectRatio = pixelAspectRatio;
         TransparentBackground = transparentBackground;
+        FinalCursorRowPixels = finalCursorRowPixels;
         _indices = indices;
         _palette = palette;
     }
@@ -79,6 +82,7 @@ public sealed class SixelImage
     public int Height { get; }
     public int PixelAspectRatio { get; }
     public bool TransparentBackground { get; }
+    public int FinalCursorRowPixels { get; }
     public ReadOnlyMemory<ushort> PixelIndices => _indices;
     public ReadOnlyMemory<uint> Palette => _palette;
     public long EstimatedByteSize => ((long)_indices.Length * sizeof(ushort)) + ((long)_palette.Length * sizeof(uint));
@@ -96,6 +100,12 @@ public sealed class SixelImage
     }
 }
 
+public readonly record struct TerminalImageAnchor(long LogicalLineId, int LogicalOffset);
+
+public readonly record struct TerminalImageCellGeometry(
+    double CellWidth,
+    double CellHeight);
+
 public sealed record TerminalImageOverlay(
     long Id,
     TerminalImageProtocol Protocol,
@@ -103,4 +113,8 @@ public sealed record TerminalImageOverlay(
     int AnchorColumn,
     int AnchorRow,
     SixelImage? Sixel,
-    InlineImage? InlineImage);
+    InlineImage? InlineImage)
+{
+    public TerminalImageAnchor LogicalAnchor { get; init; }
+    public TerminalImageCellGeometry CellGeometry { get; init; } = new(10, 20);
+}

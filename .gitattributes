@@ -3,6 +3,11 @@
 ###############################################################################
 * -text
 dotnet/scripts/*.sh text eol=lf
+dotnet/scripts/*.py text eol=lf
+dotnet/linux/*.sh text eol=lf
+dotnet/linux/*.env text eol=lf
+dotnet/linux/*.desktop text eol=lf
+dotnet/linux/*.xml text eol=lf
 
 *.inc linguist-language=cpp
 

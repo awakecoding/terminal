@@ -3,6 +3,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Input.TextInput;
 using Microsoft.Terminal.Control;
+using Microsoft.Terminal.Core;
 using Microsoft.Terminal.Render;
 using Microsoft.Terminal.Settings;
 using Xunit;
@@ -140,6 +141,50 @@ public sealed class TermControlAccessibilityTests
         control.ExitMarkMode();
         Assert.False(control.IsMarkMode);
         Assert.True(control.HasSelection);
+    }
+
+    [Fact]
+    public void UserMarksCanBeAddedNavigatedAndCleared()
+    {
+        var control = new TermControl();
+        control.Engine.Resize(10, 2);
+        control.Engine.Feed("first\r\nsecond\r\nthird");
+
+        control.AddMark("#123456");
+        var mark = Assert.Single(
+            control.GetScrollMarks(),
+            candidate => candidate.Kind == TerminalScrollMarkKind.User);
+        Assert.Equal("#123456", mark.Color);
+
+        control.ScrollToMark(ScrollToMarkDirection.First);
+        Assert.InRange(control.Engine.ScrollOffset, 0, control.Engine.HistoryCount);
+
+        control.ClearMark();
+        Assert.DoesNotContain(
+            control.GetScrollMarks(),
+            candidate => candidate.Kind == TerminalScrollMarkKind.User);
+
+        control.AddMark();
+        control.ClearAllMarks();
+        Assert.Empty(control.GetScrollMarks());
+    }
+
+    [Fact]
+    public void ColorSelectionAppliesColorsAndCanTargetAllMatches()
+    {
+        var control = new TermControl();
+        control.Engine.Resize(20, 2);
+        control.Engine.Feed("alpha alpha");
+        control.SelectWordAt(1, 0);
+
+        Assert.True(control.ColorSelection("#112233", "#445566", MatchMode.All));
+
+        var row = control.Engine.Buffer.GetRow(0);
+        Assert.Equal(TermColor.FromRgb(0x11, 0x22, 0x33), row[0].Attributes.Foreground);
+        Assert.Equal(TermColor.FromRgb(0x44, 0x55, 0x66), row[0].Attributes.Background);
+        Assert.Equal(TermColor.FromRgb(0x11, 0x22, 0x33), row[6].Attributes.Foreground);
+        Assert.Equal(TermColor.FromRgb(0x44, 0x55, 0x66), row[6].Attributes.Background);
+        Assert.False(control.HasSelection);
     }
 
     [Fact]

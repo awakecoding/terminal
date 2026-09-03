@@ -2,12 +2,32 @@ using Microsoft.Terminal.Settings;
 using System.Text.Json.Nodes;
 using WindowsTerminal.Models;
 using WindowsTerminal.Panes;
+using WindowsTerminal.Routing;
 using Xunit;
 
 namespace WindowsTerminal.App.Tests;
 
 public sealed class LayoutDescriptorTests
 {
+    [Theory]
+    [InlineData("persistedLayout")]
+    [InlineData("persistedWindowLayout")]
+    [InlineData("persistedLayoutAndContent")]
+    [InlineData("PERSISTEDLAYOUT")]
+    public void AllPersistedFirstWindowPreferencesRestoreLayouts(string preference)
+    {
+        Assert.True(TerminalLayoutStateStore.IsPersistedLayoutPreference(preference));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("defaultProfile")]
+    public void NonPersistedFirstWindowPreferencesDoNotRestoreLayouts(string? preference)
+    {
+        Assert.False(TerminalLayoutStateStore.IsPersistedLayoutPreference(preference));
+    }
+
     [Fact]
     public void WindowTabPaneLayoutRoundTripsThroughApplicationState()
     {
@@ -72,6 +92,47 @@ public sealed class LayoutDescriptorTests
 
         Assert.Throws<InvalidOperationException>(() =>
             TerminalLayoutSerializer.SerializeTabs(invalid));
+    }
+
+    [Fact]
+    public void NativeActionArrayIsRejectedWithDiagnosticAndRemainsUnchanged()
+    {
+        var native = new JsonArray
+        {
+            new JsonObject
+            {
+                ["command"] = new JsonObject { ["action"] = "newTab" },
+            },
+        };
+        var before = native.ToJsonString();
+
+        Assert.False(TerminalLayoutSerializer.TryDeserializeTabs(
+            native,
+            out var layout,
+            out var diagnostic));
+
+        Assert.Null(layout);
+        Assert.Contains("Native Windows Terminal", diagnostic);
+        Assert.Equal(before, native.ToJsonString());
+    }
+
+    [Theory]
+    [InlineData(LaunchMode.Maximized)]
+    [InlineData(LaunchMode.Fullscreen)]
+    [InlineData(LaunchMode.Focus)]
+    [InlineData(LaunchMode.MaximizedFocus)]
+    public void ApplicationStatePreservesGeometryAndLaunchMode(LaunchMode launchMode)
+    {
+        var state = TerminalLayoutSerializer.ToApplicationState(
+            ValidLayout(),
+            "25,50",
+            new WindowSizeState { Width = 1024, Height = 768 },
+            launchMode);
+
+        Assert.Equal("25,50", state.InitialPosition);
+        Assert.Equal(1024, state.InitialSize!.Width);
+        Assert.Equal(768, state.InitialSize.Height);
+        Assert.Equal(launchMode, state.LaunchMode);
     }
 
     [Fact]
@@ -149,6 +210,136 @@ public sealed class LayoutDescriptorTests
             Assert.Equal(first.ActiveTabId, TerminalLayoutStateStore.ReadWindow(reloaded, 1)?.ActiveTabId);
             Assert.Equal(second.ActiveTabId, TerminalLayoutStateStore.ReadWindow(reloaded, 2)?.ActiveTabId);
             Assert.Equal(2, reloaded.Data.PersistedWindowLayouts.Count);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void InvalidDefaultSlotCanSurviveFallbackAndCloseWithoutReplacement()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"TerminalLayoutTests.{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var store = new ApplicationStateStore(directory);
+            var invalid = new WindowLayoutState
+            {
+                TabLayout =
+                [
+                    new JsonObject
+                    {
+                        ["command"] = new JsonObject { ["action"] = "newTab" },
+                    },
+                ],
+            };
+            store.SavePersistedWindowLayout(0, invalid);
+
+            var slot = TerminalLayoutStateStore.ReadWindowState(store, 1);
+            Assert.NotNull(slot);
+            Assert.False(TerminalLayoutStateStore.TryRead(slot, out _, out _));
+
+            var fallback = ValidLayout();
+            Assert.False(TerminalLayoutStateStore.TrySaveWindow(
+                store,
+                1,
+                fallback,
+                null,
+                null,
+                LaunchMode.Default,
+                blockedByInvalidRestore: true));
+
+            var reloaded = new ApplicationStateStore(directory);
+            var preserved = Assert.Single(reloaded.Data.PersistedWindowLayouts);
+            Assert.Same(preserved, TerminalLayoutStateStore.ReadWindowState(reloaded, 1));
+            Assert.False(TerminalLayoutStateStore.TryRead(preserved, out _, out _));
+            Assert.Equal(invalid.TabLayout.ToJsonString(), preserved.TabLayout.ToJsonString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ActivationResolverSelectsSlotsAndConsumesValidWorkspaces()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"TerminalLayoutTests.{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var store = new ApplicationStateStore(directory);
+            var state = TerminalLayoutSerializer.ToApplicationState(ValidLayout());
+            store.SavePersistedWindowLayout(2, state);
+            store.SaveWorkspace("build", state);
+            var fallback = new TerminalWindowActivation(
+                null,
+                null,
+                null,
+                null,
+                TerminalWindowLaunchMode.Default,
+                []);
+
+            var slot = TerminalLayoutActivationResolver.ResolveSavedSlot(store, 2, fallback);
+            var workspace = TerminalLayoutActivationResolver.ResolveWorkspace(
+                store,
+                "build",
+                fallback);
+
+            Assert.NotNull(slot.PersistedLayout);
+            Assert.True(TerminalLayoutStateStore.TryRead(
+                slot.PersistedLayout,
+                out var slotLayout,
+                out _));
+            Assert.Equal(
+                TerminalLayoutSerializer.DeserializeTabs(state.TabLayout)!.ActiveTabId,
+                slotLayout!.ActiveTabId);
+            Assert.NotNull(workspace.PersistedLayout);
+            Assert.Equal("build", workspace.WorkspaceName);
+            Assert.Null(new ApplicationStateStore(directory).GetWorkspace("build"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ActivationResolverDiagnosesUnsupportedWorkspaceWithoutConsumingIt()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"TerminalLayoutTests.{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var store = new ApplicationStateStore(directory);
+            store.SaveWorkspace("native", new WindowLayoutState
+            {
+                TabLayout =
+                [
+                    new JsonObject
+                    {
+                        ["command"] = new JsonObject { ["action"] = "newTab" },
+                    },
+                ],
+            });
+            var fallback = new TerminalWindowActivation(
+                null,
+                null,
+                null,
+                null,
+                TerminalWindowLaunchMode.Default,
+                []);
+
+            var resolved = TerminalLayoutActivationResolver.ResolveWorkspace(
+                store,
+                "native",
+                fallback);
+
+            Assert.Null(resolved.PersistedLayout);
+            Assert.Contains("Native Windows Terminal", resolved.PersistedLayoutDiagnostic);
+            Assert.NotNull(new ApplicationStateStore(directory).GetWorkspace("native"));
         }
         finally
         {

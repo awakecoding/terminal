@@ -1,6 +1,15 @@
 using System.Text;
+using System.Globalization;
 
 namespace Microsoft.Terminal.Core;
+
+public enum LineRendition : byte
+{
+    SingleWidth,
+    DoubleWidth,
+    DoubleHeightTop,
+    DoubleHeightBottom,
+}
 
 public sealed record TextBufferLineSnapshot(
     IReadOnlyList<Cell> Cells,
@@ -8,6 +17,9 @@ public sealed record TextBufferLineSnapshot(
     IReadOnlyList<ShellMark> Marks)
 {
     public ShellMark? Mark => Marks.Count > 0 ? Marks[0] : null;
+    public LineRendition Rendition { get; init; }
+    public long LogicalLineId { get; init; }
+    public int LogicalOffset { get; init; }
 }
 
 public sealed record TextBufferSnapshot(
@@ -22,20 +34,27 @@ public sealed record TextBufferSnapshot(
 public sealed record TextBufferProjectionRow(
     Cell[] Cells,
     bool Wrapped,
-    IReadOnlyList<ShellMark> Marks);
+    IReadOnlyList<ShellMark> Marks)
+{
+    public LineRendition Rendition { get; init; }
+}
 
 public sealed class TextBuffer
 {
     private sealed class BufferLine
     {
-        public BufferLine(Cell[] cells)
+        public BufferLine(Cell[] cells, long logicalLineId)
         {
             Cells = cells;
+            LogicalLineId = logicalLineId;
         }
 
         public Cell[] Cells { get; }
         public bool Wrapped { get; set; }
+        public LineRendition Rendition { get; set; }
         public List<ShellMark> Marks { get; } = [];
+        public long LogicalLineId { get; set; }
+        public int LogicalOffset { get; set; }
     }
 
     private CircularBuffer<BufferLine> _lines;
@@ -45,6 +64,8 @@ public sealed class TextBuffer
     private ShellIntegrationKind _shellIntegration;
     private ShellMark? _activeMark;
     private bool _activeMarkHasOutput;
+    private string? _pendingPrepend;
+    private long _nextLogicalLineId;
 
     public TextBuffer(int columns, int rows, int historySize, bool hasHistory)
     {
@@ -85,7 +106,10 @@ public sealed class TextBuffer
     public CellAttributes SavedAttributes { get; set; } = CellAttributes.Default;
     public bool SavedProtection { get; set; }
 
-    public void Resize(int columns, int rows)
+    public void Resize(
+        int columns,
+        int rows,
+        IReadOnlyList<TerminalImageAnchor>? retainedAnchors = null)
     {
         columns = Math.Max(1, columns);
         rows = Math.Max(1, rows);
@@ -114,6 +138,7 @@ public sealed class TextBuffer
             source,
             oldColumns,
             columns,
+            retainedAnchors,
             cursorAbsoluteLine,
             CursorX + (wasWrapPending ? 1 : 0),
             out var cursorLine,
@@ -141,7 +166,8 @@ public sealed class TextBuffer
 
         CursorY = Math.Clamp(cursorLine - viewport, 0, rows - 1);
         CursorX = Math.Clamp(cursorColumn, 0, columns - 1);
-        WrapPending = wasWrapPending && CursorX == columns - 1;
+        WrapPending = wasWrapPending &&
+                      CursorX == EffectiveColumns(GetLiveLine(CursorY)) - 1;
 
     }
 
@@ -155,6 +181,42 @@ public sealed class TextBuffer
         }
 
         return GetRow(y)[x];
+    }
+
+    public void ApplyColors(
+        BufferPosition start,
+        BufferPosition end,
+        TermColor? foreground,
+        TermColor? background)
+    {
+        if (start.Line > end.Line ||
+            (start.Line == end.Line && start.Column > end.Column))
+        {
+            (start, end) = (end, start);
+        }
+
+        var firstLine = Math.Clamp(start.Line, 0, _lines.Count - 1);
+        var lastLine = Math.Clamp(end.Line, 0, _lines.Count - 1);
+        for (var lineIndex = firstLine; lineIndex <= lastLine; lineIndex++)
+        {
+            var line = _lines[lineIndex];
+            var firstColumn = lineIndex == start.Line ? start.Column : 0;
+            var lastColumn = lineIndex == end.Line ? end.Column : Columns - 1;
+            for (var column = Math.Clamp(firstColumn, 0, Columns - 1);
+                 column <= Math.Clamp(lastColumn, 0, Columns - 1);
+                 column++)
+            {
+                if (foreground is { } foregroundColor)
+                {
+                    line.Cells[column].Attributes.Foreground = foregroundColor;
+                }
+
+                if (background is { } backgroundColor)
+                {
+                    line.Cells[column].Attributes.Background = backgroundColor;
+                }
+            }
+        }
     }
 
     public TextBufferSnapshot CreateSnapshot(bool includeHistory = false)
@@ -171,7 +233,12 @@ public sealed class TextBuffer
                 _lines[sourceIndex].Wrapped,
                 _lines[sourceIndex].Marks
                     .Select(static mark => new ShellMark(mark.StartColumn, mark.ExitCode))
-                    .ToArray());
+                    .ToArray())
+            {
+                Rendition = _lines[sourceIndex].Rendition,
+                LogicalLineId = _lines[sourceIndex].LogicalLineId,
+                LogicalOffset = _lines[sourceIndex].LogicalOffset,
+            };
         }
 
         return new TextBufferSnapshot(Columns, Rows, CursorX, CursorY, HistoryCount, ScrollOffset, copies);
@@ -192,7 +259,11 @@ public sealed class TextBuffer
             var source = projection.Cells;
             var cells = Enumerable.Repeat(Cell.Blank, Columns).ToArray();
             Array.Copy(source, cells, Math.Min(source.Length, cells.Length));
-            var line = new BufferLine(cells) { Wrapped = projection.Wrapped };
+            var line = new BufferLine(cells, ++_nextLogicalLineId)
+            {
+                Wrapped = projection.Wrapped,
+                Rendition = projection.Rendition,
+            };
             line.Marks.AddRange(projection.Marks.Select(static mark =>
                 new ShellMark(mark.StartColumn, mark.ExitCode)));
             replacement.Add(line);
@@ -207,6 +278,70 @@ public sealed class TextBuffer
 
     public void AdvanceCoordinateVersion() => CoordinateVersion++;
 
+    public TerminalImageAnchor CreateImageAnchor(int column, int viewportRow)
+    {
+        var line = GetLiveLine(viewportRow);
+        return new TerminalImageAnchor(
+            line.LogicalLineId,
+            line.LogicalOffset + Math.Clamp(column, 0, EffectiveColumns(line) - 1));
+    }
+
+    public bool TryResolveImageAnchor(
+        TerminalImageAnchor anchor,
+        out int absoluteRow,
+        out int column)
+    {
+        for (var row = 0; row < _lines.Count; row++)
+        {
+            var line = _lines[row];
+            if (line.LogicalLineId != anchor.LogicalLineId)
+            {
+                continue;
+            }
+
+            var width = EffectiveColumns(line);
+            if (row + 1 < _lines.Count &&
+                _lines[row + 1].LogicalLineId == line.LogicalLineId)
+            {
+                var nextOffset = _lines[row + 1].LogicalOffset;
+                if (nextOffset > line.LogicalOffset)
+                {
+                    width = Math.Min(width, nextOffset - line.LogicalOffset);
+                }
+            }
+            if (anchor.LogicalOffset < line.LogicalOffset ||
+                anchor.LogicalOffset >= line.LogicalOffset + width)
+            {
+                continue;
+            }
+
+            absoluteRow = row;
+            column = anchor.LogicalOffset - line.LogicalOffset;
+            return true;
+        }
+
+        absoluteRow = -1;
+        column = -1;
+        return false;
+    }
+
+    public LineRendition CurrentLineRendition => GetLiveLine(CursorY).Rendition;
+
+    public void SetCurrentLineRendition(LineRendition rendition)
+    {
+        var line = GetLiveLine(CursorY);
+        line.Rendition = rendition;
+        line.Wrapped = false;
+        var width = EffectiveColumns(line);
+        if (width < Columns)
+        {
+            EraseCells(line.Cells, width, Columns);
+        }
+
+        CursorX = Math.Clamp(CursorX, 0, width - 1);
+        WrapPending = false;
+    }
+
     public int GetPrintAdvance(Rune rune)
     {
         var target = GetJoinTarget(rune);
@@ -215,15 +350,23 @@ public sealed class TextBuffer
             return WcWidth.Width(rune);
         }
 
-        var (row, column, desiredWidth) = target.Value;
-        return column + desiredWidth <= row.Length
+        var (row, column, desiredWidth, lineColumns) = target.Value;
+        return column + desiredWidth <= lineColumns
             ? Math.Max(0, desiredWidth - row[column].DisplayWidth)
             : 0;
     }
 
     public void Print(Rune rune)
     {
-        if (TryAppendJoinedRune(rune))
+        if (IsPrepend(rune))
+        {
+            _pendingPrepend = (_pendingPrepend ?? string.Empty) + rune;
+            return;
+        }
+
+        var prepend = _pendingPrepend;
+        _pendingPrepend = null;
+        if (prepend is null && TryAppendJoinedRune(rune))
         {
             return;
         }
@@ -237,16 +380,22 @@ public sealed class TextBuffer
 
         if (WrapPending)
         {
-            GetLiveLine(CursorY).Wrapped = true;
+            var source = GetLiveLine(CursorY);
+            source.Wrapped = true;
             CarriageReturn();
             LineFeed();
+            ContinueLogicalLine(source);
         }
 
-        if (CursorX + width > Columns)
+        var effectiveColumns = EffectiveColumns(GetLiveLine(CursorY));
+        if (CursorX + width > effectiveColumns)
         {
-            GetLiveLine(CursorY).Wrapped = true;
+            var source = GetLiveLine(CursorY);
+            source.Wrapped = true;
             CarriageReturn();
             LineFeed();
+            ContinueLogicalLine(source);
+            effectiveColumns = EffectiveColumns(GetLiveLine(CursorY));
         }
 
         var row = GetLiveLine(CursorY).Cells;
@@ -265,6 +414,13 @@ public sealed class TextBuffer
             HyperlinkUri = CurrentHyperlinkUri,
             ShellIntegration = _shellIntegration,
         };
+        if (prepend is not null)
+        {
+            var runes = prepend.EnumerateRunes().ToArray();
+            row[CursorX].Rune = runes[0];
+            row[CursorX].CombiningCharacters =
+                string.Concat(runes.Skip(1).Select(static value => value.ToString())) + rune;
+        }
 
         if (width == 2 && CursorX + 1 < Columns)
         {
@@ -281,9 +437,9 @@ public sealed class TextBuffer
         }
 
         CursorX += width;
-        if (CursorX >= Columns)
+        if (CursorX >= effectiveColumns)
         {
-            CursorX = Columns - 1;
+            CursorX = effectiveColumns - 1;
             WrapPending = true;
         }
     }
@@ -310,6 +466,10 @@ public sealed class TextBuffer
         {
             CursorX = 0;
         }
+        else
+        {
+            CursorX = Math.Min(CursorX, EffectiveColumns(GetLiveLine(CursorY)) - 1);
+        }
     }
 
     public void ReverseIndex()
@@ -323,6 +483,8 @@ public sealed class TextBuffer
         {
             CursorY--;
         }
+
+        CursorX = Math.Min(CursorX, EffectiveColumns(GetLiveLine(CursorY)) - 1);
     }
 
     public void Backspace()
@@ -341,10 +503,11 @@ public sealed class TextBuffer
     public void Tab(int count = 1)
     {
         WrapPending = false;
+        var columns = EffectiveColumns(GetLiveLine(CursorY));
         for (var n = 0; n < Math.Max(1, count); n++)
         {
-            var next = Columns - 1;
-            for (var x = CursorX + 1; x < Columns; x++)
+            var next = columns - 1;
+            for (var x = CursorX + 1; x < columns; x++)
             {
                 if (_tabStops[x])
                 {
@@ -415,17 +578,17 @@ public sealed class TextBuffer
         var top = OriginMode && relativeToOrigin ? ScrollTop : 0;
         var bottom = OriginMode && relativeToOrigin ? ScrollBottom : Rows - 1;
         CursorY = Math.Clamp(top + row, top, bottom);
-        CursorX = Math.Clamp(col, 0, Columns - 1);
+        CursorX = Math.Clamp(col, 0, EffectiveColumns(GetLiveLine(CursorY)) - 1);
     }
 
     public void MoveCursor(int dx, int dy, bool respectMargins = false)
     {
         WrapPending = false;
-        CursorX = Math.Clamp(CursorX + dx, 0, Columns - 1);
         var withinMargins = CursorY >= ScrollTop && CursorY <= ScrollBottom;
         var top = OriginMode || (respectMargins && withinMargins) ? ScrollTop : 0;
         var bottom = OriginMode || (respectMargins && withinMargins) ? ScrollBottom : Rows - 1;
         CursorY = Math.Clamp(CursorY + dy, top, bottom);
+        CursorX = Math.Clamp(CursorX + dx, 0, EffectiveColumns(GetLiveLine(CursorY)) - 1);
     }
 
     public void SetScrollRegion(int top, int bottom)
@@ -815,8 +978,8 @@ public sealed class TextBuffer
 
     public void RestoreCursor()
     {
-        CursorX = Math.Clamp(SavedCursorX, 0, Columns - 1);
         CursorY = Math.Clamp(SavedCursorY, 0, Rows - 1);
+        CursorX = Math.Clamp(SavedCursorX, 0, EffectiveColumns(GetLiveLine(CursorY)) - 1);
         CurrentAttributes = SavedAttributes;
         CurrentProtection = SavedProtection;
         WrapPending = false;
@@ -832,6 +995,7 @@ public sealed class TextBuffer
         _shellIntegration = ShellIntegrationKind.None;
         _activeMark = null;
         _activeMarkHasOutput = false;
+        _pendingPrepend = null;
         CursorX = 0;
         CursorY = 0;
         WrapPending = false;
@@ -847,6 +1011,10 @@ public sealed class TextBuffer
 
         EnsureViewportLines();
         EraseLineRange(0, Rows - 1);
+        for (var y = 0; y < Rows; y++)
+        {
+            GetLiveLine(y).Rendition = LineRendition.SingleWidth;
+        }
     }
 
     public string GetText(int startX, int startY, int endX, int endY)
@@ -985,8 +1153,18 @@ public sealed class TextBuffer
             row[x] = BlankWith(attributes);
         }
 
-        return new BufferLine(row);
+        return new BufferLine(row, ++_nextLogicalLineId);
     }
+
+    private void ContinueLogicalLine(BufferLine source)
+    {
+        var destination = GetLiveLine(CursorY);
+        destination.LogicalLineId = source.LogicalLineId;
+        destination.LogicalOffset = source.LogicalOffset + EffectiveColumns(source);
+    }
+
+    private int EffectiveColumns(BufferLine line) =>
+        line.Rendition == LineRendition.SingleWidth ? Columns : Math.Max(1, Columns / 2);
 
     private static Cell BlankWith(CellAttributes attributes) => new()
     {
@@ -1310,11 +1488,11 @@ public sealed class TextBuffer
             return false;
         }
 
-        var (row, x, desiredWidth) = target.Value;
+        var (row, x, desiredWidth, lineColumns) = target.Value;
         ref var previous = ref row[x];
         var previousWidth = previous.DisplayWidth;
         previous.CombiningCharacters = (previous.CombiningCharacters ?? string.Empty) + rune;
-        if (desiredWidth > previousWidth && x + desiredWidth <= row.Length)
+        if (desiredWidth > previousWidth && x + desiredWidth <= lineColumns)
         {
             ClearGlyphAt(row, x + 1);
             previous.StoredWidth = (byte)desiredWidth;
@@ -1328,9 +1506,9 @@ public sealed class TextBuffer
             };
 
             var newCursor = CursorX + desiredWidth - previousWidth;
-            if (newCursor >= Columns)
+            if (newCursor >= lineColumns)
             {
-                CursorX = Columns - 1;
+                CursorX = lineColumns - 1;
                 WrapPending = true;
             }
             else
@@ -1342,7 +1520,7 @@ public sealed class TextBuffer
         return true;
     }
 
-    private (Cell[] Row, int Column, int DesiredWidth)? GetJoinTarget(Rune rune)
+    private (Cell[] Row, int Column, int DesiredWidth, int LineColumns)? GetJoinTarget(Rune rune)
     {
         var y = CursorY;
         var x = WrapPending ? CursorX : CursorX - 1;
@@ -1382,12 +1560,26 @@ public sealed class TextBuffer
             IsRegionalIndicator(rune) &&
             (previous.CombiningCharacters is null ||
              !previous.CombiningCharacters.EnumerateRunes().Any(IsRegionalIndicator));
-        if (!joinedByZwj && !emojiPresentationSelector && !regionalPair)
+        var hangulSyllable = IsHangulContinuation(previous, rune);
+        var spacingMark = Rune.GetUnicodeCategory(rune) == UnicodeCategory.SpacingCombiningMark;
+        var prepend = IsPrepend(previous.Rune);
+        var indicConjunct = IsIndicConsonant(rune) && EndsWithIndicLinker(previous);
+        if (!joinedByZwj &&
+            !emojiPresentationSelector &&
+            !regionalPair &&
+            !hangulSyllable &&
+            !spacingMark &&
+            !prepend &&
+            !indicConjunct)
         {
             return null;
         }
 
-        return (row, x, 2);
+        var desiredWidth = joinedByZwj || emojiPresentationSelector || regionalPair
+            ? 2
+            : Math.Max(previous.DisplayWidth, Math.Max(1, WcWidth.Width(rune)));
+        var lineColumns = EffectiveColumns(GetLiveLine(y));
+        return x + desiredWidth <= lineColumns ? (row, x, desiredWidth, lineColumns) : null;
     }
 
     private static bool IsRegionalIndicator(Rune rune) =>
@@ -1397,6 +1589,119 @@ public sealed class TextBuffer
         rune.Value is >= 0x1F000 and <= 0x1FAFF or
             >= 0x2300 and <= 0x23FF or
             >= 0x2600 and <= 0x27BF;
+
+    private enum HangulClass : byte
+    {
+        Other,
+        L,
+        V,
+        T,
+        Lv,
+        Lvt,
+    }
+
+    private static bool IsHangulContinuation(Cell previous, Rune current)
+    {
+        var prior = Hangul(previous.CombiningCharacters is { Length: > 0 }
+            ? previous.CombiningCharacters.EnumerateRunes().Last()
+            : previous.Rune);
+        var next = Hangul(current);
+        return prior == HangulClass.L && next is HangulClass.L or HangulClass.V or HangulClass.Lv or HangulClass.Lvt ||
+               prior is HangulClass.Lv or HangulClass.V && next is HangulClass.V or HangulClass.T ||
+               prior is HangulClass.Lvt or HangulClass.T && next == HangulClass.T;
+    }
+
+    private static HangulClass Hangul(Rune rune)
+    {
+        var value = rune.Value;
+        if (value is >= 0x1100 and <= 0x115F or >= 0xA960 and <= 0xA97C)
+        {
+            return HangulClass.L;
+        }
+
+        if (value is >= 0x1160 and <= 0x11A7 or >= 0xD7B0 and <= 0xD7C6)
+        {
+            return HangulClass.V;
+        }
+
+        if (value is >= 0x11A8 and <= 0x11FF or >= 0xD7CB and <= 0xD7FB)
+        {
+            return HangulClass.T;
+        }
+
+        if (value is >= 0xAC00 and <= 0xD7A3)
+        {
+            return (value - 0xAC00) % 28 == 0 ? HangulClass.Lv : HangulClass.Lvt;
+        }
+
+        return HangulClass.Other;
+    }
+
+    private static bool IsPrepend(Rune rune) =>
+        rune.Value is >= 0x0600 and <= 0x0605 or
+            0x06DD or
+            0x070F or
+            0x0890 or 0x0891 or
+            0x08E2 or
+            0x0D4E or
+            0x110BD or 0x110CD or
+            >= 0x111C2 and <= 0x111C3 or
+            0x1193F or 0x11941 or
+            0x11A3A or
+            >= 0x11A84 and <= 0x11A89 or
+            0x11D46;
+
+    private static bool IsIndicConsonant(Rune rune)
+    {
+        var value = rune.Value;
+        if (value is not (>= 0x0900 and <= 0x0DFF or
+                          >= 0x1000 and <= 0x109F or
+                          >= 0x1780 and <= 0x17FF or
+                          >= 0x1A20 and <= 0x1CFF or
+                          >= 0xA800 and <= 0xABFF or
+                          >= 0x11000 and <= 0x11FFF))
+        {
+            return false;
+        }
+
+        return Rune.GetUnicodeCategory(rune) is UnicodeCategory.OtherLetter;
+    }
+
+    private static bool EndsWithIndicLinker(Cell cell)
+    {
+        if (cell.CombiningCharacters is not { Length: > 0 } combining)
+        {
+            return false;
+        }
+
+        foreach (var rune in combining.EnumerateRunes().Reverse())
+        {
+            var category = Rune.GetUnicodeCategory(rune);
+            if (IsIndicLinker(rune))
+            {
+                return true;
+            }
+
+            if (category is not (UnicodeCategory.NonSpacingMark or
+                                 UnicodeCategory.SpacingCombiningMark or
+                                 UnicodeCategory.Format))
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsIndicLinker(Rune rune) =>
+        rune.Value is 0x094D or 0x09CD or 0x0A4D or 0x0ACD or 0x0B4D or 0x0BCD or
+            0x0C4D or 0x0CCD or 0x0D3B or 0x0D3C or 0x0D4D or 0x0DCA or 0x1039 or
+            0x103A or 0x1714 or 0x1734 or 0x17D2 or 0x1A60 or 0x1B44 or 0x1BAA or
+            0x1BAB or 0xA806 or 0xA8C4 or 0xA953 or 0xAAF6 or 0xABED or 0x10A3F or
+            0x11046 or 0x11070 or 0x11133 or 0x111C0 or 0x11235 or 0x112EA or
+            0x1134D or 0x11442 or 0x114C2 or 0x115BF or 0x1163F or 0x116B6 or
+            0x1172B or 0x11839 or 0x1193D or 0x119E0 or 0x11A34 or 0x11A47 or
+            0x11A99 or 0x11C3F or 0x11D44 or 0x11D45 or 0x11D97;
 
     private static void ClearGlyphAt(Cell[] row, int x)
     {
@@ -1462,6 +1767,7 @@ public sealed class TextBuffer
         IReadOnlyList<BufferLine> source,
         int oldColumns,
         int newColumns,
+        IReadOnlyList<TerminalImageAnchor>? retainedAnchors,
         int cursorLine,
         int cursorX,
         out int newCursorLine,
@@ -1473,11 +1779,37 @@ public sealed class TextBuffer
         var paragraphCells = new List<Cell>();
         var paragraphMarks = new List<(int Offset, ShellMark Mark)>();
         var cursorOffset = -1;
+        var paragraphRendition = LineRendition.SingleWidth;
+        var paragraphLogicalLineId = 0L;
+        var paragraphLogicalOffset = 0;
 
         for (var lineIndex = 0; lineIndex < source.Count; lineIndex++)
         {
             var line = source[lineIndex];
-            var used = line.Wrapped ? oldColumns : LastContentColumn(line.Cells) + 1;
+            if (paragraphCells.Count == 0)
+            {
+                paragraphRendition = line.Rendition;
+                paragraphLogicalLineId = line.LogicalLineId;
+                paragraphLogicalOffset = line.LogicalOffset;
+            }
+
+            var sourceColumns = line.Rendition == LineRendition.SingleWidth
+                ? oldColumns
+                : Math.Max(1, oldColumns / 2);
+            var used = line.Wrapped ? sourceColumns : Math.Min(sourceColumns, LastContentColumn(line.Cells) + 1);
+            if (retainedAnchors is not null)
+            {
+                for (var anchorIndex = 0; anchorIndex < retainedAnchors.Count; anchorIndex++)
+                {
+                    var anchor = retainedAnchors[anchorIndex];
+                    if (anchor.LogicalLineId == line.LogicalLineId &&
+                        anchor.LogicalOffset >= line.LogicalOffset &&
+                        anchor.LogicalOffset < line.LogicalOffset + sourceColumns)
+                    {
+                        used = Math.Max(used, anchor.LogicalOffset - line.LogicalOffset + 1);
+                    }
+                }
+            }
             foreach (var mark in line.Marks)
             {
                 paragraphMarks.Add((DisplayWidth(paragraphCells) + mark.StartColumn, mark));
@@ -1497,16 +1829,30 @@ public sealed class TextBuffer
                 }
             }
 
-            if (!line.Wrapped || lineIndex == source.Count - 1)
+            if (!line.Wrapped ||
+                lineIndex == source.Count - 1 ||
+                source[lineIndex + 1].Rendition != line.Rendition)
             {
                 var paragraphStart = result.Count;
-                EmitParagraph(paragraphCells, newColumns, result, cursorOffset, out var relativeLine, out var relativeColumn);
+                var destinationColumns = paragraphRendition == LineRendition.SingleWidth
+                    ? newColumns
+                    : Math.Max(1, newColumns / 2);
+                EmitParagraph(
+                    paragraphCells,
+                    destinationColumns,
+                    paragraphRendition,
+                    result,
+                    paragraphLogicalLineId,
+                    paragraphLogicalOffset,
+                    cursorOffset,
+                    out var relativeLine,
+                    out var relativeColumn);
                 foreach (var (offset, mark) in paragraphMarks)
                 {
                     var destination = paragraphStart + Math.Min(
-                        offset / newColumns,
+                        offset / destinationColumns,
                         result.Count - paragraphStart - 1);
-                    mark.StartColumn = offset % newColumns;
+                    mark.StartColumn = offset % destinationColumns;
                     result[destination].Marks.Add(mark);
                 }
 
@@ -1528,12 +1874,18 @@ public sealed class TextBuffer
     private void EmitParagraph(
         IReadOnlyList<Cell> cells,
         int columns,
+        LineRendition rendition,
         List<BufferLine> output,
+        long logicalLineId,
+        int logicalOffset,
         int cursorOffset,
         out int linesAfterCursor,
         out int cursorColumn)
     {
         var line = NewBlankLine(CellAttributes.Default);
+        line.Rendition = rendition;
+        line.LogicalLineId = logicalLineId;
+        line.LogicalOffset = logicalOffset;
         var x = 0;
         var cursorLineIndex = -1;
         cursorColumn = 0;
@@ -1557,6 +1909,9 @@ public sealed class TextBuffer
                 line.Wrapped = true;
                 output.Add(line);
                 line = NewBlankLine(CellAttributes.Default);
+                line.Rendition = rendition;
+                line.LogicalLineId = logicalLineId;
+                line.LogicalOffset = logicalOffset + consumedWidth;
                 x = 0;
             }
 

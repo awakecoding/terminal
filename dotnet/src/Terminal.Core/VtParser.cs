@@ -367,7 +367,7 @@ public sealed class VtParser
         {
             AppendEscIntermediate(value);
         }
-        else if (IsFinal(value))
+        else if (value is >= 0x30 and <= 0x7E)
         {
             _state = State.Ground;
             _dispatch.EscDispatch((char)value, _escIntermediates.AsSpan(0, _escIntermediateCount));

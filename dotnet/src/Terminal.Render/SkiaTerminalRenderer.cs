@@ -134,16 +134,49 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
                 DrawRow(canvas, frame, frame.RowsData[rowIndex], padding);
             }
 
-            DrawRanges(canvas, overlays.Selection, padding);
-            DrawRanges(canvas, overlays.Search, padding);
-            DrawRanges(canvas, overlays.Hyperlink, padding);
+            DrawRanges(canvas, frame, overlays.Selection, padding);
+            DrawRanges(canvas, frame, overlays.Search, padding);
+            DrawRanges(canvas, frame, overlays.Hyperlink, padding);
             DrawComposition(canvas, overlays.Composition, padding);
 
             if (drawCursor && frame.CursorVisible)
             {
                 DrawCursor(canvas, frame, padding);
             }
+
+            DrawEffect(canvas, bounds);
         }
+    }
+
+    private void DrawEffect(SKCanvas canvas, SKRect bounds)
+    {
+        if (_settings.Effect != TerminalRenderEffect.RetroScanlines ||
+            bounds.Width <= 0 ||
+            bounds.Height <= 0)
+        {
+            return;
+        }
+
+        canvas.Save();
+        canvas.ClipRect(bounds);
+        _paint.Style = SKPaintStyle.Fill;
+        _paint.BlendMode = SKBlendMode.SrcOver;
+
+        _paint.Color = new SKColor(16, 48, 64, 18);
+        canvas.DrawRect(bounds, _paint);
+
+        var minimumStride = Math.Max(2, (int)Math.Ceiling(3 * PhysicalPixel));
+        var boundedStride = Math.Max(
+            minimumStride,
+            (int)Math.Ceiling(bounds.Height / 2048f));
+        _paint.Color = new SKColor(0, 0, 0, 48);
+        for (var y = bounds.Top + boundedStride - 1; y < bounds.Bottom; y += boundedStride)
+        {
+            canvas.DrawRect(bounds.Left, y, bounds.Width, PhysicalPixel, _paint);
+        }
+
+        _paint.BlendMode = SKBlendMode.SrcOver;
+        canvas.Restore();
     }
 
     private void DrawComposition(
@@ -220,6 +253,25 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
         float padding)
     {
         var top = padding + ((float)row.RowIndex * (float)CellSize.Height);
+        var restore = row.Rendition != LineRendition.SingleWidth;
+        if (restore)
+        {
+            canvas.Save();
+            canvas.ClipRect(new SKRect(
+                padding,
+                top,
+                padding + (frame.Columns * (float)CellSize.Width),
+                top + (float)CellSize.Height));
+            var doubleHeight = row.Rendition is
+                LineRendition.DoubleHeightTop or LineRendition.DoubleHeightBottom;
+            var anchorY = row.Rendition == LineRendition.DoubleHeightBottom
+                ? top - (float)CellSize.Height
+                : top;
+            canvas.Translate(padding, anchorY);
+            canvas.Scale(2, doubleHeight ? 2 : 1);
+            canvas.Translate(-padding, -top);
+        }
+
         for (var runIndex = 0; runIndex < row.Runs.Count; runIndex++)
         {
             var run = row.Runs[runIndex];
@@ -233,10 +285,15 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
 
             if ((run.Attributes.Flags & CellFlags.Invisible) == 0)
             {
-                DrawClusters(canvas, run, top, padding);
+                DrawClusters(canvas, run, top, padding, drcsGlyphs: frame.DrcsGlyphs);
             }
 
             DrawDecorations(canvas, run, top, padding);
+        }
+
+        if (restore)
+        {
+            canvas.Restore();
         }
     }
 
@@ -286,7 +343,11 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
                 continue;
             }
 
-            var left = padding + (image.AnchorColumn * (float)CellSize.Width);
+            var columnScale = (uint)image.AnchorRow < (uint)frame.RowsData.Count &&
+                              frame.RowsData[image.AnchorRow].Rendition != LineRendition.SingleWidth
+                ? 2
+                : 1;
+            var left = padding + (image.AnchorColumn * columnScale * (float)CellSize.Width);
             var top = padding + (image.AnchorRow * (float)CellSize.Height);
             if (left >= viewport.Right || top >= viewport.Bottom)
             {
@@ -390,6 +451,17 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
     {
         var naturalWidth = (float)bitmap.Width;
         var naturalHeight = (float)bitmap.Height;
+        if (image.Sixel is not null)
+        {
+            var sixelWidth = naturalWidth * (float)(image.CellGeometry.CellWidth / 10);
+            var sixelHeight = naturalHeight * (float)(image.CellGeometry.CellHeight / 20);
+            return SKRect.Create(
+                left,
+                top,
+                Math.Min(Math.Max(0.1f, sixelWidth), bounds.Right - left),
+                Math.Min(Math.Max(0.1f, sixelHeight), bounds.Bottom - top));
+        }
+
         if (image.InlineImage is not { } inline)
         {
             return SKRect.Create(left, top, naturalWidth, naturalHeight);
@@ -444,7 +516,8 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
         TerminalRenderRun run,
         float top,
         float padding,
-        uint? foregroundOverride = null)
+        uint? foregroundOverride = null,
+        IReadOnlyDictionary<int, DrcsGlyph>? drcsGlyphs = null)
     {
         _paint.Color = ToColor(foregroundOverride ?? run.Attributes.Foreground);
         for (var clusterIndex = 0; clusterIndex < run.Clusters.Count; clusterIndex++)
@@ -457,6 +530,18 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
 
             var cellLeft = padding + (cluster.StartColumn * (float)CellSize.Width);
             var cellWidth = cluster.CellCount * (float)CellSize.Width;
+            if (TryDrawDrcs(
+                canvas,
+                run.Text.AsSpan(cluster.TextOffset, cluster.TextLength),
+                cellLeft,
+                top,
+                cellWidth,
+                run.Attributes.Foreground,
+                drcsGlyphs))
+            {
+                continue;
+            }
+
             if (TryDrawPowerline(
                 canvas,
                 run.Text.AsSpan(cluster.TextOffset, cluster.TextLength),
@@ -478,6 +563,65 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
             var centered = Math.Max(0, (cellWidth - glyph.Width) * 0.5f);
             canvas.DrawText(glyph.Blob, cellLeft + centered, top + _baseline, _paint);
         }
+    }
+
+    private bool TryDrawDrcs(
+        SKCanvas canvas,
+        ReadOnlySpan<char> text,
+        float left,
+        float top,
+        float width,
+        uint foreground,
+        IReadOnlyDictionary<int, DrcsGlyph>? glyphs)
+    {
+        if (glyphs is null ||
+            glyphs.Count == 0 ||
+            Rune.DecodeFromUtf16(text, out var rune, out var consumed) != System.Buffers.OperationStatus.Done ||
+            consumed != text.Length)
+        {
+            return false;
+        }
+
+        DrcsGlyph? match = null;
+        foreach (var glyph in glyphs.Values)
+        {
+            if (glyph.PrivateUseRune == rune)
+            {
+                match = glyph;
+                break;
+            }
+        }
+
+        if (match is null || match.Width <= 0 || match.Height <= 0)
+        {
+            return false;
+        }
+
+        var pixelWidth = width / match.Width;
+        var pixelHeight = (float)CellSize.Height / match.Height;
+        var color = ToColor(foreground);
+        var mask = match.AlphaMask.Span;
+        for (var y = 0; y < match.Height; y++)
+        {
+            for (var x = 0; x < match.Width; x++)
+            {
+                var alpha = mask[(y * match.Width) + x];
+                if (alpha == 0)
+                {
+                    continue;
+                }
+
+                _paint.Color = color.WithAlpha((byte)((color.Alpha * alpha) / 255));
+                canvas.DrawRect(
+                    left + (x * pixelWidth),
+                    top + (y * pixelHeight),
+                    pixelWidth,
+                    pixelHeight,
+                    _paint);
+            }
+        }
+
+        return true;
     }
 
     private bool TryDrawPowerline(
@@ -674,14 +818,19 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
 
     private void DrawRanges(
         SKCanvas canvas,
+        TerminalRenderFrame frame,
         IReadOnlyList<TerminalCellRange> ranges,
         float padding)
     {
         for (var index = 0; index < ranges.Count; index++)
         {
             var range = ranges[index];
-            var start = Math.Max(0, range.StartColumn);
-            var end = Math.Max(start, range.EndColumn);
+            var scale = (uint)range.Row < (uint)frame.RowsData.Count &&
+                        frame.RowsData[range.Row].Rendition != LineRendition.SingleWidth
+                ? 2
+                : 1;
+            var start = Math.Max(0, range.StartColumn * scale);
+            var end = Math.Max(start, (range.EndColumn * scale) + scale - 1);
             _paint.Color = ToColor(range.Color);
             canvas.DrawRect(
                 padding + (start * (float)CellSize.Width),
@@ -694,9 +843,13 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
 
     private void DrawCursor(SKCanvas canvas, TerminalRenderFrame frame, float padding)
     {
-        var left = padding + (frame.CursorX * (float)CellSize.Width);
+        var horizontalScale = (uint)frame.CursorY < (uint)frame.RowsData.Count &&
+                              frame.RowsData[frame.CursorY].Rendition != LineRendition.SingleWidth
+            ? 2
+            : 1;
+        var left = padding + (frame.CursorX * horizontalScale * (float)CellSize.Width);
         var top = padding + (frame.CursorY * (float)CellSize.Height);
-        var width = (float)CellSize.Width;
+        var width = horizontalScale * (float)CellSize.Width;
         var height = (float)CellSize.Height;
         _paint.Color = ToColor(frame.CursorColor);
         _paint.Style = SKPaintStyle.Fill;
@@ -762,7 +915,8 @@ public sealed class SkiaTerminalRenderer : ITerminalRenderer, IDisposable
                 run,
                 top,
                 padding,
-                CursorTextColor(frame.CursorColor, run.Attributes.Background));
+                CursorTextColor(frame.CursorColor, run.Attributes.Background),
+                frame.DrcsGlyphs);
             canvas.Restore();
             return;
         }

@@ -12,6 +12,7 @@ public partial class App : Application
     private readonly HashSet<Window> _trayWindows = [];
     private readonly Dictionary<Window, WindowState> _windowStates = [];
     private IClassicDesktopStyleApplicationLifetime? _desktop;
+    private TerminalWindowRouter? _router;
     private bool _alwaysShowNotificationIcon;
 
     internal static CliInvocation? InitialInvocation { get; set; }
@@ -24,10 +25,15 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             _desktop = desktop;
-            var router = new TerminalWindowRouter(desktop, ConfigureWindow);
-            BrokerHandler?.SetHandler(router);
-            desktop.MainWindow = router.CreateInitial(
+            _router = new TerminalWindowRouter(desktop, ConfigureWindow);
+            BrokerHandler?.SetHandler(_router);
+            desktop.MainWindow = _router.CreateInitial(
                 InitialInvocation ?? new CliParser().Parse([]).Invocation!);
+            desktop.Exit += (_, _) =>
+            {
+                _router?.Dispose();
+                _router = null;
+            };
         }
 
         base.OnFrameworkInitializationCompleted();

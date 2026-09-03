@@ -58,6 +58,10 @@ public sealed class TermControl : Avalonia.Controls.Control
     private TerminalSelection? _selection;
     private TerminalSelectionPoint _markCaret;
     private bool _isMarkMode;
+    private readonly List<TerminalScrollMark> _userScrollMarks = [];
+    private readonly HashSet<(int Line, TerminalScrollMarkKind Kind)> _clearedScrollMarks = [];
+    private readonly HashSet<Key> _pressedKeys = [];
+    private string? _pendingEncodedTextInput;
     private TerminalCompositionOverlay? _composition;
     private readonly TerminalTextInputMethodClient _textInputMethodClient;
     private Point? _touchPoint;
@@ -66,6 +70,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     private long _selectionCoordinateVersion;
     private bool _selectionAlternateBuffer;
     private bool _rendererDisposed;
+    private bool _shaderEffectsEnabled = true;
 
     public TermControl(ITerminalEngine? engine = null)
     {
@@ -113,6 +118,10 @@ public sealed class TermControl : Avalonia.Controls.Control
             Dispatcher.UIThread.Post(() => SetClipboardFromTerminalObservedAsync(text));
         Engine.NotificationRequested += (_, notification) =>
             Dispatcher.UIThread.Post(() => NotificationRequested?.Invoke(this, notification));
+        Engine.Diagnostic += (_, diagnostic) =>
+            Dispatcher.UIThread.Post(() => NotificationRequested?.Invoke(
+                this,
+                new TerminalNotification("Terminal engine limitation", diagnostic.Message)));
     }
 
     public ITerminalEngine Engine { get; }
@@ -122,6 +131,8 @@ public sealed class TermControl : Avalonia.Controls.Control
     public ProfileSettings? Profile { get; private set; }
     public bool IsRunning => _connection?.IsRunning == true;
     public bool HasSelection => _selection is not null;
+    public bool HasSupportedShaderEffects => Profile?.RetroTerminalEffect == true;
+    public bool ShaderEffectsEnabled => _shaderEffectsEnabled && HasSupportedShaderEffects;
     public TerminalSelection? Selection => _selection;
     public bool IsMarkMode => _isMarkMode;
     public string AccessibleName
@@ -178,6 +189,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     public async Task StartAsync(ProfileSettings profile, int columns, int rows)
     {
         Profile = profile;
+        _shaderEffectsEnabled = true;
         _defaultFontSize = profile.FontSize <= 0 ? 12 : profile.FontSize;
         _fontSize = _defaultFontSize;
         ConfigureRenderer(profile);
@@ -187,7 +199,8 @@ public sealed class TermControl : Avalonia.Controls.Control
         Engine.Scheme = profile.ResolveScheme();
         Engine.ConfigureOptionalFeatures(
             profile.AllowVtClipboardWrite,
-            profile.AllowOscNotifications);
+            profile.AllowOscNotifications,
+            profile.AllowKittyKeyboardMode);
         ResizeEngine(columns, rows);
 
         await StartConnectionAsync(profile, columns, rows).ConfigureAwait(true);
@@ -687,6 +700,19 @@ public sealed class TermControl : Avalonia.Controls.Control
         InvalidateVisual();
     }
 
+    public bool ToggleShaderEffects()
+    {
+        if (!HasSupportedShaderEffects)
+        {
+            return false;
+        }
+
+        _shaderEffectsEnabled = !_shaderEffectsEnabled;
+        ConfigureRenderer(Profile!);
+        InvalidateVisual();
+        return _shaderEffectsEnabled;
+    }
+
     public void ScrollBy(int rows)
     {
         SetScrollOffset(Engine.ScrollOffset + rows);
@@ -882,28 +908,113 @@ public sealed class TermControl : Avalonia.Controls.Control
             return;
         }
 
-        var vt = KeyMapper.ToVt(e.Key, e.KeyModifiers, e.PhysicalKey, e.KeySymbol, Engine.ApplicationCursorKeys);
+        var vt = ProcessKeyDownInput(
+            e.Key,
+            e.KeyModifiers,
+            e.PhysicalKey,
+            e.KeySymbol,
+            Engine.InputMode);
         if (vt is not null)
         {
-            _connection?.Write(vt);
-            SetScrollOffset(0);
             e.Handled = true;
         }
 
         base.OnKeyDown(e);
     }
 
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        _pressedKeys.Remove(e.Key);
+        var mode = Engine.InputMode;
+        if (mode.Win32InputMode || mode.KittyFlags.HasFlag(KittyKeyboardFlags.ReportEventTypes))
+        {
+            var vt = KeyMapper.ToVt(
+                e.Key,
+                e.KeyModifiers,
+                e.PhysicalKey,
+                e.KeySymbol,
+                mode,
+                TerminalKeyEventType.Release);
+            if (vt is not null)
+            {
+                _connection?.Write(vt);
+                e.Handled = true;
+            }
+        }
+
+        base.OnKeyUp(e);
+    }
+
     protected override void OnTextInput(TextInputEventArgs e)
     {
-        if (!string.IsNullOrEmpty(e.Text) && e.Text != "\r" && e.Text != "\n" && e.Text != "\t")
+        if (ProcessTextInput(e.Text, Engine.InputMode) is not null)
         {
-            _connection?.Write(e.Text);
-            SetScrollOffset(0);
             e.Handled = true;
         }
 
         base.OnTextInput(e);
     }
+
+    internal string? ProcessKeyDownInput(
+        Key key,
+        KeyModifiers modifiers,
+        PhysicalKey physicalKey,
+        string? keySymbol,
+        TerminalInputMode mode)
+    {
+        _pendingEncodedTextInput = null;
+        var eventType = _pressedKeys.Add(key)
+            ? TerminalKeyEventType.Press
+            : TerminalKeyEventType.Repeat;
+        var vt = KeyMapper.ToVt(
+            key,
+            modifiers,
+            physicalKey,
+            keySymbol,
+            mode,
+            eventType);
+        if (vt is null)
+        {
+            return null;
+        }
+
+        _connection?.Write(vt);
+        SetScrollOffset(0);
+        if (IsTextInputCandidate(keySymbol) &&
+            (mode.Win32InputMode ||
+             mode.ModifyOtherKeys > 0 ||
+             (mode.KittyFlags != KittyKeyboardFlags.None &&
+              vt.StartsWith("\u001b[", StringComparison.Ordinal) &&
+              vt.EndsWith('u'))))
+        {
+            _pendingEncodedTextInput = keySymbol;
+        }
+        return vt;
+    }
+
+    internal string? ProcessTextInput(string? text, TerminalInputMode mode)
+    {
+        if (string.IsNullOrEmpty(text) || text is "\r" or "\n" or "\t")
+        {
+            return null;
+        }
+
+        var pending = _pendingEncodedTextInput;
+        _pendingEncodedTextInput = null;
+        if (string.Equals(pending, text, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var output = KeyMapper.EncodeKittyTextInput(text, mode.KittyFlags) ?? text;
+        _connection?.Write(output);
+        SetScrollOffset(0);
+        return output;
+    }
+
+    private static bool IsTextInputCandidate(string? text) =>
+        !string.IsNullOrEmpty(text) &&
+        text.EnumerateRunes().All(static rune => rune.Value is > 0x1F and not 0x7F);
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
@@ -1164,7 +1275,15 @@ public sealed class TermControl : Avalonia.Controls.Control
         const double padding = 8;
         var x = (int)Math.Floor((point.X - padding) / _cellWidth);
         var y = (int)Math.Floor((point.Y - padding) / _cellHeight);
-        return (Math.Clamp(x, 0, Engine.Columns - 1), Math.Clamp(y, 0, Engine.Rows - 1));
+        y = Math.Clamp(y, 0, Engine.Rows - 1);
+        var snapshot = Engine.CreateSnapshot().Buffer;
+        if ((uint)y < (uint)snapshot.Lines.Count &&
+            snapshot.Lines[y].Rendition != LineRendition.SingleWidth)
+        {
+            x /= 2;
+        }
+
+        return (Math.Clamp(x, 0, Engine.Columns - 1), y);
     }
 
     private void MeasureGlyph()
@@ -1217,10 +1336,168 @@ public sealed class TermControl : Avalonia.Controls.Control
     public IReadOnlyList<TerminalScrollMark> GetScrollMarks()
     {
         var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
-        return TerminalInteractionModel.GetScrollMarks(
-            snapshot,
-            _search.Matches,
-            _search.CurrentIndex);
+        var marks = TerminalInteractionModel.GetScrollMarks(
+                snapshot,
+                _search.Matches,
+                _search.CurrentIndex)
+            .Where(mark => !_clearedScrollMarks.Contains((mark.Line, mark.Kind)))
+            .Concat(_userScrollMarks)
+            .OrderBy(static mark => mark.Line)
+            .ThenBy(static mark => mark.Kind)
+            .ToArray();
+        return marks;
+    }
+
+    public void AddMark(string? color = null)
+    {
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        var line = _selection?.Anchor.Line ??
+                   snapshot.HistoryCount - Engine.ScrollOffset + Engine.CursorY;
+        line = Math.Clamp(line, 0, Math.Max(0, snapshot.Lines.Count - 1));
+        _userScrollMarks.RemoveAll(mark => mark.Line == line);
+        _userScrollMarks.Add(new TerminalScrollMark(
+            line,
+            (double)line / Math.Max(1, snapshot.Lines.Count - 1),
+            TerminalScrollMarkKind.User,
+            Color: color));
+        ScrollMarksChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void ClearMark()
+    {
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        var start = _selection is null
+            ? snapshot.HistoryCount - Engine.ScrollOffset + Engine.CursorY
+            : Math.Min(_selection.Anchor.Line, _selection.Active.Line);
+        var end = _selection is null
+            ? start
+            : Math.Max(_selection.Anchor.Line, _selection.Active.Line);
+        _userScrollMarks.RemoveAll(mark => mark.Line >= start && mark.Line <= end);
+        foreach (var mark in TerminalInteractionModel.GetScrollMarks(snapshot, [], -1)
+                     .Where(mark => mark.Line >= start && mark.Line <= end))
+        {
+            _clearedScrollMarks.Add((mark.Line, mark.Kind));
+        }
+
+        ScrollMarksChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void ClearAllMarks()
+    {
+        var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+        foreach (var mark in TerminalInteractionModel.GetScrollMarks(snapshot, [], -1))
+        {
+            _clearedScrollMarks.Add((mark.Line, mark.Kind));
+        }
+
+        _userScrollMarks.Clear();
+        ScrollMarksChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void ScrollToMark(ScrollToMarkDirection direction)
+    {
+        var marks = GetScrollMarks()
+            .Where(static mark => mark.Kind is not
+                TerminalScrollMarkKind.SearchMatch and not
+                TerminalScrollMarkKind.CurrentSearchMatch)
+            .OrderBy(static mark => mark.Line)
+            .ToArray();
+        var currentTop = Engine.HistoryCount - Engine.ScrollOffset;
+        var target = direction switch
+        {
+            ScrollToMarkDirection.First => marks.FirstOrDefault(),
+            ScrollToMarkDirection.Last => marks.LastOrDefault(),
+            ScrollToMarkDirection.Next => marks.FirstOrDefault(mark => mark.Line > currentTop),
+            _ => marks.LastOrDefault(mark => mark.Line < currentTop),
+        };
+        if (target is not null)
+        {
+            SetScrollOffset(Engine.HistoryCount - target.Line);
+        }
+        else
+        {
+            SetScrollOffset(direction is ScrollToMarkDirection.Next or ScrollToMarkDirection.Last
+                ? 0
+                : Engine.HistoryCount);
+        }
+    }
+
+    public bool ColorSelection(
+        string? foreground,
+        string? background,
+        MatchMode matchMode)
+    {
+        if (_selection is null ||
+            (!TryParseOptionalColor(foreground, out var foregroundColor) ||
+             !TryParseOptionalColor(background, out var backgroundColor)) ||
+            (foregroundColor is null && backgroundColor is null))
+        {
+            return false;
+        }
+
+        IReadOnlyList<TerminalSelection> selections = [_selection];
+        if (matchMode == MatchMode.All && BuildCopyPayload()?.Text is { Length: > 0 } text)
+        {
+            var snapshot = Engine.CreateSnapshot(includeHistory: true).Buffer;
+            selections = TextBufferSearch.FindAll(
+                    snapshot,
+                    text,
+                    new TextSearchOptions(CaseSensitive: true))
+                .Select(range => ToSelection(range, snapshot.Columns))
+                .ToArray();
+        }
+
+        foreach (var selection in selections)
+        {
+            var start = Min(selection.Anchor, selection.Active);
+            var end = Max(selection.Anchor, selection.Active);
+            Engine.Buffer.ApplyColors(
+                new BufferPosition(start.Line, start.Column),
+                new BufferPosition(end.Line, end.Column),
+                foregroundColor,
+                backgroundColor);
+        }
+
+        ClearSelection();
+        InvalidateVisual();
+        return true;
+    }
+
+    private static bool TryParseOptionalColor(string? value, out TermColor? color)
+    {
+        color = null;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return true;
+        }
+
+        if (!ColorScheme.TryParseXtermColor(value, out var parsed))
+        {
+            return false;
+        }
+
+        color = TermColor.FromRgb(
+            (byte)(parsed >> 16),
+            (byte)(parsed >> 8),
+            (byte)parsed);
+        return true;
+    }
+
+    private static TerminalSelection ToSelection(BufferRange range, int columns)
+    {
+        var end = range.End;
+        if (end.Column > 0)
+        {
+            end = end with { Column = end.Column - 1 };
+        }
+        else if (end.Line > range.Start.Line)
+        {
+            end = new BufferPosition(end.Line - 1, columns - 1);
+        }
+
+        return new TerminalSelection(
+            new TerminalSelectionPoint(range.Start.Column, range.Start.Line),
+            new TerminalSelectionPoint(end.Column, end.Line));
     }
 
     public TerminalHyperlinkContext? HitTestHyperlink(int viewportColumn, int viewportRow)
@@ -1397,21 +1674,33 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     private void ConfigureRenderer(ProfileSettings profile)
     {
-        _renderer.Configure(CreateRendererSettings(profile, _fontSize));
+        _renderer.Configure(CreateRendererSettings(profile, _fontSize, _shaderEffectsEnabled));
     }
 
     private static TerminalRendererSettings CreateRendererSettings(
         ProfileSettings profile,
-        double fontSize) =>
+        double fontSize,
+        bool shaderEffectsEnabled = true) =>
         new()
         {
             FontFamily = profile.FontFace,
             FontSize = (float)fontSize,
             FontWeight = profile.FontWeight,
+            FallbackFontFamilies =
+            [
+                "Cascadia Mono",
+                "Consolas",
+                "Noto Color Emoji",
+                "Segoe UI Emoji",
+            ],
+            Effect = profile.RetroTerminalEffect && shaderEffectsEnabled
+                ? TerminalRenderEffect.RetroScanlines
+                : TerminalRenderEffect.None,
             FontSources =
             [
                 new TerminalFontSource("Cascadia Mono", false, OpenCascadiaMono),
                 new TerminalFontSource("Cascadia Mono", true, OpenCascadiaMonoItalic),
+                new TerminalFontSource("Noto Color Emoji", false, OpenNotoColorEmoji),
             ],
         };
 
@@ -1675,6 +1964,9 @@ public sealed class TermControl : Avalonia.Controls.Control
 
     private static Stream OpenCascadiaMonoItalic() =>
         AssetLoader.Open(new Uri("avares://Terminal.Control/Assets/Fonts/CascadiaMonoItalic.ttf"));
+
+    private static Stream OpenNotoColorEmoji() =>
+        AssetLoader.Open(new Uri("avares://Terminal.Control/Assets/Fonts/NotoColorEmoji.ttf"));
 
     private static TerminalCloseOnExitPolicy ToConnectionPolicy(CloseOnExitMode mode) =>
         mode switch

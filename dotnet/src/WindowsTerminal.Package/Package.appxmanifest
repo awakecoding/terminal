@@ -4,9 +4,12 @@
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
   xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap uap3 uap10 desktop rescap">
+  IgnorableNamespaces="uap uap3 uap10 com desktop desktop4 desktop5 rescap">
 
   <Identity
     Name="Awakecoding.WindowsTerminal.Dev"
@@ -68,6 +71,38 @@
           EntryPoint="Windows.FullTrustApplication">
           <uap3:Protocol Name="wt-dotnet" Parameters="&quot;%1&quot;" />
         </uap3:Extension>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="Windows Terminal (.NET) Explorer command">
+              <com:Class
+                Id="f4a5f6ac-02b1-46bd-939d-535d391be151"
+                Path="WindowsTerminalShellExt.dll"
+                ThreadingModel="STA" />
+              <com:Class
+                Id="a3aeb121-45d9-4cd9-a278-4b43d19b95b1"
+                Path="WindowsTerminalShellExt.dll"
+                ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type="Directory">
+              <desktop5:Verb
+                Id="OpenWindowsTerminalDotNetHere"
+                Clsid="f4a5f6ac-02b1-46bd-939d-535d391be151" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type="Directory\Background">
+              <desktop5:Verb
+                Id="OpenWindowsTerminalDotNetHere"
+                Clsid="f4a5f6ac-02b1-46bd-939d-535d391be151" />
+            </desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+        <desktop:Extension Category="windows.toastNotificationActivation">
+          <desktop:ToastNotificationActivation
+            ToastActivatorCLSID="a3aeb121-45d9-4cd9-a278-4b43d19b95b1" />
+        </desktop:Extension>
       </Extensions>
     </Application>
   </Applications>

@@ -2,7 +2,7 @@
   <PropertyGroup>
     <RootNamespace>WindowsTerminal.Package</RootNamespace>
     <AssemblyName>WindowsTerminal.Package</AssemblyName>
-    <Description>MSIX identity metadata and packaged capability detection.</Description>
+    <Description>MSIX identity metadata and NativeAOT-safe Windows shell helper boundaries.</Description>
   </PropertyGroup>
 
   <ItemGroup>

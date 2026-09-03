@@ -258,6 +258,7 @@ public sealed class SixelDecoder
                 height,
                 _aspectRatio,
                 _transparentBackground,
+                _cursorY,
                 result,
                 (uint[])_palette.Clone());
             return true;

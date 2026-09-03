@@ -1,0 +1,4 @@
+LIBRARY WindowsTerminalShellExt
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE

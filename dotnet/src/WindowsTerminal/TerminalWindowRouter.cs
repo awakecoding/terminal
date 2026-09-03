@@ -1,18 +1,43 @@
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
+using Microsoft.Terminal.Settings;
 using WindowsTerminal.Broker;
 using WindowsTerminal.Cli;
+using WindowsTerminal.Platform;
 using WindowsTerminal.Routing;
 using WindowsTerminal.Views;
 
 namespace WindowsTerminal;
 
-internal sealed class TerminalWindowRouter(
-    IClassicDesktopStyleApplicationLifetime desktop,
-    Action<MainWindow>? windowCreated = null) : IBrokerRequestHandler
+internal sealed class TerminalWindowRouter : IBrokerRequestHandler, IDisposable
 {
+    private readonly IClassicDesktopStyleApplicationLifetime _desktop;
+    private readonly Action<MainWindow>? _windowCreated;
     private readonly List<MainWindow> _windows = [];
+    private readonly ApplicationStateStore _stateStore;
+    private readonly GlobalWindowActionRouter _windowActions;
+    private readonly GlobalHotkeyManager _globalHotkeys;
     private int _nextWindowId = 1;
+
+    public TerminalWindowRouter(
+        IClassicDesktopStyleApplicationLifetime desktop,
+        Action<MainWindow>? windowCreated = null,
+        ApplicationStateStore? stateStore = null,
+        IGlobalHotkeyBackend? globalHotkeyBackend = null)
+    {
+        _desktop = desktop;
+        _windowCreated = windowCreated;
+        _stateStore = stateStore ?? SettingsService.LoadApplicationState();
+        _windowActions = new GlobalWindowActionRouter(CreateSummonWindow);
+        _globalHotkeys = new GlobalHotkeyManager(
+            globalHotkeyBackend ?? GlobalHotkeyBackend.CreateDefault(),
+            async args =>
+            {
+                _ = await OnUiThreadAsync(
+                    () => _windowActions.SummonAsync(null, args),
+                    CancellationToken.None).ConfigureAwait(false);
+            });
+    }
 
     public MainWindow CreateInitial(CliInvocation invocation) =>
         CreateWindow(invocation, WindowNameForNewTarget(invocation.TargetWindow));
@@ -30,16 +55,6 @@ internal sealed class TerminalWindowRouter(
         catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException)
         {
             return new(BrokerStatus.InvalidRequest, $"Invalid activation payload: {ex.Message}");
-        }
-
-        if (invocation.SaveRequest is not null)
-        {
-            return new(BrokerStatus.Unsupported, "The save command is not available in this phase.");
-        }
-
-        if (invocation.SavedLayout is not null)
-        {
-            return new(BrokerStatus.Unsupported, "Persisted layout activation is not available in this phase.");
         }
 
         return await OnUiThreadAsync(
@@ -61,12 +76,24 @@ internal sealed class TerminalWindowRouter(
             "0" or "use-any" or "use-existing" => _windows.LastOrDefault(),
             _ => FindWindow(normalized),
         };
+        if (invocation.SavedLayout is not null)
+        {
+            target = null;
+        }
 
         if (target is null &&
+            invocation.SavedLayout is null &&
             (normalized.Equals("use-existing", StringComparison.OrdinalIgnoreCase) ||
              (int.TryParse(normalized, out var requestedId) && requestedId > 0)))
         {
             return new(BrokerStatus.WindowNotFound, $"Terminal window '{normalized}' was not found.");
+        }
+
+        if (target is null && invocation.SaveRequest is not null)
+        {
+            return new(
+                BrokerStatus.WindowNotFound,
+                "No terminal window is available to save the requested command.");
         }
 
         if (target is null)
@@ -94,11 +121,12 @@ internal sealed class TerminalWindowRouter(
     }
 
     private MainWindow CreateWindow(CliInvocation invocation, string name)
-        => CreateWindow(ToActivation(invocation), name);
+        => CreateWindow(PrepareActivation(invocation, name), name);
 
     private MainWindow CreateWindow(TerminalWindowActivation activation, string name)
     {
-        var window = new MainWindow(
+        MainWindow? window = null;
+        window = new MainWindow(
             _nextWindowId++,
             name,
             activation,
@@ -107,18 +135,74 @@ internal sealed class TerminalWindowRouter(
                 var child = CreateWindow(childActivation, string.Empty);
                 child.Show();
             },
-            commandLineParser: ParseCommandLine);
+            commandLineParser: ParseCommandLine,
+            stateStore: _stateStore,
+            workspaceRequested: OpenWorkspace,
+            windowNameValidator: name => _windows.All(window =>
+                !window.WindowName.Equals(name, StringComparison.OrdinalIgnoreCase)),
+            windowIdentityProvider: () => _windows.Select(window =>
+                    string.IsNullOrWhiteSpace(window.WindowName)
+                        ? $"Window {window.WindowId}"
+                        : $"{window.WindowName} ({window.WindowId})")
+                .ToArray(),
+            summonRequested: args => _windowActions.SummonAsync(window, args),
+            settingsChanged: settings => TraceHotkeyResults(_globalHotkeys.Apply(settings.ActionMap)));
         _windows.Add(window);
-        windowCreated?.Invoke(window);
+        _windowActions.Add(window);
+        _windowCreated?.Invoke(window);
         window.Closed += (_, _) =>
         {
             _windows.Remove(window);
-            if (ReferenceEquals(desktop.MainWindow, window))
+            _windowActions.Remove(window);
+            if (ReferenceEquals(_desktop.MainWindow, window))
             {
-                desktop.MainWindow = _windows.FirstOrDefault();
+                _desktop.MainWindow = _windows.FirstOrDefault();
             }
         };
         return window;
+    }
+
+    private IGlobalWindowActionTarget CreateSummonWindow(string name)
+    {
+        var activation = new TerminalWindowActivation(
+            null,
+            null,
+            null,
+            null,
+            TerminalWindowLaunchMode.Default,
+            [new ActionAndArgs(ShortcutAction.NewTab, new NewTabArgs())]);
+        return CreateWindow(activation, name);
+    }
+
+    private static void TraceHotkeyResults(
+        IReadOnlyList<GlobalHotkeyRegistrationResult> results)
+    {
+        foreach (var result in results.Where(static result =>
+                     result.Status != GlobalHotkeyRegistrationStatus.Registered))
+        {
+            System.Diagnostics.Trace.TraceWarning(result.Diagnostic);
+        }
+    }
+
+    public void Dispose() => _globalHotkeys.Dispose();
+
+    private void OpenWorkspace(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        if (FindWindow(name) is { } existing)
+        {
+            existing.Show();
+            existing.Activate();
+            return;
+        }
+
+        var activation = PrepareWorkspaceActivation(name);
+        var window = CreateWindow(activation, name);
+        window.Show();
     }
 
     private static TerminalCommandLineParseResult ParseCommandLine(string commandLine)
@@ -131,9 +215,9 @@ internal sealed class TerminalWindowRouter(
             return new(false, parsed.Message, []);
         }
 
-        if (parsed.Invocation.SavedLayout is not null || parsed.Invocation.SaveRequest is not null)
+        if (parsed.Invocation.SavedLayout is not null)
         {
-            return new(false, "Saved layouts and workspace save are not available.", []);
+            return new(false, "Saved layouts must be opened as a new window.", []);
         }
 
         if (!string.IsNullOrWhiteSpace(parsed.Invocation.TargetWindow) ||
@@ -149,7 +233,13 @@ internal sealed class TerminalWindowRouter(
                 []);
         }
 
-        return new(true, "Command line parsed.", parsed.Invocation.Actions);
+        return new(
+            true,
+            "Command line parsed.",
+            parsed.Invocation.Actions,
+            parsed.Invocation.SaveRequest is { } save
+                ? new TerminalSaveRequest(save.Name, save.KeyChord, save.Commandline)
+                : null);
     }
 
     private MainWindow? FindWindow(string target)
@@ -179,7 +269,43 @@ internal sealed class TerminalWindowRouter(
             invocation.Columns,
             invocation.Rows,
             (TerminalWindowLaunchMode)(int)invocation.LaunchMode,
-            invocation.Actions);
+            invocation.Actions,
+            SaveRequest: invocation.SaveRequest is { } save
+                ? new TerminalSaveRequest(save.Name, save.KeyChord, save.Commandline)
+                : null);
+
+    private TerminalWindowActivation PrepareActivation(CliInvocation invocation, string name)
+    {
+        var activation = ToActivation(invocation);
+        if (invocation.SavedLayout is { } savedIndex)
+        {
+            return TerminalLayoutActivationResolver.ResolveSavedSlot(
+                _stateStore,
+                savedIndex,
+                activation);
+        }
+
+        return string.IsNullOrWhiteSpace(name)
+            ? activation
+            : PrepareWorkspaceActivation(name, activation);
+    }
+
+    private TerminalWindowActivation PrepareWorkspaceActivation(
+        string name,
+        TerminalWindowActivation? fallback = null)
+    {
+        var activation = fallback ?? new TerminalWindowActivation(
+            null,
+            null,
+            null,
+            null,
+            TerminalWindowLaunchMode.Default,
+            [new ActionAndArgs(ShortcutAction.NewTab, new NewTabArgs())]);
+        return TerminalLayoutActivationResolver.ResolveWorkspace(
+            _stateStore,
+            name,
+            activation);
+    }
 
     private static async ValueTask<T> OnUiThreadAsync<T>(
         Func<ValueTask<T>> action,

@@ -11,6 +11,7 @@ public sealed class SettingsNavigationItem
 {
     public required SettingsPage Page { get; init; }
     public required string Icon { get; init; }
+    public required string IconFontFamily { get; init; }
     public required string Title { get; init; }
     public string GroupHeader { get; init; } = string.Empty;
     public bool HasGroupHeader => !string.IsNullOrEmpty(GroupHeader);
@@ -273,11 +274,14 @@ public sealed class SettingsEditorViewModel : ObservableObject
         string title,
         string keywords,
         object viewModel,
-        string groupHeader = "") =>
-        new()
+        string groupHeader = "")
+    {
+        var windows = OperatingSystem.IsWindows();
+        return new()
         {
             Page = page,
-            Icon = page switch
+            IconFontFamily = windows ? "Segoe Fluent Icons" : "Cascadia Mono",
+            Icon = windows ? page switch
             {
                 SettingsPage.Startup => "\uE7B5",
                 SettingsPage.Interaction => "\uE8D4",
@@ -293,12 +297,29 @@ public sealed class SettingsEditorViewModel : ObservableObject
                 SettingsPage.Compatibility => "\uE713",
                 SettingsPage.Extensions => "\uE71B",
                 _ => "\uE946",
+            } : page switch
+            {
+                SettingsPage.Startup => ">",
+                SettingsPage.Interaction => "<>",
+                SettingsPage.Appearance => "*",
+                SettingsPage.Profiles => "@",
+                SettingsPage.ProfileAppearance => "+",
+                SettingsPage.ProfileTerminal => "_",
+                SettingsPage.ProfileAdvanced => "#",
+                SettingsPage.ColorSchemes => "%",
+                SettingsPage.Actions => "!",
+                SettingsPage.NewTabMenu => "+",
+                SettingsPage.Rendering => "=",
+                SettingsPage.Compatibility => "?",
+                SettingsPage.Extensions => "...",
+                _ => ".",
             },
             Title = title,
             GroupHeader = groupHeader,
             Keywords = keywords,
             ViewModel = viewModel,
         };
+    }
 
     private void FilterNavigation()
     {

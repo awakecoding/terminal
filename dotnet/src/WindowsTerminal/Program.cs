@@ -1,6 +1,7 @@
 using Avalonia;
 using WindowsTerminal.Broker;
 using WindowsTerminal.Cli;
+using WindowsTerminal.Package;
 
 namespace WindowsTerminal;
 
@@ -9,7 +10,53 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        var parsed = new CliParser().Parse(args);
+        CliInvocation? directActivation = null;
+        if (args is ["--toast-activation", var encodedActivation])
+        {
+            if (!ToastActivationCodec.TryParse(
+                    encodedActivation,
+                    out var activation,
+                    out var activationError))
+            {
+                Console.Error.WriteLine($"wt: {activationError}");
+                return 2;
+            }
+
+            directActivation = new(
+                activation!.TargetWindow,
+                null,
+                null,
+                null,
+                null,
+                CliLaunchMode.Focus,
+                null,
+                []);
+        }
+        else if (
+            WindowsTerminal.Platform.LinuxDesktopIntegration.TryNormalizeProtocolActivation(
+                args,
+                out var protocolArgs,
+                out var protocolError))
+        {
+            if (protocolError is not null)
+            {
+                Console.Error.WriteLine($"wt: {protocolError}");
+                return 2;
+            }
+
+            args = protocolArgs;
+        }
+
+        if (args is ["--diagnose-desktop"])
+        {
+            Console.Out.WriteLine(new WindowsTerminal.Platform.PlatformLauncher()
+                .GetCapabilityReport());
+            return 0;
+        }
+
+        var parsed = directActivation is null
+            ? new CliParser().Parse(args)
+            : new CliParseResult(0, "Validated toast activation.", false, directActivation);
         if (parsed.ShouldExit)
         {
             var writer = parsed.ExitCode == 0 ? Console.Out : Console.Error;
@@ -18,12 +65,6 @@ internal static class Program
         }
 
         var invocation = parsed.Invocation!;
-        if (invocation.SavedLayout is not null)
-        {
-            Console.Error.WriteLine("wt: persisted layout activation is not available in this phase.");
-            return 4;
-        }
-
         var deferredHandler = new DeferredBrokerHandler();
         var broker = BrokerHost.TryCreate(deferredHandler);
         if (broker is null)
@@ -46,11 +87,42 @@ internal static class Program
             return 3;
         }
 
-        if (invocation.SaveRequest is not null)
+        if (invocation.SaveRequest is { Commandline.Length: > 0 } saveRequest)
         {
             broker.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            Console.Error.WriteLine("wt: the save command is not available in this phase.");
-            return 4;
+            try
+            {
+                var settings = Microsoft.Terminal.Settings.SettingsService.Load();
+                Microsoft.Terminal.Settings.SettingsSnippetStore.Add(
+                    settings,
+                    saveRequest.Name,
+                    saveRequest.KeyChord,
+                    saveRequest.Commandline);
+                Microsoft.Terminal.Settings.SettingsService.Save(settings);
+                if (OperatingSystem.IsWindows())
+                {
+                    var shellResult = new WindowsShellIntegrationClient().RefreshJumpList(
+                        settings.Profiles
+                            .Where(static profile => !profile.Hidden && !profile.Orphaned)
+                            .Select(static profile => new JumpListProfile(
+                                profile.Name,
+                                profile.Guid ?? string.Empty,
+                                profile.Icon)));
+                    if (!shellResult.Succeeded)
+                    {
+                        Console.Error.WriteLine($"wt: settings saved; jump-list refresh unavailable: {shellResult.Diagnostic}");
+                    }
+                }
+                return 0;
+            }
+            catch (Exception ex) when (ex is
+                ArgumentException or
+                IOException or
+                UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"wt: {ex.Message}");
+                return 1;
+            }
         }
 
         App.InitialInvocation = invocation;

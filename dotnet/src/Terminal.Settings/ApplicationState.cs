@@ -174,30 +174,103 @@ public sealed class ApplicationStateStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(layout);
+        Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
+        using var stateLock = AcquireStateLock();
+        if (File.Exists(StatePath))
+        {
+            Data = Load(StatePath, out var diagnostic);
+            LastDiagnostic = diagnostic;
+        }
+
         Data.PersistedWorkspaces[name] = layout;
+        SaveUnlocked();
     }
 
-    public bool RemoveWorkspace(string name) => Data.PersistedWorkspaces.Remove(name);
+    public IReadOnlyList<string> GetWorkspaceNames()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
+        using var stateLock = AcquireStateLock();
+        Data = Load(StatePath, out var diagnostic);
+        LastDiagnostic = diagnostic;
+        return Data.PersistedWorkspaces.Keys
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public WindowLayoutState? GetWorkspace(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
+        using var stateLock = AcquireStateLock();
+        Data = Load(StatePath, out var diagnostic);
+        LastDiagnostic = diagnostic;
+        return Data.PersistedWorkspaces.GetValueOrDefault(name);
+    }
+
+    public bool RemoveWorkspace(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return MutateWorkspace(data => data.PersistedWorkspaces.Remove(name));
+    }
 
     public bool RenameWorkspace(string oldName, string newName)
     {
         if (string.IsNullOrEmpty(oldName) ||
-            string.Equals(oldName, newName, StringComparison.Ordinal) ||
-            !Data.PersistedWorkspaces.Remove(oldName, out var layout))
+            string.Equals(oldName, newName, StringComparison.Ordinal))
         {
             return false;
         }
 
-        if (!string.IsNullOrEmpty(newName))
+        return MutateWorkspace(data =>
         {
-            Data.PersistedWorkspaces[newName] = layout;
-        }
+            if (!data.PersistedWorkspaces.Remove(oldName, out var layout))
+            {
+                return false;
+            }
 
-        return true;
+            if (!string.IsNullOrEmpty(newName))
+            {
+                data.PersistedWorkspaces[newName] = layout;
+            }
+
+            return true;
+        });
     }
 
-    public WindowLayoutState? TakeWorkspace(string name) =>
-        Data.PersistedWorkspaces.Remove(name, out var layout) ? layout : null;
+    public WindowLayoutState? TakeWorkspace(
+        string name,
+        Func<WindowLayoutState, bool>? canConsume = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
+        using var stateLock = AcquireStateLock();
+        Data = Load(StatePath, out var diagnostic);
+        LastDiagnostic = diagnostic;
+        if (!Data.PersistedWorkspaces.TryGetValue(name, out var layout) ||
+            (canConsume is not null && !canConsume(layout)))
+        {
+            return null;
+        }
+
+        Data.PersistedWorkspaces.Remove(name);
+        SaveUnlocked();
+        return layout;
+    }
+
+    private bool MutateWorkspace(Func<ApplicationStateData, bool> update)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
+        using var stateLock = AcquireStateLock();
+        Data = Load(StatePath, out var diagnostic);
+        LastDiagnostic = diagnostic;
+        if (!update(Data))
+        {
+            return false;
+        }
+
+        SaveUnlocked();
+        return true;
+    }
 
     private static ApplicationStateData Load(string path, out SettingsDiagnostic? diagnostic)
     {

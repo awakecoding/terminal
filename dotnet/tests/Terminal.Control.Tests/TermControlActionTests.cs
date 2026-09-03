@@ -1,4 +1,6 @@
 using Microsoft.Terminal.Control;
+using Microsoft.Terminal.Core;
+using Avalonia.Input;
 using Xunit;
 
 namespace Terminal.Control.Tests;
@@ -56,5 +58,105 @@ public sealed class TermControlActionTests
 
         control.ScrollBy(1);
         Assert.Equal(1, control.Engine.Buffer.ScrollOffset);
+    }
+
+    [Fact]
+    public void KittyKeyEventSuppressesItsPairedRawTextInput()
+    {
+        var control = new TermControl();
+        var mode = new TerminalInputMode(
+            true,
+            false,
+            false,
+            KittyKeyboardFlags.ReportAllKeysAsEscapeCodes |
+            KittyKeyboardFlags.ReportAssociatedText,
+            0,
+            false);
+
+        Assert.Equal(
+            "\u001b[97;2;65u",
+            control.ProcessKeyDownInput(
+                Key.A,
+                KeyModifiers.Shift,
+                PhysicalKey.A,
+                "A",
+                mode));
+        Assert.Null(control.ProcessTextInput("A", mode));
+    }
+
+    [Fact]
+    public void KittyTextInputPreservesImeCommitsAndNormalFallback()
+    {
+        var control = new TermControl();
+        var associatedMode = new TerminalInputMode(
+            true,
+            false,
+            false,
+            KittyKeyboardFlags.ReportAllKeysAsEscapeCodes |
+            KittyKeyboardFlags.ReportAssociatedText,
+            0,
+            false);
+        var reportAllOnly = associatedMode with
+        {
+            KittyFlags = KittyKeyboardFlags.ReportAllKeysAsEscapeCodes,
+        };
+
+        Assert.Equal(
+            "\u001b[0;;28450:233:128578u",
+            control.ProcessTextInput("漢é🙂", associatedMode));
+        Assert.Equal("normal", control.ProcessTextInput("normal", reportAllOnly));
+    }
+
+    [Theory]
+    [InlineData(false, 2)]
+    [InlineData(true, 0)]
+    public void ExtendedKeyEncodingSuppressesPairedRawTextInput(
+        bool win32Input,
+        int modifyOtherKeys)
+    {
+        var control = new TermControl();
+        var mode = new TerminalInputMode(
+            true,
+            false,
+            false,
+            KittyKeyboardFlags.None,
+            modifyOtherKeys,
+            win32Input);
+
+        Assert.NotNull(control.ProcessKeyDownInput(
+            Key.A,
+            KeyModifiers.Control,
+            PhysicalKey.A,
+            "a",
+            mode));
+        Assert.Null(control.ProcessTextInput("a", mode));
+    }
+
+    [Fact]
+    public void EncodedKeyWithoutTextInputCannotSuppressALaterKey()
+    {
+        var control = new TermControl();
+        var encoded = new TerminalInputMode(
+            true,
+            false,
+            false,
+            KittyKeyboardFlags.None,
+            2,
+            false);
+        var normal = encoded with { ModifyOtherKeys = 0 };
+
+        Assert.NotNull(control.ProcessKeyDownInput(
+            Key.A,
+            KeyModifiers.Alt,
+            PhysicalKey.A,
+            "a",
+            encoded));
+        Assert.Null(control.ProcessKeyDownInput(
+            Key.B,
+            KeyModifiers.None,
+            PhysicalKey.B,
+            "b",
+            normal));
+        Assert.Equal("a", control.ProcessTextInput("a", normal));
     }
 }

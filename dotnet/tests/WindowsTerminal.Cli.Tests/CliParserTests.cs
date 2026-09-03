@@ -185,7 +185,22 @@ public sealed class CliParserTests
     {
         var result = Parse("save", "--name", "Build", "--keychord", "ctrl+b", "dotnet", "build");
         Assert.Empty(result.Actions);
+        Assert.Equal("use-any", result.TargetWindow);
         Assert.Equal(new CliSaveRequest("Build", "ctrl+b", "dotnet build"), result.SaveRequest);
+    }
+
+    [Fact]
+    public void SavedLayoutAndSaveRequestRoundTripThroughBrokerContract()
+    {
+        var saved = Parse("--saved", "2");
+        Assert.Equal(2, CliInvocationSerializer.Deserialize(
+            CliInvocationSerializer.Serialize(saved)).SavedLayout);
+
+        var save = Parse("x-save", "-n", "List", "git", "status");
+        var restored = CliInvocationSerializer.Deserialize(
+            CliInvocationSerializer.Serialize(save));
+        Assert.Equal("use-any", restored.TargetWindow);
+        Assert.Equal(new CliSaveRequest("List", "", "git status"), restored.SaveRequest);
     }
 
     private static CliInvocation Parse(params string[] args)

@@ -34,6 +34,44 @@ begin {
         }
     }
 
+    function Get-PeMachine {
+        param([string] $Path)
+
+        $stream = [IO.File]::OpenRead($Path)
+        $reader = [IO.BinaryReader]::new($stream)
+        try {
+            Assert-Condition ($reader.ReadUInt16() -eq 0x5A4D) "'$Path' is not a PE image."
+            $stream.Position = 0x3C
+            $peOffset = $reader.ReadUInt32()
+            Assert-Condition ($peOffset -lt ($stream.Length - 6)) "'$Path' has an invalid PE header offset."
+            $stream.Position = $peOffset
+            Assert-Condition ($reader.ReadUInt32() -eq 0x00004550) "'$Path' has an invalid PE signature."
+            return $reader.ReadUInt16()
+        }
+        finally {
+            $reader.Dispose()
+            $stream.Dispose()
+        }
+    }
+
+    function Test-ShellHelperHashes {
+        param([string] $ExtractPath)
+
+        $hashManifest = Join-Path $ExtractPath "SHELL-INTEGRATIONS.sha256"
+        Assert-Condition (Test-Path -LiteralPath $hashManifest -PathType Leaf) "The shell helper hash manifest is missing."
+        $lines = @(Get-Content -LiteralPath $hashManifest | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        Assert-Condition ($lines.Count -eq 2) "The shell helper hash manifest must contain exactly two entries."
+        foreach ($line in $lines) {
+            Assert-Condition ($line -match '^([A-F0-9]{64})  ([A-Za-z0-9.-]+)$') "Invalid shell helper hash entry '$line'."
+            $expected = $Matches[1]
+            $name = $Matches[2]
+            Assert-Condition ($name -in @("WindowsTerminalShellExt.dll", "wt-shell-integration.exe")) "Unexpected hashed shell helper '$name'."
+            $path = Join-Path $ExtractPath $name
+            Assert-Condition (Test-Path -LiteralPath $path -PathType Leaf) "Hashed shell helper '$name' is missing."
+            Assert-Condition ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -eq $expected) "Hash mismatch for '$name'."
+        }
+    }
+
     function Test-Signature {
         param([string] $Path)
 
@@ -72,6 +110,10 @@ begin {
             Assert-Condition (
                 Test-Path -LiteralPath (Join-Path $extractPath "THIRD-PARTY-NOTICES-GHOSTTY.txt")
             ) "The Ghostty license notice is missing from '$Path'."
+            Assert-Condition (
+                Test-Path -LiteralPath (Join-Path $extractPath "SHELL-INTEGRATION-NOTICE.txt")
+            ) "The shell integration notice is missing from '$Path'."
+            Test-ShellHelperHashes $extractPath
 
             [xml] $manifest = Get-Content -LiteralPath $manifestPath
             $namespace = [Xml.XmlNamespaceManager]::new($manifest.NameTable)
@@ -79,7 +121,10 @@ begin {
             $namespace.AddNamespace("uap", "http://schemas.microsoft.com/appx/manifest/uap/windows10")
             $namespace.AddNamespace("uap3", "http://schemas.microsoft.com/appx/manifest/uap/windows10/3")
             $namespace.AddNamespace("uap10", "http://schemas.microsoft.com/appx/manifest/uap/windows10/10")
+            $namespace.AddNamespace("com", "http://schemas.microsoft.com/appx/manifest/com/windows10")
             $namespace.AddNamespace("desktop", "http://schemas.microsoft.com/appx/manifest/desktop/windows10")
+            $namespace.AddNamespace("desktop4", "http://schemas.microsoft.com/appx/manifest/desktop/windows10/4")
+            $namespace.AddNamespace("desktop5", "http://schemas.microsoft.com/appx/manifest/desktop/windows10/5")
             $namespace.AddNamespace("rescap", "http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities")
 
             $identity = $manifest.SelectSingleNode("/f:Package/f:Identity", $namespace)
@@ -96,6 +141,13 @@ begin {
             Assert-Condition (
                 $actualGhosttyHash -eq $expectedGhosttyHash
             ) "ghostty-vt.dll architecture/hash mismatch in '$Path'."
+            $expectedMachine = if ($identity.ProcessorArchitecture -eq "arm64") { 0xAA64 } else { 0x8664 }
+            foreach ($helper in @("WindowsTerminalShellExt.dll", "wt-shell-integration.exe")) {
+                $helperPath = Join-Path $extractPath $helper
+                Assert-Condition (Test-Path -LiteralPath $helperPath -PathType Leaf) "'$helper' is missing from '$Path'."
+                $machine = Get-PeMachine $helperPath
+                Assert-Condition ($machine -eq $expectedMachine) "'$helper' architecture does not match '$($identity.ProcessorArchitecture)'."
+            }
 
             $application = $manifest.SelectSingleNode("/f:Package/f:Applications/f:Application", $namespace)
             Assert-Condition ($application.Executable -eq "WindowsTerminal.exe") "Unexpected application executable."
@@ -108,6 +160,22 @@ begin {
 
             $protocol = $manifest.SelectSingleNode("//uap3:Protocol[@Name='wt-dotnet']", $namespace)
             Assert-Condition ($null -ne $protocol) "The wt-dotnet protocol registration is missing."
+            $comClass = $manifest.SelectSingleNode("//com:SurrogateServer/com:Class[@Id='f4a5f6ac-02b1-46bd-939d-535d391be151']", $namespace)
+            Assert-Condition ($null -ne $comClass) "The Explorer COM surrogate registration is missing."
+            Assert-Condition ($comClass.Id -eq "f4a5f6ac-02b1-46bd-939d-535d391be151") "Unexpected Explorer COM CLSID."
+            Assert-Condition ($comClass.Path -eq "WindowsTerminalShellExt.dll") "Unexpected Explorer COM server path."
+            $toastClass = $manifest.SelectSingleNode("//com:SurrogateServer/com:Class[@Id='a3aeb121-45d9-4cd9-a278-4b43d19b95b1']", $namespace)
+            Assert-Condition ($null -ne $toastClass) "The native toast activator COM registration is missing."
+            $toastActivation = $manifest.SelectSingleNode("//desktop:ToastNotificationActivation", $namespace)
+            Assert-Condition ($null -ne $toastActivation) "The toast activation extension is missing."
+            Assert-Condition (
+                $toastActivation.ToastActivatorCLSID -eq "a3aeb121-45d9-4cd9-a278-4b43d19b95b1"
+            ) "Unexpected toast activator CLSID."
+            $verbs = @($manifest.SelectNodes("//desktop5:Verb", $namespace))
+            Assert-Condition ($verbs.Count -eq 2) "Directory and Directory\\Background Explorer verbs are required."
+            Assert-Condition (
+                (@($manifest.SelectNodes("//desktop5:ItemType", $namespace) | ForEach-Object Type) -join "|") -eq "Directory|Directory\Background"
+            ) "Unexpected Explorer context-menu item types."
             Assert-Condition ($null -ne $manifest.SelectSingleNode("//rescap:Capability[@Name='runFullTrust']", $namespace)) "The runFullTrust capability is missing."
 
             foreach ($asset in @(

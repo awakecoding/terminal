@@ -164,6 +164,84 @@ public sealed class ConnectionContractTests
     }
 
     [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
+    public async Task ConPtyStandardHandlesAreConsoleHandles()
+    {
+        await using var connection = new ConPtyConnection();
+        var output = new List<byte>();
+        var exited = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.OutputReceived += (_, bytes) =>
+        {
+            lock (output)
+            {
+                output.AddRange(bytes.ToArray());
+            }
+        };
+        connection.Exited += (_, code) => exited.TrySetResult(code);
+        var powershell = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe");
+
+        await connection.StartAsync(
+            $"\"{powershell}\" -NoLogo -NoProfile -Command " +
+            "\"Write-Output ([Console]::IsInputRedirected); " +
+            "Write-Output ([Console]::IsOutputRedirected)\"",
+            null,
+            80,
+            24);
+
+        Assert.Equal(0, await exited.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        await WaitForOutputAsync(output, "False");
+        lock (output)
+        {
+            var text = Encoding.UTF8.GetString([.. output]);
+            Assert.Equal(2, text.Split("False", StringSplitOptions.None).Length - 1);
+        }
+    }
+
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
+    public async Task InteractivePowerShellLoadsPsReadLine()
+    {
+        var powershell = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "PowerShell",
+            "7",
+            "pwsh.exe");
+        if (!File.Exists(powershell))
+        {
+            return;
+        }
+
+        await using var connection = new ConPtyConnection();
+        var output = new List<byte>();
+        var exited = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.OutputReceived += (_, bytes) =>
+        {
+            lock (output)
+            {
+                output.AddRange(bytes.ToArray());
+            }
+        };
+        connection.Exited += (_, code) => exited.TrySetResult(code);
+
+        await connection.StartAsync($"\"{powershell}\" -NoLogo", null, 80, 24);
+        connection.Write(
+            "if (Get-Module PSReadLine) { 'PSREADLINE_OK' } else { 'PSREADLINE_MISSING' }\r");
+        connection.Write("exit\r");
+
+        Assert.Equal(0, await exited.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        await WaitForOutputAsync(output, "PSREADLINE_OK");
+        lock (output)
+        {
+            Assert.DoesNotContain(
+                "Cannot load PSReadLine module",
+                Encoding.UTF8.GetString([.. output]),
+                StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact(Skip = "ConPTY is Windows-only.", SkipUnless = nameof(IsWindows))]
     public async Task ConcurrentStartAndDisposeCannotPublishAfterDisposal()
     {
         for (var iteration = 0; iteration < 20; iteration++)

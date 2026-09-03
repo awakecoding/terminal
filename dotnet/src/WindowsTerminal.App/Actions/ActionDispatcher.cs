@@ -6,6 +6,8 @@ public sealed class ActionDispatcher
 {
     private readonly Dictionary<ShortcutAction, Registration> _registrations = [];
 
+    public IReadOnlyCollection<ShortcutAction> RegisteredActions => _registrations.Keys;
+
     public void Register(
         ShortcutAction action,
         ActionScope scope,

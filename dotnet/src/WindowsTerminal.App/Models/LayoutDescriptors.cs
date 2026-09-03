@@ -87,33 +87,63 @@ public static class TerminalLayoutSerializer
 
     public static TerminalWindowLayoutDescriptor? DeserializeTabs(JsonArray tabs)
     {
+        _ = TryDeserializeTabs(tabs, out var layout, out _);
+        return layout;
+    }
+
+    public static bool TryDeserializeTabs(
+        JsonArray tabs,
+        out TerminalWindowLayoutDescriptor? layout,
+        out string? diagnostic)
+    {
         ArgumentNullException.ThrowIfNull(tabs);
+        layout = null;
+        diagnostic = null;
         if (tabs.Count != 1 || tabs[0] is not JsonObject document)
         {
-            return null;
+            diagnostic = LooksLikeNativeActionArray(tabs)
+                ? "Native Windows Terminal tabLayout action arrays are not supported by this port; the saved data was left unchanged."
+                : "The saved tabLayout does not contain one versioned terminal layout descriptor.";
+            return false;
+        }
+
+        if (document["version"] is null || document["tabs"] is null)
+        {
+            diagnostic = "Native Windows Terminal or unversioned tabLayout data is not supported by this port; the saved data was left unchanged.";
+            return false;
         }
 
         try
         {
-            var layout = document.Deserialize(
+            layout = document.Deserialize(
                 TerminalLayoutJsonContext.Default.TerminalWindowLayoutDescriptor);
             if (layout is null)
             {
-                return null;
+                diagnostic = "The saved terminal layout descriptor was empty.";
+                return false;
             }
 
             Validate(layout);
-            return layout;
+            return true;
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            return null;
+            layout = null;
+            diagnostic = $"The saved terminal layout descriptor is invalid JSON: {ex.Message}";
+            return false;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
-            return null;
+            layout = null;
+            diagnostic = ex.Message;
+            return false;
         }
     }
+
+    private static bool LooksLikeNativeActionArray(JsonArray tabs) =>
+        tabs.Count > 0 &&
+        tabs.OfType<JsonObject>().Any(static item =>
+            item["command"] is not null || item["action"] is not null);
 
     public static WindowLayoutState ToApplicationState(
         TerminalWindowLayoutDescriptor layout,

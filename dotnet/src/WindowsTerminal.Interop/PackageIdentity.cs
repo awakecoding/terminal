@@ -76,8 +76,55 @@ public static partial class PackageIdentityDetector
         return PackageIdentity.Packaged(new string(packageFullName, 0, contentLength));
     }
 
+    public static string? GetCurrentPackageFamilyName()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        uint length = 0;
+        int result;
+        unsafe
+        {
+            result = GetCurrentPackageFamilyName(&length, null);
+        }
+
+        if (result == AppModelErrorNoPackage)
+        {
+            return null;
+        }
+
+        if (result != ErrorInsufficientBuffer)
+        {
+            throw new Win32Exception(result, "Unable to query the current package family name.");
+        }
+
+        var familyName = new char[checked((int)length)];
+        unsafe
+        {
+            fixed (char* familyNamePointer = familyName)
+            {
+                result = GetCurrentPackageFamilyName(&length, familyNamePointer);
+            }
+        }
+
+        if (result != ErrorSuccess)
+        {
+            throw new Win32Exception(result, "Unable to read the current package family name.");
+        }
+
+        var contentLength = Array.IndexOf(familyName, '\0');
+        return new string(familyName, 0, contentLength < 0 ? familyName.Length : contentLength);
+    }
+
     [LibraryImport("kernel32.dll")]
     private static unsafe partial int GetCurrentPackageFullName(
         uint* packageFullNameLength,
         char* packageFullName);
+
+    [LibraryImport("kernel32.dll")]
+    private static unsafe partial int GetCurrentPackageFamilyName(
+        uint* packageFamilyNameLength,
+        char* packageFamilyName);
 }

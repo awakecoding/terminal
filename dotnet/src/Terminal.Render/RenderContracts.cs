@@ -38,7 +38,10 @@ public sealed record TerminalRenderRun(
 
 public sealed record TerminalRenderRow(
     int RowIndex,
-    IReadOnlyList<TerminalRenderRun> Runs);
+    IReadOnlyList<TerminalRenderRun> Runs)
+{
+    public LineRendition Rendition { get; init; }
+}
 
 public sealed record TerminalRenderFrame(
     int Columns,
@@ -54,6 +57,8 @@ public sealed record TerminalRenderFrame(
     public TerminalCursorStyle CursorStyle { get; init; } = TerminalCursorStyle.Bar;
     public int CursorHeightPercentage { get; init; } = 25;
     public IReadOnlyList<TerminalImageOverlay> Images { get; init; } = [];
+    public IReadOnlyDictionary<int, DrcsGlyph> DrcsGlyphs { get; init; } =
+        new Dictionary<int, DrcsGlyph>();
 }
 
 public readonly record struct TerminalCellRange(
@@ -94,6 +99,13 @@ public sealed record TerminalRendererSettings
     public IReadOnlyList<TerminalFontSource> FontSources { get; init; } = [];
     public int GlyphCacheCapacity { get; init; } = 4096;
     public long DecodedImageCacheByteCapacity { get; init; } = 128L * 1024 * 1024;
+    public TerminalRenderEffect Effect { get; init; }
+}
+
+public enum TerminalRenderEffect
+{
+    None,
+    RetroScanlines,
 }
 
 public sealed record TerminalFontSource(

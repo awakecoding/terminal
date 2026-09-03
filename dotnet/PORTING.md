@@ -109,6 +109,10 @@ Layer rules:
 - **NativeAOT:** `LibraryImport` not `DllImport`; source-generated JSON;
   no runtime XAML loading; no reflection DI; `IsAotCompatible=true` on
   production projects.
+- **Windows shell:** the managed host keeps
+  `BuiltInComInteropSupport=false`. Architecture-matched native package helpers
+  own Explorer COM, jump lists, toasts, and the explicit unavailable
+  OpenConsole handoff boundary.
 
 ## Linux
 
@@ -118,16 +122,23 @@ relay that preserves interactive shell, resize, signal, and process-group
 semantics. Dynamic profiles discover `$SHELL`, bash, zsh, fish, PowerShell, and
 `sh`; settings and state follow XDG directory conventions.
 
-Build a deterministic NativeAOT archive on Linux:
+Build the deterministic NativeAOT package set on Linux:
 
 ```bash
-dotnet/scripts/Build-LinuxPackage.sh linux-x64
-dotnet/scripts/Build-LinuxPackage.sh linux-arm64
+dotnet/scripts/Build-LinuxPackage.sh linux-x64 0.1.0 artifacts/packages all
+dotnet/scripts/Build-LinuxPackage.sh linux-arm64 0.1.0 artifacts/packages all
 ```
 
 ARM64 cross-publish from x64 requires the GNU AArch64 linker/binutils packages.
-The resulting archive preserves executable permissions for `WindowsTerminal`,
-`wt`, and `wt-pty-host`.
+The resulting tar, DEB, RPM, and AppImage preserve executable permissions for
+`WindowsTerminal`, `wt`, and `wt-pty-host`. All four consume one canonical
+install root containing validated freedesktop metadata, hicolor icons,
+architecture-correct native libraries, licenses, deterministic inventory/SPDX
+SBOM, and a DESTDIR-aware install/uninstall helper.
+Linux opens and notifications use bounded, argument-list-only subprocesses:
+the freedesktop portal is preferred, with `xdg-open` and `notify-send`
+fallbacks. Protocol and default-terminal selection are separate explicit,
+reversible helper actions; installation never overwrites those user choices.
 
 Do not take a C++/CLI or C++/WinRT interop dependency on `Microsoft.Terminal.*`
 DLLs. That reintroduces the runtime we are leaving.
@@ -142,18 +153,19 @@ break NativeAOT simplicity.
 
 Match Atlas *behavior*:
 
-- Cell grid with wide glyphs, zero-width marks, line rendition later
+- Cell grid with wide glyphs, zero-width marks, and built-in row rendition
 - Dirty-row invalidation, not full-frame redraw
-- Font fallback (Cascadia Mono → Consolas → Segoe UI Emoji)
+- Font fallback (Cascadia Mono → Consolas → bundled Noto Color Emoji → Segoe UI Emoji)
 - Bold/italic as real faces when present, synthetic otherwise
 - Cursor styles: bar, vintage, underscore, filled/empty box
 - Reverse video, underline, strikethrough
 - Selection overlay and hyperlink underline
-- Optional background image / acrylic later
+- Background images and platform-appropriate acrylic/Mica approximations
 
 P1 now uses a retained Skia custom draw operation, HarfBuzz-shaped cell
-clusters, bounded text-blob/typeface caches, and dirty-row contracts. Images
-and double-width/double-height line rendition remain later renderer work.
+clusters, bounded text-blob/typeface caches, dirty-row contracts, and image
+overlays. Stable image ownership across reflow and built-in
+double-width/double-height line rendition are implemented.
 
 ## Settings model
 
@@ -200,8 +212,9 @@ do not hand-code key chords in the window.
 
 ## VT / buffer completeness
 
-`ITermDispatch` is ~160 methods. The prototype implements the daily-driver
-subset. Remaining work is grouped so tests can gate each bucket.
+`ITermDispatch` is ~160 methods. The port implements the daily-driver and
+advanced bounded subsets; engine-specific limits are recorded in
+`doc/parity-status.md`.
 
 | Bucket | Sequences / features | Phase |
 | --- | --- | --- |
@@ -209,11 +222,11 @@ subset. Remaining work is grouped so tests can gate each bucket.
 | B. Modes | DECCKM, DECAWM, DECTCEM, alt buffer, bracketed paste, mouse SGR | P0 slice complete |
 | C. Reports | DA1/DA2, DSR CPR, DECRQM | P0 slice complete |
 | D. Color | SGR 38/48 2/5, OSC 4/10/11/12, indexed/RGB | P0 slice complete |
-| E. Unicode | UTF-8, wcwidth, emoji ZWJ (best-effort), reflow on resize | P0 reflow/wide/combining complete; grapheme shaping remains |
-| F. Shell integration | OSC 7, OSC 133 marks, OSC 8 hyperlinks | OSC 7/8 complete; OSC 133 remains P1 |
-| G. Input | Application keypad, win32-input-mode, Kitty protocol | P1 |
-| H. Images | Sixel, OSC 1337, ConEmu | Core Sixel and OSC 1337 metadata complete; renderer and ConEmu remain |
-| I. Rare VT | Rectangular ops, DECDLD, macros, DECRQSS, VT52 | DECRQSS complete; remaining features deferred |
+| E. Unicode | UTF-8, wcwidth, emoji ZWJ, reflow on resize | Wide/combining/ZWJ behavior is substantial; complete UAX #29 coverage remains |
+| F. Shell integration | OSC 7, OSC 133 marks, OSC 8 hyperlinks | Implemented |
+| G. Input | Application keypad, win32-input-mode, Kitty protocol | Implemented in the built-in engine; pinned Ghostty ABI limitations are explicit |
+| H. Images | Sixel, OSC 1337, ConEmu | Built-in bounded decode/render, DECSDM behavior, and stable ownership complete; pinned Ghostty image projection is explicitly unavailable |
+| I. Rare VT | Rectangular ops, DECDLD, macros, DECRQSS, VT52 | Built-in core, DRCS rendering, and VT52 input implemented |
 
 The .NET buffer now uses bounded circular scrollback, keeps independent
 main/alternate state (cursor, margins, attributes, tab stops), reflows logical
@@ -224,15 +237,13 @@ and hyperlink metadata, and exposes detached read-only snapshots. Existing
 
 Buffer work beyond the current parity slice:
 
-- Double-width / double-height rows
-- Full grapheme-cluster and emoji ZWJ shaping
-- Search over the buffer (`src/buffer/out/search.cpp`)
-- Stable scrollback/reflow ownership for the Core Sixel/OSC 1337 overlay metadata
+- Complete UAX #29 grapheme and emoji ZWJ coverage
+- Ghostty image projection if a future pinned C ABI exposes image resources
 
-Parser/core gaps intentionally left for later buckets include selective and
-rectangular erase/attribute operations, downloadable character sets, VT macros,
-VT52 mode, ConEmu images, and the extended keyboard protocols. Bounded DCS
-payload dispatch, Sixel, DECRQSS/XTGETTCAP, and OSC 52/133/1337 are complete.
+Bounded image payloads, stable image ownership, row rendition, DCS payload
+dispatch, rectangular operations, downloadable resources and rendering,
+macros, VT52 output/input, extended keyboard input, Sixel,
+DECRQSS/XTGETTCAP, and OSC 52/133/1337 core behavior are implemented.
 
 Port tests from `src/terminal/parser/ut_parser` and
 `src/cascadia/UnitTests_TerminalCore` as xUnit facts. That is the correctness
@@ -328,8 +339,8 @@ P1: Avalonia settings window with the pages people actually use:
 - Profiles (base + appearance)
 - Actions (list + key chord capture)
 
-P2: remaining pages (rendering, compatibility, extensions, new tab menu
-editor, orphaned profiles).
+Rendering, compatibility, extensions, new-tab-menu, and advanced profile pages
+are now implemented in the compiled-XAML editor.
 
 ## CLI (`wt`)
 
@@ -361,11 +372,12 @@ from settings.
 | Buffer | xUnit, reflow/scroll | `UnitTests_TerminalCore` |
 | Settings | xUnit, JSON round-trip | `UnitTests_SettingsModel` + real `defaults.json` |
 | Actions | xUnit, key chord → action | `defaults.json` actions |
-| Control | headless Skia snapshot (later) | golden grids |
+| Control | headless Avalonia/Skia tests | golden grids and interaction contracts |
 | ConPTY | optional Windows-only test | spawn `cmd /c echo` |
 
-CI job (later): `dotnet test` + `dotnet publish -r win-x64` on the `dotnet/`
-solution only. Do not gate this port on the C++ OpenConsole build.
+The dedicated workflow builds/tests the .NET solution, publishes Windows and
+Linux x64/ARM64 NativeAOT, validates MSIX plus tar/DEB/RPM/AppImage artifacts,
+and runs native Linux ARM64 non-UI gates.
 
 ## Phased roadmap
 
@@ -375,13 +387,13 @@ Goal: replace Windows Terminal for local `pwsh`/`cmd`/`wsl` work.
 
 1. **Settings.** Load WT `defaults.json` + user file; inheritance;
    ActionMap; unknown-key preservation. **Implemented.**
-2. **Actions + default keybindings.** Dispatch table wired to the window.
-   **Implemented for the P0 action set; later actions report unsupported.**
+2. **Actions + default keybindings.** Complete catalog dispatch is wired to the
+   window or an explicit platform capability.
 3. **Panes.** Binary split tree, focus movement, zoom, close. **Implemented.**
 4. **Search.** Find in the visible buffer, next/prev. **Implemented; full
    scrollback Unicode search controller is ready for overlay integration.**
-5. **Command palette.** Action search and dispatch. **Implemented; fuzzy ranking
-   remains P1.**
+5. **Command palette.** Action search, fuzzy ranking, and dispatch.
+   **Implemented.**
 6. **Dynamic profiles.** Installed PowerShell, WSL, cmd, Windows PowerShell,
    SSH hosts, and Visual Studio developer shells. **Implemented.**
 7. **Buffer/VT bucket A–D** completed and tested.
@@ -411,20 +423,18 @@ without hand edits; neovim and lazygit look correct.
 
 ### P2 — Completeness
 
-1. Sixel Core decoding and overlay metadata complete; renderer image slices remain
+1. Sixel, OSC 1337, and bounded ConEmu image decoding/rendering complete
 2. Azure Cloud Shell
 3. Extension fragment discovery/merge complete; extension UI remains
-4. Notification-area icon and minimize-to-area behavior complete; global
-   summon/quake remains explicitly unavailable without a registered OS hotkey.
+4. Notification-area behavior and Windows global summon/quake hotkeys complete;
+   Linux manual/broker summon is available with explicit portal limitations.
 5. Broadcast input and command-history suggestions complete; provider-backed
    shell completion and Quick Fix report unavailable when the shell supplies no data.
 6. Scratchpad window complete; markdown pane content remains outside the
    terminal-pane persistence contract.
 7. Default-terminal handoff is a documented OS/native boundary.
-8. x64/ARM64 MSIX and bundle complete; jump lists, system toasts, and Explorer
-   shell extension remain documented native/WinRT boundaries.
-9. Workspaces parse into versioned contracts but remain explicit unsupported;
-   custom shader effects are not advertised by the Skia renderer.
+8. x64/ARM64 MSIX and bundle include jump-list, toast, and Explorer helpers.
+9. Versioned workspaces and bounded Skia retro effects are implemented.
 
 ## Suggested project layout (end state)
 
@@ -434,7 +444,7 @@ dotnet/
   src/
     Terminal.Core/          # buffer, VT, input encoding
     Terminal.Render/        # HarfBuzz shaping, Skia text-blob cache, render plans
-    Terminal.Connection/    # ConPTY, later Azure
+    Terminal.Connection/    # ConPTY, Linux PTY, Azure Cloud Shell
     Terminal.Settings/      # CascadiaSettings, ActionMap, generators
     Terminal.Control/       # TermControl, search, scrollbar
     WindowsTerminal/        # app host, tabs, panes, palette, CLI

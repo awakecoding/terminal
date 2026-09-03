@@ -6,6 +6,20 @@ namespace Terminal.Core.Tests;
 public sealed class TextBufferTests
 {
     [Fact]
+    public void ResizePreservesWrapPendingAtDoubleWidthBoundary()
+    {
+        using var engine = new TerminalEngine(10, 3);
+        engine.Feed("\u001b#6abcde");
+        Assert.True(engine.Buffer.WrapPending);
+
+        engine.Resize(10, 4);
+        Assert.True(engine.Buffer.WrapPending);
+
+        engine.Feed("f");
+        Assert.Equal('f', (char)engine.Buffer.GetRow(1)[0].Rune.Value);
+    }
+
+    [Fact]
     public void ScrollbackIsBoundedAndKeepsNewestLines()
     {
         var engine = new TerminalEngine(8, 2, historySize: 2);
@@ -105,6 +119,32 @@ public sealed class TextBufferTests
 
         Assert.Equal("b", snapshot.Buffer.Lines[0].Cells[0].Text);
         Assert.Equal("A", engine.Buffer.GetCell(0, 0).Text);
+    }
+
+    [Fact]
+    public void AppliedColorsFollowCellsButDoNotSurviveResetOrEviction()
+    {
+        var engine = new TerminalEngine(4, 2, historySize: 1);
+        engine.Feed("abcd");
+        var red = TermColor.FromRgb(255, 0, 0);
+        engine.Buffer.ApplyColors(
+            new BufferPosition(0, 1),
+            new BufferPosition(0, 2),
+            red,
+            null);
+
+        engine.Resize(2, 3);
+
+        Assert.Equal(red, engine.Buffer.GetCell(1, 0).Attributes.Foreground);
+        Assert.Equal(red, engine.Buffer.GetCell(0, 1).Attributes.Foreground);
+
+        engine.Reset();
+        engine.Feed("x\r\ny\r\nz\r\nq");
+
+        for (var row = 0; row < engine.Rows; row++)
+        {
+            Assert.NotEqual(red, engine.Buffer.GetCell(0, row).Attributes.Foreground);
+        }
     }
 
     [Fact]

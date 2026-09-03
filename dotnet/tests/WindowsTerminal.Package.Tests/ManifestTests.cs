@@ -11,8 +11,14 @@ public sealed class ManifestTests
         "http://schemas.microsoft.com/appx/manifest/uap/windows10/3";
     private static readonly XNamespace Uap10 =
         "http://schemas.microsoft.com/appx/manifest/uap/windows10/10";
+    private static readonly XNamespace Com =
+        "http://schemas.microsoft.com/appx/manifest/com/windows10";
     private static readonly XNamespace Desktop =
         "http://schemas.microsoft.com/appx/manifest/desktop/windows10";
+    private static readonly XNamespace Desktop4 =
+        "http://schemas.microsoft.com/appx/manifest/desktop/windows10/4";
+    private static readonly XNamespace Desktop5 =
+        "http://schemas.microsoft.com/appx/manifest/desktop/windows10/5";
     private static readonly XNamespace RestrictedCapabilities =
         "http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities";
 
@@ -27,6 +33,44 @@ public sealed class ManifestTests
         Assert.Equal("Awakecoding.WindowsTerminal.Dev", (string?)identity.Attribute("Name"));
         Assert.Equal("CN=Awakecoding Windows Terminal Development", (string?)identity.Attribute("Publisher"));
         Assert.Equal("0.1.0.0", (string?)identity.Attribute("Version"));
+    }
+
+    [Fact]
+    public void ManifestRegistersArchitectureMatchedExplorerCommand()
+    {
+        var document = LoadManifest();
+        var comClass = document.Descendants(Com + "Class")
+            .Single(element =>
+                (string?)element.Attribute("Id") == "f4a5f6ac-02b1-46bd-939d-535d391be151");
+        var itemTypes = document.Descendants(Desktop5 + "ItemType")
+            .Select(item => (string?)item.Attribute("Type"))
+            .ToArray();
+        var verbs = document.Descendants(Desktop5 + "Verb").ToArray();
+
+        Assert.Equal("f4a5f6ac-02b1-46bd-939d-535d391be151", (string?)comClass.Attribute("Id"));
+        Assert.Equal("WindowsTerminalShellExt.dll", (string?)comClass.Attribute("Path"));
+        Assert.Equal("STA", (string?)comClass.Attribute("ThreadingModel"));
+        Assert.Contains(document.Descendants(Desktop4 + "Extension"),
+            extension => (string?)extension.Attribute("Category") == "windows.fileExplorerContextMenus");
+        Assert.Equal(new string?[] { "Directory", @"Directory\Background" }, itemTypes);
+        Assert.All(verbs, verb =>
+            Assert.Equal((string?)comClass.Attribute("Id"), (string?)verb.Attribute("Clsid")));
+    }
+
+    [Fact]
+    public void ManifestRegistersNativeToastActivator()
+    {
+        var document = LoadManifest();
+        const string toastClsid = "a3aeb121-45d9-4cd9-a278-4b43d19b95b1";
+        var toastClass = document.Descendants(Com + "Class")
+            .Single(element => (string?)element.Attribute("Id") == toastClsid);
+        var activation = document.Descendants(Desktop + "ToastNotificationActivation").Single();
+
+        Assert.Equal("WindowsTerminalShellExt.dll", (string?)toastClass.Attribute("Path"));
+        Assert.Equal(toastClsid, (string?)activation.Attribute("ToastActivatorCLSID"));
+        Assert.Equal(
+            "windows.toastNotificationActivation",
+            (string?)activation.Parent!.Attribute("Category"));
     }
 
     [Fact]

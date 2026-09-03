@@ -8,14 +8,14 @@
 > Windows pseudoconsole implementation.
 
 `Terminal.Core` parses advanced string protocols without depending on Avalonia,
-Skia, Win32, or an image codec. It exposes decoded Sixel pixels and encoded
-OSC 1337 images as renderer-neutral overlay metadata.
+Skia, Win32, or an image codec. It exposes decoded Sixel pixels and bounded
+encoded OSC 1337/ConEmu images as renderer-neutral overlay metadata.
 
 ## Supported sequences
 
 | Sequence | Core behavior |
 | --- | --- |
-| `DCS ... q data ST` | Decodes Sixel with macro aspect ratio, repeat, color registers (HLS and RGB), raster attributes, graphics CR/LF, and opaque or transparent backgrounds. |
+| `DCS ... q data ST` / `CSI ? 80 h/l` | Decodes Sixel with macro aspect ratio, repeat, color registers (HLS and RGB), raster attributes, graphics CR/LF, opaque or transparent backgrounds, DECSDM display/scroll behavior, and retained cell geometry. |
 | `DCS $ q request ST` | Implements DECRQSS for SGR, DECSTBM, DECSLRM, DECSCUSR (default style), DECSCA (unprotected), and DECSACE (stream extent). Unknown settings return `DCS 0 $ r ST`. |
 | `DCS + q names ST` | Implements practical XTGETTCAP reports for `TN`, `Co`, `RGB`, and `Tc`, with one response per hex-encoded capability name. |
 | `DCS ... { Dscs data ST` | Implements bounded DECDLD soft-font download (one 94/96-character DRCS buffer, 16×32 maximum glyphs), SCS designation, SI/SO, LS2/LS3, LS1R/LS2R/LS3R, and SS2/SS3 invocation. Cells use `U+EF20`–`U+EF7F`; `DrcsGlyphs` exposes renderer-neutral alpha masks. |
@@ -25,7 +25,8 @@ OSC 1337 images as renderer-neutral overlay metadata.
 | `CSI ? Ps J/K` / `CSI Ps " q` | Implements protected cells and DECSED/DECSEL selective erase. |
 | `CSI 2;Pu $ u` / `DCS 2 $ p ... ST` | Reports and restores the 256-entry terminal color table in HLS or RGB percentage form. |
 | `CSI Ps $ w` / `DCS Ps $ t ... ST` | Reports and restores cursor presentation state (`Ps=1`) and tab stops (`Ps=2`). |
-| `OSC 1337 ; File=... : base64 ST` | Parses inline iTerm2 image name, declared size, width, height, aspect-ratio preference, and bounded encoded bytes. Non-inline file transfers are ignored. |
+| `OSC 1337 ; File=... : base64 ST` | Parses inline iTerm2 image name, declared size, width, height, aspect-ratio preference, and bounded encoded bytes. Non-inline file transfers are explicitly rejected without I/O. |
+| `OSC 9 ; 4 ; st=0 ; sz=N ; base64 ST` | Parses bounded, single-part ConEmu encoded images. Multipart, malformed, size-mismatched, and oversized transfers are rejected. |
 
 The DCS state machine handles 7-bit and C1 entry/termination, parameter and
 intermediate collection, passthrough, CAN/SUB cancellation, and an `ESC`
@@ -82,10 +83,10 @@ loading a codec. The renderer validates the encoded format, decodes it with its
 own image stack, applies `Width`, `Height`, and `PreserveAspectRatio`, and clips
 the result to its terminal viewport.
 
-Overlay anchors currently remain at the viewport cell recorded when the
-sequence completes. The renderer must not infer text-cell ownership from that
-coordinate. Moving overlays with scrollback/reflow requires stable buffer-line
-identities and is a later cross-layer change.
+Overlay anchors retain a logical-line identity and logical cell offset.
+Snapshots resolve that anchor against the current scrollback/reflow layout, and
+the overlay is removed deterministically when its owning line segment is
+evicted. Main and alternate buffers retain independent identities.
 
 ## Intentional gaps
 
@@ -97,10 +98,9 @@ identities and is a later cross-layer change.
   common intermediate-plus-final form.
 - VT52 printer commands and host keyboard encoding are outside `Terminal.Core`;
   Core tracks cursor-key and keypad modes for input layers to consume.
-- Sixel scrolling/display-mode cursor movement and image slices tied to stable
-  scrollback line identities
-- non-inline OSC 1337 file transfer and remote file access
-- ConEmu image payloads
+- non-inline OSC 1337 file transfer and remote file access (explicitly rejected)
+- multipart ConEmu image payloads (explicitly rejected)
+- Ghostty image projection (the pinned C ABI exposes no image resources)
 
 These gaps avoid remote I/O and renderer/input dependencies while keeping every
 implemented parser and downloadable resource path bounded.

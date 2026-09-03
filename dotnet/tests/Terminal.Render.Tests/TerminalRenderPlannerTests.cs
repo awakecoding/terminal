@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Terminal.Core;
 using Microsoft.Terminal.Render;
 using Xunit;
@@ -120,5 +121,33 @@ public sealed class TerminalRenderPlannerTests
 
         Assert.Equal(engine.CursorY + 1, frame.CursorY);
         Assert.False(frame.CursorVisible);
+    }
+
+    [Fact]
+    public void PlansDoubleWidthAndDoubleHeightRowGeometry()
+    {
+        var engine = new TerminalEngine(10, 3);
+        engine.Feed("\u001b#6wide");
+        engine.Feed("\u001b[2;1H\u001b#3top");
+        engine.Feed("\u001b[3;1H\u001b#4botto");
+
+        var frame = TerminalRenderPlanner.Create(engine.CreateSnapshot(), engine.Scheme);
+
+        Assert.Equal(LineRendition.DoubleWidth, frame.RowsData[0].Rendition);
+        Assert.Equal(LineRendition.DoubleHeightTop, frame.RowsData[1].Rendition);
+        Assert.Equal(LineRendition.DoubleHeightBottom, frame.RowsData[2].Rendition);
+        Assert.Equal(4, frame.CursorX);
+    }
+
+    [Fact]
+    public void CarriesDownloadedGlyphMasksIntoRenderFrame()
+    {
+        var engine = new TerminalEngine();
+        engine.Feed("\u001bP0;1;0;2;1;2;6;0{ B~\u001b\\\u001b( B!");
+
+        var frame = TerminalRenderPlanner.Create(engine.CreateSnapshot(), engine.Scheme);
+
+        Assert.Single(frame.DrcsGlyphs);
+        Assert.Equal(new Rune(0xEF21), frame.DrcsGlyphs.Single().Value.PrivateUseRune);
     }
 }

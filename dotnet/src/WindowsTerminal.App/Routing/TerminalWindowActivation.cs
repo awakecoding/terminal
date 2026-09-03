@@ -18,7 +18,16 @@ public sealed record TerminalWindowActivation(
     int? Columns,
     int? Rows,
     TerminalWindowLaunchMode LaunchMode,
-    IReadOnlyList<ActionAndArgs> Actions);
+    IReadOnlyList<ActionAndArgs> Actions,
+    WindowLayoutState? PersistedLayout = null,
+    string? PersistedLayoutDiagnostic = null,
+    TerminalSaveRequest? SaveRequest = null,
+    string? WorkspaceName = null);
+
+public sealed record TerminalSaveRequest(
+    string Name,
+    string KeyChord,
+    string Commandline);
 
 public sealed record TerminalWindowActivationResult(
     bool Succeeded,
@@ -28,7 +37,8 @@ public sealed record TerminalWindowActivationResult(
 public sealed record TerminalCommandLineParseResult(
     bool Succeeded,
     string Message,
-    IReadOnlyList<ActionAndArgs> Actions);
+    IReadOnlyList<ActionAndArgs> Actions,
+    TerminalSaveRequest? SaveRequest = null);
 
 public interface ITerminalWindowActivationTarget
 {

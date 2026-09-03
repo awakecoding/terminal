@@ -8,6 +8,48 @@ namespace Terminal.Render.Tests;
 public sealed class SkiaTerminalRendererTests
 {
     [Fact]
+    public void RetroScanlineEffectIsOptionalAndDeterministic()
+    {
+        var frame = CreateFrame("effect");
+        using var plainRenderer = new SkiaTerminalRenderer();
+        using var effectRenderer = new SkiaTerminalRenderer(new TerminalRendererSettings
+        {
+            Effect = TerminalRenderEffect.RetroScanlines,
+        });
+        using var plain = NewBitmap(plainRenderer, frame);
+        using var first = NewBitmap(effectRenderer, frame);
+        using var second = NewBitmap(effectRenderer, frame);
+        using var plainCanvas = new SKCanvas(plain);
+        using var firstCanvas = new SKCanvas(first);
+        using var secondCanvas = new SKCanvas(second);
+
+        Draw(plainRenderer, plainCanvas, frame);
+        Draw(effectRenderer, firstCanvas, frame);
+        Draw(effectRenderer, secondCanvas, frame);
+
+        Assert.NotEqual(PixelDigest(plain), PixelDigest(first));
+        Assert.Equal(PixelDigest(first), PixelDigest(second));
+    }
+
+    [Fact]
+    public void DrawsDrcsMaskWithoutFontFallback()
+    {
+        var engine = new TerminalEngine(8, 2);
+        engine.Feed("\u001bP0;1;0;2;1;2;6;0{ B~\u001b\\\u001b( B!");
+        var frame = TerminalRenderPlanner.Create(engine.CreateSnapshot(), engine.Scheme);
+        using var renderer = new SkiaTerminalRenderer();
+        using var bitmap = NewBitmap(renderer, frame);
+        using var canvas = new SKCanvas(bitmap);
+
+        Draw(renderer, canvas, frame);
+
+        Assert.Equal(0, renderer.CacheStatistics.Count);
+        Assert.Contains(
+            Enumerable.Range(0, bitmap.Width),
+            x => Enumerable.Range(0, bitmap.Height).Any(y => bitmap.GetPixel(x, y) != SKColors.Black));
+    }
+
+    [Fact]
     public void ShapesComplexUnicodeAndReusesBoundedCache()
     {
         using var renderer = new SkiaTerminalRenderer(new TerminalRendererSettings
@@ -278,6 +320,62 @@ public sealed class SkiaTerminalRendererTests
     }
 
     [Fact]
+    public void RendersSixelWithRetainedCellGeometry()
+    {
+        var engine = new TerminalEngine(16, 2);
+        engine.Resize(16, 2, 20, 40);
+        engine.Feed("\u001bPq#2;2;100;0;0!2~\u001b\\");
+        var frame = TerminalRenderPlanner.Create(engine.CreateSnapshot(), engine.Scheme);
+        using var renderer = new SkiaTerminalRenderer();
+        using var bitmap = NewBitmap(renderer, frame);
+        using var canvas = new SKCanvas(bitmap);
+
+        Draw(renderer, canvas, frame);
+
+        Assert.True(bitmap.GetPixel(11, 12).Red > 200);
+        Assert.Equal(new SKColor(12, 12, 12), bitmap.GetPixel(13, 12));
+    }
+
+    [Fact]
+    public void ImageAnchorColumnScalesWithDoubleWidthRendition()
+    {
+        var engine = new TerminalEngine(16, 2);
+        engine.Feed("\u001b#6\u001b[3G\u001bPq#2;2;100;0;0~\u001b\\");
+        var frame = TerminalRenderPlanner.Create(engine.CreateSnapshot(), engine.Scheme);
+        using var renderer = new SkiaTerminalRenderer();
+        using var bitmap = NewBitmap(renderer, frame);
+        using var canvas = new SKCanvas(bitmap);
+
+        Draw(renderer, canvas, frame);
+
+        var expectedLeft = 8 + (4 * (int)renderer.CellSize.Width);
+        Assert.True(bitmap.GetPixel(expectedLeft, 8).Red > 200);
+        Assert.Equal(new SKColor(12, 12, 12), bitmap.GetPixel(
+            8 + (2 * (int)renderer.CellSize.Width),
+            8));
+    }
+
+    [Fact]
+    public void RendersBoundedConEmuEncodedImage()
+    {
+        using var source = new SKBitmap(2, 2);
+        source.Erase(SKColors.Red);
+        using var encoded = source.Encode(SKEncodedImageFormat.Png, 100);
+        var payload = Convert.ToBase64String(encoded.ToArray());
+        var engine = new TerminalEngine(16, 2);
+        engine.Feed($"\u001b]9;4;st=0;sz={encoded.Size};{payload}\u001b\\");
+        var frame = TerminalRenderPlanner.Create(engine.CreateSnapshot(), engine.Scheme);
+        using var renderer = new SkiaTerminalRenderer();
+        using var bitmap = NewBitmap(renderer, frame);
+        using var canvas = new SKCanvas(bitmap);
+
+        Draw(renderer, canvas, frame);
+
+        Assert.Equal(TerminalImageProtocol.ConEmuInline, Assert.Single(frame.Images).Protocol);
+        Assert.True(bitmap.GetPixel(8, 8).Red > 200);
+    }
+
+    [Fact]
     public void WarmRenderDoesNotAllocatePerCell()
     {
         using var renderer = new SkiaTerminalRenderer();
@@ -331,5 +429,23 @@ public sealed class SkiaTerminalRendererTests
                 canvas.DeviceClipBounds.Bottom),
             8,
             drawCursor: true);
+    }
+
+    private static ulong PixelDigest(SKBitmap bitmap)
+    {
+        var digest = 14695981039346656037UL;
+        for (var y = 0; y < bitmap.Height; y++)
+        {
+            for (var x = 0; x < bitmap.Width; x++)
+            {
+                var pixel = bitmap.GetPixel(x, y);
+                digest ^= (uint)(pixel.Alpha << 24 |
+                                 pixel.Red << 16 |
+                                 pixel.Green << 8 |
+                                 pixel.Blue);
+                digest *= 1099511628211UL;
+            }
+        }
+        return digest;
     }
 }

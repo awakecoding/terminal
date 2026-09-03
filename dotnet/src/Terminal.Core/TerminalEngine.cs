@@ -19,6 +19,8 @@ public sealed record TerminalSnapshot(
     bool ReverseVideo)
 {
     public IReadOnlyList<TerminalImageOverlay> Images { get; init; } = [];
+    public IReadOnlyDictionary<int, DrcsGlyph> DrcsGlyphs { get; init; } =
+        ReadOnlyDictionary<int, DrcsGlyph>.Empty;
 }
 
 public sealed record TerminalNotification(string? Title, string Body);
@@ -60,6 +62,14 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
     private int _macroBytes;
     private int _macroDepth;
     private int _macroExpandedBytes;
+    private readonly Stack<KittyKeyboardFlags> _kittyKeyboardStack = new(16);
+    private KittyKeyboardFlags _kittyKeyboardFlags;
+    private int _modifyOtherKeys;
+    private bool _win32InputMode;
+    private bool _allowKittyKeyboard = true;
+    private bool _sixelDisplayMode = true;
+    private double _cellWidth = 10;
+    private double _cellHeight = 20;
 
     public TerminalEngine(int columns = 120, int rows = 30, int historySize = 9001)
     {
@@ -76,6 +86,17 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
     }
 
     public TextBuffer Buffer => _active;
+    public TerminalEngineCapabilities Capabilities =>
+        TerminalEngineCapabilities.UnicodeGraphemeClusters |
+        TerminalEngineCapabilities.RowRendition |
+        TerminalEngineCapabilities.Vt52Keyboard |
+        TerminalEngineCapabilities.DrcsGlyphs |
+        TerminalEngineCapabilities.KittyKeyboard |
+        TerminalEngineCapabilities.ModifyOtherKeys |
+        TerminalEngineCapabilities.Win32Input |
+        TerminalEngineCapabilities.SixelImages |
+        TerminalEngineCapabilities.Iterm2Images |
+        TerminalEngineCapabilities.ConEmuImages;
     public ColorScheme Scheme
     {
         get => _scheme;
@@ -104,6 +125,13 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
     public bool ReverseVideo { get; private set; }
     public bool AnsiMode { get; private set; } = true;
     public bool ApplicationKeypad { get; private set; }
+    public TerminalInputMode InputMode => new(
+        AnsiMode,
+        ApplicationCursorKeys,
+        ApplicationKeypad,
+        _kittyKeyboardFlags,
+        _modifyOtherKeys,
+        _win32InputMode);
     public bool AllowClipboardWrite { get; private set; }
     public bool AllowNotifications { get; private set; }
     public int Columns => Buffer.Columns;
@@ -112,7 +140,14 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
     public int CursorY => Buffer.CursorY;
     public int HistoryCount => Buffer.HistoryCount;
     public int ScrollOffset => Buffer.ScrollOffset;
-    public IReadOnlyList<TerminalImageOverlay> Images => _images;
+    public IReadOnlyList<TerminalImageOverlay> Images
+    {
+        get
+        {
+            PruneEvictedImages();
+            return _images;
+        }
+    }
     public IReadOnlyDictionary<int, DrcsGlyph> DrcsGlyphs => _readOnlyDrcsGlyphs;
     public int MacroCount => _macros.Count(static macro => macro is not null);
 
@@ -122,6 +157,7 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
     public event EventHandler? ShellIntegrationChanged;
     public event EventHandler<string>? ClipboardWriteRequested;
     public event EventHandler<TerminalNotification>? NotificationRequested;
+    public event EventHandler<TerminalEngineDiagnostic>? Diagnostic;
     public event EventHandler<TerminalImageOverlay>? ImageAdded;
     public event EventHandler? Bell;
     public event EventHandler<byte[]>? ResponseReady;
@@ -134,6 +170,7 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
     public void Feed(ReadOnlySpan<byte> data)
     {
         _parser.Process(data);
+        PruneEvictedImages();
         Invalidated?.Invoke(this, EventArgs.Empty);
     }
 
@@ -141,8 +178,23 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
 
     public void Resize(int columns, int rows, double cellWidth = 1, double cellHeight = 1)
     {
-        _primary.Resize(columns, rows);
-        _alternate.Resize(columns, rows);
+        _cellWidth = Math.Max(0.1, cellWidth);
+        _cellHeight = Math.Max(0.1, cellHeight);
+        _primary.Resize(
+            columns,
+            rows,
+            _images
+                .Where(static image => !image.AlternateBuffer)
+                .Select(static image => image.LogicalAnchor)
+                .ToArray());
+        _alternate.Resize(
+            columns,
+            rows,
+            _images
+                .Where(static image => image.AlternateBuffer)
+                .Select(static image => image.LogicalAnchor)
+                .ToArray());
+        PruneEvictedImages();
         Invalidated?.Invoke(this, EventArgs.Empty);
     }
 
@@ -168,6 +220,11 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
         ReverseVideo = false;
         AnsiMode = true;
         ApplicationKeypad = false;
+        _kittyKeyboardFlags = KittyKeyboardFlags.None;
+        _kittyKeyboardStack.Clear();
+        _modifyOtherKeys = 0;
+        _win32InputMode = false;
+        _sixelDisplayMode = true;
         _vt52Graphics = false;
         _rectangularAttributeExtent = false;
         _drcsDesignator = null;
@@ -191,13 +248,25 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
         Invalidated?.Invoke(this, EventArgs.Empty);
     }
 
-    public void ConfigureOptionalFeatures(bool allowClipboardWrite, bool allowNotifications)
+    public void ConfigureOptionalFeatures(
+        bool allowClipboardWrite,
+        bool allowNotifications,
+        bool allowKittyKeyboard = true)
     {
         AllowClipboardWrite = allowClipboardWrite;
         AllowNotifications = allowNotifications;
+        _allowKittyKeyboard = allowKittyKeyboard;
+        if (!allowKittyKeyboard)
+        {
+            _kittyKeyboardFlags = KittyKeyboardFlags.None;
+            _kittyKeyboardStack.Clear();
+        }
     }
 
-    public TerminalSnapshot CreateSnapshot(bool includeHistory = false) => new(
+    public TerminalSnapshot CreateSnapshot(bool includeHistory = false)
+    {
+        PruneEvictedImages();
+        return new TerminalSnapshot(
             Buffer.CreateSnapshot(includeHistory),
             Title,
             WorkingDirectory,
@@ -210,14 +279,17 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
             AutoWrap,
             InsertMode,
             ReverseVideo)
-    {
-        Images = _images
-            .Select(image => image with
-            {
-                AnchorRow = image.AnchorRow - (Buffer.ViewportStart - Buffer.ScrollOffset),
-            })
-            .ToArray(),
-    };
+        {
+            Images = CreateSnapshotImages(includeHistory),
+            DrcsGlyphs = new ReadOnlyDictionary<int, DrcsGlyph>(
+                _drcsGlyphs.ToDictionary(
+                    static item => item.Key,
+                    static item => item.Value with
+                    {
+                        AlphaMask = item.Value.AlphaMask.ToArray(),
+                    })),
+        };
+    }
 
     public string CopySelection(int x1, int y1, int x2, int y2) => Buffer.GetText(x1, y1, x2, y2);
 
@@ -317,6 +389,18 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
     {
         if (TryDesignateCharset(final, intermediate))
         {
+            return;
+        }
+
+        if (intermediate == (byte)'#' && final is >= '3' and <= '6')
+        {
+            Buffer.SetCurrentLineRendition(final switch
+            {
+                '3' => LineRendition.DoubleHeightTop,
+                '4' => LineRendition.DoubleHeightBottom,
+                '6' => LineRendition.DoubleWidth,
+                _ => LineRendition.SingleWidth,
+            });
             return;
         }
 
@@ -507,7 +591,14 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
                 DispatchHyperlink(data);
                 break;
             case 9:
-                DispatchWindowsNotification(data);
+                if (data.StartsWith("4;st=", StringComparison.Ordinal))
+                {
+                    DispatchConEmuImage(data);
+                }
+                else
+                {
+                    DispatchWindowsNotification(data);
+                }
                 break;
             case 10:
             case 11:
@@ -531,6 +622,14 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
 
     private void DispatchSixel(ReadOnlySpan<int> parameters, ReadOnlySpan<byte> data)
     {
+        if (!_sixelDisplayMode && Buffer.CursorY > Buffer.ScrollBottom)
+        {
+            ReportDiagnostic(
+                "image.sixel.rejected",
+                "The Sixel origin was below the active scrolling margin.");
+            return;
+        }
+
         if (!_sixelDecoder.TryDecode(
                 data,
                 Param(parameters, 0, 0),
@@ -539,17 +638,42 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
                 out var image) ||
             image is null)
         {
+            ReportDiagnostic("image.sixel.rejected", "The Sixel payload was malformed or exceeded image limits.");
             return;
         }
 
-        AddImage(new TerminalImageOverlay(
+        var anchorColumn = _sixelDisplayMode ? 0 : Buffer.CursorX;
+        var anchorRow = _sixelDisplayMode ? 0 : Buffer.CursorY;
+        var overlay = new TerminalImageOverlay(
             ++_nextImageId,
             TerminalImageProtocol.Sixel,
             AlternateBufferActive,
-            Buffer.CursorX,
-            Buffer.ViewportStart + Buffer.CursorY,
+            anchorColumn,
+            Buffer.ViewportStart + anchorRow,
             image,
-            null));
+            null)
+        {
+            LogicalAnchor = Buffer.CreateImageAnchor(anchorColumn, anchorRow),
+            CellGeometry = new TerminalImageCellGeometry(_cellWidth, _cellHeight),
+        };
+        AddImage(overlay);
+
+        if (!_sixelDisplayMode)
+        {
+            const int sixelCellHeight = 20;
+            var finalCursorRows = image.FinalCursorRowPixels / sixelCellHeight;
+            var extentRows = (image.Height + sixelCellHeight - 1) / sixelCellHeight;
+            var availableRows = Buffer.ScrollBottom - anchorRow + 1;
+            var overflowRows = Math.Max(0, extentRows - availableRows);
+            var extentLineFeeds = overflowRows == 0
+                ? 0
+                : Buffer.ScrollBottom - anchorRow + overflowRows;
+            var lineFeeds = Math.Max(finalCursorRows, extentLineFeeds);
+            for (var row = 0; row < lineFeeds; row++)
+            {
+                Buffer.LineFeed();
+            }
+        }
     }
 
     private void DispatchRequestSetting(ReadOnlySpan<byte> data)
@@ -1178,12 +1302,14 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
     {
         if (!data.StartsWith("File="))
         {
+            ReportDiagnostic("image.osc1337.rejected", "The OSC 1337 image header was not recognized.");
             return;
         }
 
         var separator = data.IndexOf(':');
         if (separator < 0)
         {
+            ReportDiagnostic("image.osc1337.rejected", "The OSC 1337 image did not contain a payload separator.");
             return;
         }
 
@@ -1192,6 +1318,7 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
         if (payload.Length > ((TerminalImageLimits.MaximumInlineImageBytes * 4 / 3) + 4) ||
             !IsStrictBase64(payload))
         {
+            ReportDiagnostic("image.osc1337.rejected", "The OSC 1337 payload was malformed or exceeded image limits.");
             return;
         }
 
@@ -1251,8 +1378,17 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
             }
         }
 
-        if (!inline || declaredSize is > TerminalImageLimits.MaximumInlineImageBytes)
+        if (!inline)
         {
+            ReportDiagnostic(
+                "image.osc1337.non-inline-unsupported",
+                "Non-inline OSC 1337 file transfer is disabled; no local or remote file was accessed.");
+            return;
+        }
+
+        if (declaredSize is < 0 or > TerminalImageLimits.MaximumInlineImageBytes)
+        {
+            ReportDiagnostic("image.osc1337.rejected", "The declared OSC 1337 image size exceeded image limits.");
             return;
         }
 
@@ -1263,11 +1399,15 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
         }
         catch (FormatException)
         {
+            ReportDiagnostic("image.osc1337.rejected", "The OSC 1337 payload was not valid base64.");
             return;
         }
 
-        if (bytes.Length > TerminalImageLimits.MaximumInlineImageBytes)
+        if (bytes.Length == 0 ||
+            bytes.Length > TerminalImageLimits.MaximumInlineImageBytes ||
+            declaredSize is { } expectedSize && expectedSize != bytes.Length)
         {
+            ReportDiagnostic("image.osc1337.rejected", "The OSC 1337 payload did not match its bounded declared size.");
             return;
         }
 
@@ -1281,7 +1421,81 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
             Buffer.CursorX,
             Buffer.ViewportStart + Buffer.CursorY,
             null,
-            inlineImage));
+            inlineImage)
+        {
+            LogicalAnchor = Buffer.CreateImageAnchor(Buffer.CursorX, Buffer.CursorY),
+            CellGeometry = new TerminalImageCellGeometry(_cellWidth, _cellHeight),
+        });
+    }
+
+    private void DispatchConEmuImage(ReadOnlySpan<char> data)
+    {
+        const string prefix = "4;st=0;sz=";
+        if (!data.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            ReportDiagnostic("image.conemu.rejected", "Only bounded single-part ConEmu image transfers are supported.");
+            return;
+        }
+
+        var remainder = data[prefix.Length..];
+        var separator = remainder.IndexOf(';');
+        if (separator <= 0 ||
+            !long.TryParse(
+                remainder[..separator],
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var declaredSize) ||
+            declaredSize is < 0 or > TerminalImageLimits.MaximumInlineImageBytes)
+        {
+            ReportDiagnostic("image.conemu.rejected", "The ConEmu image size was missing or exceeded image limits.");
+            return;
+        }
+
+        var payload = remainder[(separator + 1)..];
+        if (payload.Length > ((TerminalImageLimits.MaximumInlineImageBytes * 4 / 3) + 4) ||
+            !IsStrictBase64(payload))
+        {
+            ReportDiagnostic("image.conemu.rejected", "The ConEmu image payload was malformed or exceeded image limits.");
+            return;
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(payload.ToString());
+        }
+        catch (FormatException)
+        {
+            ReportDiagnostic("image.conemu.rejected", "The ConEmu image payload was not valid base64.");
+            return;
+        }
+
+        if (bytes.Length == 0 || bytes.Length != declaredSize)
+        {
+            ReportDiagnostic("image.conemu.rejected", "The ConEmu image payload did not match its declared size.");
+            return;
+        }
+
+        var inlineImage = new InlineImage(
+            new InlineImageMetadata(
+                null,
+                declaredSize,
+                TerminalImageDimension.Auto,
+                TerminalImageDimension.Auto,
+                PreserveAspectRatio: true),
+            bytes);
+        AddImage(new TerminalImageOverlay(
+            ++_nextImageId,
+            TerminalImageProtocol.ConEmuInline,
+            AlternateBufferActive,
+            Buffer.CursorX,
+            Buffer.ViewportStart + Buffer.CursorY,
+            null,
+            inlineImage)
+        {
+            LogicalAnchor = Buffer.CreateImageAnchor(Buffer.CursorX, Buffer.CursorY),
+            CellGeometry = new TerminalImageCellGeometry(_cellWidth, _cellHeight),
+        });
     }
 
     private static string? DecodeInlineName(ReadOnlySpan<char> value)
@@ -1337,7 +1551,7 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
 
     private void AddImage(TerminalImageOverlay image)
     {
-        var imageBytes = image.Sixel?.EstimatedByteSize ?? image.InlineImage?.EstimatedByteSize ?? 0;
+        var imageBytes = ImageByteSize(image);
         if (imageBytes > TerminalImageLimits.MaximumRetainedImageBytes)
         {
             return;
@@ -1348,8 +1562,7 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
                 _retainedImageBytes + imageBytes > TerminalImageLimits.MaximumRetainedImageBytes))
         {
             var removed = _images[0];
-            _retainedImageBytes -=
-                removed.Sixel?.EstimatedByteSize ?? removed.InlineImage?.EstimatedByteSize ?? 0;
+            _retainedImageBytes -= ImageByteSize(removed);
             _images.RemoveAt(0);
         }
 
@@ -1357,6 +1570,61 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
         _retainedImageBytes += imageBytes;
         ImageAdded?.Invoke(this, image);
     }
+
+    private TerminalImageOverlay[] CreateSnapshotImages(bool includeHistory)
+    {
+        var result = new List<TerminalImageOverlay>(_images.Count);
+        foreach (var image in _images)
+        {
+            var buffer = image.AlternateBuffer ? _alternate : _primary;
+            if (!buffer.TryResolveImageAnchor(image.LogicalAnchor, out var absoluteRow, out var column))
+            {
+                continue;
+            }
+
+            var firstRow = includeHistory ? 0 : buffer.ViewportStart - buffer.ScrollOffset;
+            result.Add(image with
+            {
+                AnchorColumn = column,
+                AnchorRow = absoluteRow - firstRow,
+            });
+        }
+
+        return result.ToArray();
+    }
+
+    private void PruneEvictedImages()
+    {
+        for (var index = _images.Count - 1; index >= 0; index--)
+        {
+            var image = _images[index];
+            var buffer = image.AlternateBuffer ? _alternate : _primary;
+            if (buffer.TryResolveImageAnchor(
+                    image.LogicalAnchor,
+                    out var absoluteRow,
+                    out var column))
+            {
+                if (image.AnchorRow != absoluteRow || image.AnchorColumn != column)
+                {
+                    _images[index] = image with
+                    {
+                        AnchorRow = absoluteRow,
+                        AnchorColumn = column,
+                    };
+                }
+                continue;
+            }
+
+            _retainedImageBytes -= ImageByteSize(image);
+            _images.RemoveAt(index);
+        }
+    }
+
+    private static long ImageByteSize(TerminalImageOverlay image) =>
+        image.Sixel?.EstimatedByteSize ?? image.InlineImage?.EstimatedByteSize ?? 0;
+
+    private void ReportDiagnostic(string code, string message) =>
+        Diagnostic?.Invoke(this, new TerminalEngineDiagnostic(code, message));
 
     private void DispatchClipboard(ReadOnlySpan<char> data)
     {
@@ -1517,10 +1785,89 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
 
     private void DispatchCsi(char final, ReadOnlySpan<int> parameters, byte intermediate, byte privateMarker)
     {
+        if (intermediate == 0 && final == 'u' && DispatchKittyKeyboard(parameters, privateMarker))
+        {
+            return;
+        }
+
+        if (intermediate == 0 && final == 'm' && DispatchModifyOtherKeys(parameters, privateMarker))
+        {
+            return;
+        }
+
         if (privateMarker == 0 && intermediate == (byte)'*' && final == 'z')
         {
             InvokeMacro(Param(parameters, 0, 0));
             return;
+        }
+
+        bool DispatchKittyKeyboard(ReadOnlySpan<int> parameters, byte privateMarker)
+        {
+            if (!_allowKittyKeyboard)
+            {
+                if (privateMarker == (byte)'?')
+                {
+                    Respond("\u001b[?0u");
+                }
+
+                return privateMarker is (byte)'?' or (byte)'>' or (byte)'<' or (byte)'=';
+            }
+
+            const KittyKeyboardFlags supported =
+                KittyKeyboardFlags.DisambiguateEscapeCodes |
+                KittyKeyboardFlags.ReportEventTypes |
+                KittyKeyboardFlags.ReportAllKeysAsEscapeCodes |
+                KittyKeyboardFlags.ReportAssociatedText;
+            switch (privateMarker)
+            {
+                case (byte)'?':
+                    Respond($"\u001b[?{(int)_kittyKeyboardFlags}u");
+                    return true;
+                case (byte)'>':
+                    if (_kittyKeyboardStack.Count < 16)
+                    {
+                        _kittyKeyboardStack.Push(_kittyKeyboardFlags);
+                    }
+
+                    _kittyKeyboardFlags = (KittyKeyboardFlags)Param(parameters, 0, 0) & supported;
+                    return true;
+                case (byte)'<':
+                    var count = Math.Max(1, Param(parameters, 0, 1));
+                    while (count-- > 0 && _kittyKeyboardStack.TryPop(out var restored))
+                    {
+                        _kittyKeyboardFlags = restored;
+                    }
+
+                    return true;
+                case (byte)'=':
+                    var flags = (KittyKeyboardFlags)Param(parameters, 0, 0) & supported;
+                    _kittyKeyboardFlags = Param(parameters, 1, 1) switch
+                    {
+                        2 => _kittyKeyboardFlags | flags,
+                        3 => _kittyKeyboardFlags & ~flags,
+                        _ => flags,
+                    };
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        bool DispatchModifyOtherKeys(ReadOnlySpan<int> parameters, byte privateMarker)
+        {
+            if (privateMarker == (byte)'?' && Param(parameters, 0, -1) == 4)
+            {
+                Respond($"\u001b[>4;{_modifyOtherKeys}m");
+                return true;
+            }
+
+            if (privateMarker == (byte)'>' && Param(parameters, 0, -1) == 4)
+            {
+                _modifyOtherKeys = Math.Clamp(Param(parameters, 1, 0), 0, 2);
+                return true;
+            }
+
+            return false;
         }
 
         if (privateMarker == 0 && intermediate == (byte)'$' && final == 'u')
@@ -1864,6 +2211,9 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
                 case 47:
                     SetAlternateBuffer(enable, clearOnEnter: false, saveCursor: false);
                     break;
+                case 80:
+                    _sixelDisplayMode = enable;
+                    break;
                 case 1000:
                 case 1002:
                 case 1003:
@@ -1911,6 +2261,9 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
                 case 2004:
                     BracketedPaste = enable;
                     break;
+                case 9001:
+                    _win32InputMode = enable;
+                    break;
             }
         }
     }
@@ -1954,8 +2307,7 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
             }
 
             var image = _images[index];
-            _retainedImageBytes -=
-                image.Sixel?.EstimatedByteSize ?? image.InlineImage?.EstimatedByteSize ?? 0;
+            _retainedImageBytes -= ImageByteSize(image);
             _images.RemoveAt(index);
         }
     }
@@ -2153,6 +2505,7 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
             7 => AutoWrap ? 1 : 2,
             12 => CursorBlinking ? 1 : 2,
             25 => CursorVisible ? 1 : 2,
+            80 => _sixelDisplayMode ? 1 : 2,
             47 or 1047 or 1049 => AlternateBufferActive ? 1 : 2,
             1000 => MouseTrackingMode == TerminalMouseTrackingMode.Button ? 1 : 2,
             1002 => MouseTrackingMode == TerminalMouseTrackingMode.ButtonEvent ? 1 : 2,
@@ -2160,6 +2513,7 @@ public sealed class TerminalEngine : ITerminalEngine, IVtDispatch
             1004 => FocusTracking ? 1 : 2,
             1006 => SgrMouse ? 1 : 2,
             2004 => BracketedPaste ? 1 : 2,
+            9001 => _win32InputMode ? 1 : 2,
             _ => 0,
         };
     }

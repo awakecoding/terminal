@@ -46,6 +46,7 @@ shared immutable cell model consumed by the existing Skia renderer. This keeps
 Avalonia tabs, panes, accessibility, clipboard, selection, search, and window
 behavior common across engines.
 
-Kitty shared-memory graphics are not available in upstream Ghostty on Windows.
-The engine reports text and styling correctly; unsupported image transports do
-not silently switch the selected engine.
+The pinned C ABI exposes no Sixel, OSC 1337, or ConEmu image resources. The
+engine excludes those image capability flags and emits deterministic unsupported
+diagnostics instead of pretending to project graphics or silently switching the
+selected engine.

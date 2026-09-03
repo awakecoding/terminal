@@ -25,6 +25,10 @@ The package is a medium-integrity, full-trust desktop package. It declares only
 The checked-in visual assets are copies of the matching scale-100 assets under
 `res\terminal\images`.
 
+The effective packaged AUMID is
+`Awakecoding.WindowsTerminal.Dev_<publisher-id>!Terminal`; code derives the
+publisher-id with `GetCurrentPackageFamilyName` and never guesses it.
+
 ## Build unsigned packages
 
 Install [winapp CLI](https://learn.microsoft.com/windows/apps/dev-tools/winapp-cli/)
@@ -43,7 +47,9 @@ release-signing stage. They cannot be installed until signed.
 
 To package NativeAOT outputs produced elsewhere, place them in
 `artifacts\msix\layout\win-x64` and `artifacts\msix\layout\win-arm64`, then pass
-`-SkipPublish`.
+`-SkipPublish`. `Build-Packages.ps1` still cross-builds the x64/ARM64 shell
+helpers. `-SkipNativeBuild` is only valid when matching helper outputs already
+exist under `artifacts\msix\native-shell\<architecture>`.
 
 ## Development signing and installation
 
@@ -91,17 +97,34 @@ trusted certificate.
 
 ## Capability boundary
 
-`PackageEnvironment.DetectCurrent()` uses the NativeAOT-safe
-`GetCurrentPackageFullName` interop in `WindowsTerminal.Interop`. Packaged
-builds currently report package identity, execution aliases, and protocol
-activation as available. Notifications, jump lists, default-terminal
-registration, and the Explorer shell verb remain explicit unavailable
-capabilities. The notification-area icon and minimize-to-area behavior use
-Avalonia's native tray integration and work both packaged and unpackaged.
+`PackageEnvironment.DetectCurrent()` uses NativeAOT-safe generated P/Invoke.
+The package includes architecture-matched `WindowsTerminalShellExt.dll` and
+`wt-shell-integration.exe`. The DLL implements the package-registered
+`IExplorerCommand` directory/background verbs. The helper implements protocol-1
+jump-list refresh and toast publication; requests are bounded, versioned, and
+authenticated with a random token passed only through standard input and the
+child process environment.
 
-The remaining capabilities cannot be truthfully advertised by this package
-alone: the Explorer verb requires a native `IExplorerCommand` COM DLL, default
-terminal requires the Windows console delegation contract, and system toast
-activation/jump lists require a WinRT or Windows App SDK projection. The app
-keeps in-app accessible notifications and returns explicit unavailable results
-instead of registering incomplete shell components.
+Visible profile name/GUID/icon data produces jump-list tasks. The app refreshes
+them after startup and every settings-editor or snippet save. Toast launch data
+contains only a version, random notification id, validated `use-any`/positive
+window target, and `focus` action. Activation is validated before it is routed
+through the authenticated broker; no broker token, command line, environment
+data, or other secret is embedded in the toast.
+
+Packaged jump lists/toasts use the package family AUMID. Supported unpackaged
+toast use requires both:
+
+- `WT_DOTNET_AUMID` set to an AUMID registered on a Start-menu shortcut.
+- `WT_DOTNET_TOAST_SHORTCUT` set to that existing `.lnk` path.
+- The shortcut's toast activator property and COM/sparse-package registration
+  point to `a3aeb121-45d9-4cd9-a278-4b43d19b95b1`.
+
+Unpackaged jump lists require the same registered AUMID. The helper reports an
+explicit unsupported/failed diagnostic when these identity requirements are not
+met; the accessible in-app notification remains independent.
+
+Default-terminal delegation is intentionally not advertised in the manifest.
+The versioned `default-terminal-delegation.v1` boundary reports unsupported
+until the OpenConsole handoff v3 proxy/stub and host are built and package
+registered. `BuiltInComInteropSupport=false` remains set on the NativeAOT host.

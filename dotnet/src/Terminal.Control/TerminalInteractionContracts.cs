@@ -50,6 +50,7 @@ public enum TerminalPasteResult
 
 public enum TerminalScrollMarkKind
 {
+    User,
     Prompt,
     CommandSuccess,
     CommandError,
@@ -117,7 +118,8 @@ public sealed record TerminalScrollMark(
     int Line,
     double Position,
     TerminalScrollMarkKind Kind,
-    uint? ExitCode = null);
+    uint? ExitCode = null,
+    string? Color = null);
 
 public sealed record TerminalInteractionOptions
 {

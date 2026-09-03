@@ -74,6 +74,163 @@ jobs:
           path: artifacts/${{ matrix.rid }}
           if-no-files-found: error
 
+  linux-managed:
+    name: Linux managed and metadata tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore dotnet/Terminal.slnx
+
+      - name: Run managed tests
+        run: dotnet test dotnet/Terminal.slnx -c Release --no-restore
+
+      - name: Validate Linux scripts and metadata
+        run: bash dotnet/scripts/Test-LinuxPackagingMetadata.sh
+
+  linux-packages:
+    name: Linux packages ${{ matrix.rid }}
+    runs-on: ubuntu-24.04
+    needs: linux-managed
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            appimage_arch: x86_64
+            runtime_sha256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+          - rid: linux-arm64
+            appimage_arch: aarch64
+            runtime_sha256: 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install package inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            appstream desktop-file-utils rpm squashfs-tools
+
+      - name: Install ARM64 cross toolchain
+        if: matrix.rid == 'linux-arm64'
+        run: |
+          sudo apt-get install --no-install-recommends \
+            binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu
+
+      - name: Fetch pinned AppImage runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts/tools
+          gh release download 20251108 --repo AppImage/type2-runtime \
+            --pattern "runtime-${{ matrix.appimage_arch }}" \
+            --dir artifacts/tools
+          echo "${{ matrix.runtime_sha256 }}  artifacts/tools/runtime-${{ matrix.appimage_arch }}" |
+            sha256sum --check
+
+      - name: NativeAOT publish
+        shell: bash
+        run: |
+          extra=()
+          if [[ "${{ matrix.rid }}" == linux-arm64 ]]; then
+            extra+=("-p:ObjCopyName=aarch64-linux-gnu-objcopy")
+          fi
+          dotnet publish dotnet/src/WindowsTerminal/WindowsTerminal.csproj \
+            -c Release -r "${{ matrix.rid }}" --self-contained true \
+            -p:DebugSymbols=false -p:DebugType=None -p:NativeDebugSymbols=false \
+            -o "artifacts/publish/${{ matrix.rid }}" "${extra[@]}"
+
+      - name: Build deterministic tar, DEB, RPM, and AppImage
+        env:
+          APPIMAGE_RUNTIME_FILE: ${{ github.workspace }}/artifacts/tools/runtime-${{ matrix.appimage_arch }}
+          LINUX_PUBLISH_DIR: ${{ github.workspace }}/artifacts/publish/${{ matrix.rid }}
+          SOURCE_DATE_EPOCH: "1704067200"
+        run: |
+          bash dotnet/scripts/Build-LinuxPackage.sh \
+            "${{ matrix.rid }}" "0.1.${{ github.run_number }}" \
+            artifacts/linux-packages all
+
+      - name: Validate packages without launching UI
+        run: |
+          bash dotnet/scripts/Test-LinuxPackage.sh "${{ matrix.rid }}" \
+            artifacts/linux-packages/*-"${{ matrix.rid }}".tar.gz \
+            artifacts/linux-packages/*-"${{ matrix.rid }}".deb \
+            artifacts/linux-packages/*-"${{ matrix.rid }}".rpm \
+            artifacts/linux-packages/*-"${{ matrix.rid }}".AppImage
+
+      - name: Rebuild and compare x64 packages
+        if: matrix.rid == 'linux-x64'
+        env:
+          APPIMAGE_RUNTIME_FILE: ${{ github.workspace }}/artifacts/tools/runtime-${{ matrix.appimage_arch }}
+          LINUX_PUBLISH_DIR: ${{ github.workspace }}/artifacts/publish/${{ matrix.rid }}
+          SOURCE_DATE_EPOCH: "1704067200"
+        run: |
+          bash dotnet/scripts/Build-LinuxPackage.sh \
+            "${{ matrix.rid }}" "0.1.${{ github.run_number }}" \
+            artifacts/linux-packages-rebuilt all
+          cmp artifacts/linux-packages/*-"${{ matrix.rid }}".sha256 \
+            artifacts/linux-packages-rebuilt/*-"${{ matrix.rid }}".sha256
+
+      - name: Upload Linux package artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: WindowsTerminal-${{ matrix.rid }}-packages
+          path: artifacts/linux-packages
+          if-no-files-found: error
+
+  linux-arm64-hardware:
+    name: Linux ARM64 native runtime (ubuntu-24.04-arm)
+    runs-on: ubuntu-24.04-arm
+    needs: linux-packages
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Verify native ARM64 runner
+        shell: bash
+        run: |
+          case "$(uname -m)" in
+            aarch64|arm64) ;;
+            *)
+              echo "::error::linux-arm64-hardware requires native ARM64; uname -m returned '$(uname -m)'. QEMU is not an accepted fallback."
+              exit 78
+              ;;
+          esac
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install package inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            appstream cpio desktop-file-utils rpm squashfs-tools
+
+      - name: Download ARM64 packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: WindowsTerminal-linux-arm64-packages
+          path: artifacts/linux-arm64-packages
+
+      - name: Run native non-UI ARM64 gates
+        shell: bash
+        run: bash dotnet/scripts/Test-LinuxArm64Runtime.sh artifacts/linux-arm64-packages
+
   msix:
     name: Unsigned MSIX packages
     needs: native-aot

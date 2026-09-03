@@ -30,7 +30,7 @@ public sealed class PackageEnvironmentTests
         Assert.False(environment.Supports(PackageCapability.DefaultTerminal));
         Assert.False(environment.Supports(PackageCapability.ShellVerb));
         Assert.Contains(
-            "integration component",
+            "architecture-matched shell helper",
             environment.GetUnavailableReason(PackageCapability.Notifications));
     }
 

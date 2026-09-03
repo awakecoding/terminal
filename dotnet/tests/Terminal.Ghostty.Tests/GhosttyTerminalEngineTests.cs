@@ -1,4 +1,7 @@
+using Microsoft.Terminal.Core;
+using Microsoft.Terminal.Control;
 using Microsoft.Terminal.Ghostty;
+using Avalonia.Input;
 using Xunit;
 
 namespace Microsoft.Terminal.Ghostty.Tests;
@@ -22,6 +25,111 @@ public sealed class GhosttyTerminalEngineTests
         GhosttyAbi.Validate();
 
         Assert.Contains("\"schema\":1", GhosttyAbi.TypeManifest);
+    }
+
+    [Fact]
+    public void AbiCapabilitiesExplicitlyExcludeUnavailableSharedResources()
+    {
+        using var engine = new GhosttyTerminalEngine();
+
+        Assert.False(engine.Capabilities.HasFlag(TerminalEngineCapabilities.UnicodeGraphemeClusters));
+        Assert.True(engine.Capabilities.HasFlag(TerminalEngineCapabilities.Vt52Keyboard));
+        Assert.False(engine.Capabilities.HasFlag(TerminalEngineCapabilities.RowRendition));
+        Assert.False(engine.Capabilities.HasFlag(TerminalEngineCapabilities.DrcsGlyphs));
+        Assert.False(engine.Capabilities.HasFlag(TerminalEngineCapabilities.KittyKeyboard));
+        Assert.False(engine.Capabilities.HasFlag(TerminalEngineCapabilities.ModifyOtherKeys));
+        Assert.False(engine.Capabilities.HasFlag(TerminalEngineCapabilities.Win32Input));
+        Assert.False(engine.Capabilities.HasFlag(TerminalEngineCapabilities.SixelImages));
+        Assert.False(engine.Capabilities.HasFlag(TerminalEngineCapabilities.Iterm2Images));
+        Assert.False(engine.Capabilities.HasFlag(TerminalEngineCapabilities.ConEmuImages));
+        Assert.Empty(engine.CreateSnapshot().Images);
+        Assert.Empty(engine.CreateSnapshot().DrcsGlyphs);
+    }
+
+    [Fact]
+    public void UnsupportedImageProtocolsProduceDeterministicDiagnostics()
+    {
+        using var engine = new GhosttyTerminalEngine();
+        var diagnostics = new List<TerminalEngineDiagnostic>();
+        engine.Diagnostic += (_, value) => diagnostics.Add(value);
+
+        engine.Feed("\u001bP7q~\u001b\\");
+        engine.Feed("\u001b]133");
+        engine.Feed("7;File=inline=1:AQ==\u0007");
+        engine.Feed("\u001b]9;4;st=0;sz=1;AQ==\u001b\\");
+
+        Assert.Equal(
+            [
+                "image.sixel.unsupported",
+                "image.osc1337.unsupported",
+                "image.conemu.unsupported",
+            ],
+            diagnostics.Select(static value => value.Code));
+        Assert.Empty(engine.CreateSnapshot().Images);
+    }
+
+    [Fact]
+    public void NonImageDcsQueriesDoNotProduceImageDiagnostics()
+    {
+        using var engine = new GhosttyTerminalEngine();
+        var diagnostics = new List<TerminalEngineDiagnostic>();
+        engine.Diagnostic += (_, value) => diagnostics.Add(value);
+
+        engine.Feed("\u001bP$qm\u001b\\\u001bP+q544e\u001b\\");
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Theory]
+    [InlineData("\u001b")]
+    [InlineData("\u001bP")]
+    [InlineData("\u001bPq")]
+    [InlineData("\u001bPq\u001b")]
+    [InlineData("\u001b]")]
+    [InlineData("\u001b]1")]
+    [InlineData("\u001b]1337;")]
+    [InlineData("\u001b]1337;\u001b")]
+    public void CancelledImageProbeStateRecoversForFollowingSequence(string prefix)
+    {
+        foreach (var cancellation in new[] { '\u0018', '\u001A' })
+        {
+            using var engine = new GhosttyTerminalEngine();
+            var diagnostics = new List<TerminalEngineDiagnostic>();
+            engine.Diagnostic += (_, value) => diagnostics.Add(value);
+            engine.Feed(prefix);
+            diagnostics.Clear();
+
+            engine.Feed($"{cancellation}\u001bPq~\u001b\\");
+
+            Assert.Equal(
+                ["image.sixel.unsupported"],
+                diagnostics.Select(static value => value.Code));
+        }
+    }
+
+    [Fact]
+    public void Vt52KeyboardEncodingMatchesBuiltInModeState()
+    {
+        using var builtIn = new TerminalEngine();
+        using var ghostty = new GhosttyTerminalEngine();
+        builtIn.Feed("\u001b[?2l");
+        ghostty.Feed("\u001b[?2l");
+
+        var expected = KeyMapper.ToVt(
+            Key.Up,
+            KeyModifiers.None,
+            PhysicalKey.ArrowUp,
+            null,
+            builtIn.InputMode);
+        var actual = KeyMapper.ToVt(
+            Key.Up,
+            KeyModifiers.None,
+            PhysicalKey.ArrowUp,
+            null,
+            ghostty.InputMode);
+
+        Assert.Equal("\u001bA", expected);
+        Assert.Equal(expected, actual);
     }
 
     [Fact]

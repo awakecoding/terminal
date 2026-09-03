@@ -36,6 +36,10 @@
           Link="THIRD-PARTY-NOTICES-GHOSTTY.txt"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\native\noto-emoji\LICENSE"
+          Link="THIRD-PARTY-NOTICES-NOTO-EMOJI.txt"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\native\linux-pty\$(LinuxPtyRid)\wt-pty-host"
           Link="wt-pty-host"
           Condition="'$(LinuxPtyRid)' != ''"
