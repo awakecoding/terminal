@@ -18,7 +18,7 @@ def file_license(path: str) -> str:
         return "LicenseRef-AppImage-Runtime"
     if path.endswith("/THIRD-PARTY-NOTICES-NOTO-EMOJI.txt"):
         return "OFL-1.1"
-    if path.endswith("/WindowsTerminal"):
+    if path.endswith("/Devolutions.Terminal"):
         return "MIT AND OFL-1.1"
     if path.endswith("/LICENSE"):
         return "MIT"
@@ -42,11 +42,11 @@ def main() -> int:
     sbom_path = doc / "sbom.spdx.json"
     excluded_metadata = {inventory_path, sbom_path}
     executables = {
-        "WindowsTerminal",
-        "wt",
-        "wt-pty-host",
+        "Devolutions.Terminal",
+        "dt",
+        "dt-pty-host",
         "Install-LinuxDesktopIntegration.sh",
-        "windows-terminal-dotnet-x-terminal-emulator",
+        "devolutions-terminal-x-terminal-emulator",
         "AppRun",
     }
 
@@ -131,7 +131,7 @@ def main() -> int:
         "dataLicense": "CC0-1.0",
         "name": f"{name}-{version}-{rid}-{safe_kind}",
         "documentNamespace": (
-            f"https://github.com/awakecoding/terminal/sbom/"
+            f"https://github.com/Devolutions/devolutions-terminal/sbom/"
             f"{version}/{rid}/{safe_kind}"
         ),
         "documentDescribes": ["SPDXRef-Package"],

@@ -1,0 +1,78 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>Devolutions.Terminal</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
+    <PublishAot>true</PublishAot>
+    <PublishTrimmed>true</PublishTrimmed>
+    <PublishAot Condition="'$(Configuration)' == 'Debug'">false</PublishAot>
+    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">false</PublishTrimmed>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
+    <DebugType>embedded</DebugType>
+    <AssemblyName>Devolutions.Terminal</AssemblyName>
+    <Product>Devolutions Terminal</Product>
+    <Description>NativeAOT Avalonia terminal emulator.</Description>
+    <GhosttyRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</GhosttyRid>
+    <GhosttyRid Condition="'$(GhosttyRid)' == ''">$(NETCoreSdkPortableRuntimeIdentifier)</GhosttyRid>
+    <GhosttyNativeName Condition="$([System.String]::Copy('$(GhosttyRid)').StartsWith('linux-'))">libghostty-vt.so</GhosttyNativeName>
+    <GhosttyNativeName Condition="'$(GhosttyNativeName)' == ''">ghostty-vt.dll</GhosttyNativeName>
+    <LinuxPtyRid Condition="$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-'))">$(RuntimeIdentifier)</LinuxPtyRid>
+    <LinuxPtyRid Condition="'$(LinuxPtyRid)' == '' and $([System.String]::Copy('$(NETCoreSdkPortableRuntimeIdentifier)').StartsWith('linux-'))">$(NETCoreSdkPortableRuntimeIdentifier)</LinuxPtyRid>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" />
+    <None Include="..\..\native\ghostty\$(GhosttyRid)\$(GhosttyNativeName)"
+          Link="$(GhosttyNativeName)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\native\ghostty\LICENSE"
+          Link="THIRD-PARTY-NOTICES-GHOSTTY.txt"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\native\noto-emoji\LICENSE"
+          Link="THIRD-PARTY-NOTICES-NOTO-EMOJI.txt"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\native\linux-pty\$(LinuxPtyRid)\dt-pty-host"
+          Link="dt-pty-host"
+          Condition="'$(LinuxPtyRid)' != ''"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="PublishDtCli" AfterTargets="Publish">
+    <PropertyGroup>
+      <_HostPublishDir Condition="$([System.IO.Path]::IsPathRooted('$(PublishDir)'))">$(PublishDir)</_HostPublishDir>
+      <_HostPublishDir Condition="!$([System.IO.Path]::IsPathRooted('$(PublishDir)'))">$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\$(PublishDir)'))</_HostPublishDir>
+    </PropertyGroup>
+    <MSBuild
+      Projects="..\Devolutions.Terminal.Cli\Devolutions.Terminal.Cli.csproj"
+      Targets="Publish"
+      Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);PublishAot=$(PublishAot);PublishDir=$(_HostPublishDir)" />
+  </Target>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Devolutions.Terminal.App\Devolutions.Terminal.App.csproj" />
+    <ProjectReference Include="..\Devolutions.Terminal.Broker\Devolutions.Terminal.Broker.csproj" />
+    <ProjectReference Include="..\Devolutions.Terminal.Cli\Devolutions.Terminal.Cli.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+    <AvaloniaResource Include="..\..\assets\icons\terminal.ico" Link="Assets\terminal.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <TrimmerRootAssembly Include="Avalonia.Themes.Fluent" />
+    <TrimmerRootAssembly Include="Devolutions.Terminal" />
+    <TrimmerRootAssembly Include="Devolutions.Terminal.App" />
+    <TrimmerRootAssembly Include="Devolutions.Terminal.Settings.Editor" />
+  </ItemGroup>
+</Project>

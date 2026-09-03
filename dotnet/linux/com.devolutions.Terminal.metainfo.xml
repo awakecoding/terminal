@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.devolutions.Terminal</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT AND OFL-1.1</project_license>
+  <name>Devolutions Terminal</name>
+  <summary>A NativeAOT terminal with tabs and panes</summary>
+  <description>
+    <p>
+      Devolutions Terminal is a cross-platform Avalonia terminal emulator
+      with tabs, panes, configurable profiles, and built-in or Ghostty terminal
+      engines.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.devolutions.Terminal.desktop</launchable>
+  <provides>
+    <binary>Devolutions.Terminal</binary>
+    <binary>dt</binary>
+  </provides>
+  <url type="homepage">https://github.com/Devolutions/devolutions-terminal</url>
+  <url type="bugtracker">https://github.com/Devolutions/devolutions-terminal/issues</url>
+  <content_rating type="oars-1.1"/>
+</component>

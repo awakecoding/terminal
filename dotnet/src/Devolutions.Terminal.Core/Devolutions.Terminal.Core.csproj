@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Devolutions.Terminal.Core</RootNamespace>
+    <Description>VT parser, text buffer, and terminal engine for the .NET Windows Terminal port.</Description>
+  </PropertyGroup>
+</Project>

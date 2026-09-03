@@ -1,4 +1,4 @@
-LIBRARY WindowsTerminalShellExt
+LIBRARY Devolutions.Terminal.ShellExt
 EXPORTS
     DllGetClassObject PRIVATE
     DllCanUnloadNow PRIVATE

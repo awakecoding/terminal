@@ -42,10 +42,10 @@ foreach ($architecture in $Architectures) {
     $helperSource = Join-Path $sourceRoot "shell-helper.cpp"
     $extensionSource = Join-Path $sourceRoot "shell-extension.cpp"
     $extensionDefinition = Join-Path $sourceRoot "shell-extension.def"
-    $helperOutput = Join-Path $output "wt-shell-integration.exe"
-    $extensionOutput = Join-Path $output "WindowsTerminalShellExt.dll"
-    $helperPdb = Join-Path $output "wt-shell-integration.pdb"
-    $extensionPdb = Join-Path $output "WindowsTerminalShellExt.pdb"
+    $helperOutput = Join-Path $output "dt-shell-integration.exe"
+    $extensionOutput = Join-Path $output "Devolutions.Terminal.ShellExt.dll"
+    $helperPdb = Join-Path $output "dt-shell-integration.pdb"
+    $extensionPdb = Join-Path $output "Devolutions.Terminal.ShellExt.pdb"
 
     $commands = @(
         "call `"$vsDevCmd`" -no_logo -arch=$architecture -host_arch=x64",

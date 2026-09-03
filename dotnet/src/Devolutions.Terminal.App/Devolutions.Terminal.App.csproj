@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Devolutions.Terminal.App</RootNamespace>
+    <AssemblyName>Devolutions.Terminal.App</AssemblyName>
+    <Description>Avalonia application shell for tabs, panes, actions, and windows.</Description>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="..\..\assets\profile-icons\*.scale-100.png"
+                      Link="Assets\ProfileIcons\%(Filename)%(Extension)" />
+    <AvaloniaResource Include="..\..\assets\profile-generator-icons\*.png"
+                      Link="Assets\ProfileGeneratorIcons\%(Filename)%(Extension)" />
+    <AvaloniaResource Include="..\..\assets\icons\terminal.png"
+                      Link="Assets\ProfileIcons\terminal.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Devolutions.Terminal.Control\Devolutions.Terminal.Control.csproj" />
+    <ProjectReference Include="..\Devolutions.Terminal.Connection\Devolutions.Terminal.Connection.csproj" />
+    <ProjectReference Include="..\Devolutions.Terminal.Ghostty\Devolutions.Terminal.Ghostty.csproj" />
+    <ProjectReference Include="..\Devolutions.Terminal.Settings\Devolutions.Terminal.Settings.csproj" />
+    <ProjectReference Include="..\Devolutions.Terminal.Package\Devolutions.Terminal.Package.csproj" />
+    <ProjectReference Include="..\Devolutions.Terminal.Settings.Editor\Devolutions.Terminal.Settings.Editor.csproj" />
+  </ItemGroup>
+</Project>

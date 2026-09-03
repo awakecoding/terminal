@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Devolutions.Terminal.Cli</RootNamespace>
+    <AssemblyName>dt</AssemblyName>
+    <Description>Devolutions Terminal command-line client and activation parser.</Description>
+    <PublishAot>true</PublishAot>
+    <PublishTrimmed>true</PublishTrimmed>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Devolutions.Terminal.Settings\Devolutions.Terminal.Settings.csproj" />
+    <ProjectReference Include="..\Devolutions.Terminal.Broker\Devolutions.Terminal.Broker.csproj" />
+  </ItemGroup>
+</Project>

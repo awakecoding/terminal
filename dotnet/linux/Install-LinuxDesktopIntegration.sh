@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-app_id="com.awakecoding.WindowsTerminalDotNet"
-scheme="x-scheme-handler/wt-dotnet"
+app_id="com.devolutions.Terminal"
+scheme="x-scheme-handler/dterm"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 action="${1:-}"
 if [[ -z "$action" ]]; then
@@ -13,7 +13,7 @@ shift
 
 destdir="${DESTDIR:-}"
 prefix="/usr"
-app_dir="/opt/windows-terminal-dotnet"
+app_dir="/opt/devolutions-terminal"
 method="auto"
 while (($#)); do
     case "$1" in
@@ -61,8 +61,8 @@ metainfo_dir="${destdir}${prefix}/share/metainfo"
 icons_dir="${destdir}${prefix}/share/icons/hicolor"
 bin_dir="${destdir}${prefix}/bin"
 desktop_file="$applications_dir/$app_id.desktop"
-wrapper_file="$bin_dir/windows-terminal-dotnet-x-terminal-emulator"
-state_home="${XDG_STATE_HOME:-${HOME:?HOME is required}/.local/state}/windows-terminal-dotnet"
+wrapper_file="$bin_dir/devolutions-terminal-x-terminal-emulator"
+state_home="${XDG_STATE_HOME:-${HOME:?HOME is required}/.local/state}/devolutions-terminal"
 config_home="${XDG_CONFIG_HOME:-${HOME:?HOME is required}/.config}"
 data_home="${XDG_DATA_HOME:-${HOME:?HOME is required}/.local/share}"
 
@@ -82,7 +82,7 @@ refresh_caches() {
 
 install_assets() {
     install -d "$applications_dir" "$metainfo_dir" "$bin_dir"
-    sed "s|/opt/windows-terminal-dotnet/WindowsTerminal|$app_dir/WindowsTerminal|g" \
+    sed "s|/opt/devolutions-terminal/Devolutions.Terminal|$app_dir/Devolutions.Terminal|g" \
         "$script_dir/$app_id.desktop" > "$desktop_file"
     chmod 0644 "$desktop_file"
     install -m 0644 "$script_dir/$app_id.metainfo.xml" "$metainfo_dir/$app_id.metainfo.xml"
@@ -98,9 +98,9 @@ if [ "\${1-}" = "-e" ] || [ "\${1-}" = "--" ]; then
     shift
 fi
 if [ "\$#" -eq 0 ]; then
-    exec "$app_dir/WindowsTerminal"
+    exec "$app_dir/Devolutions.Terminal"
 fi
-exec "$app_dir/WindowsTerminal" -- "\$@"
+exec "$app_dir/Devolutions.Terminal" -- "\$@"
 EOF
     chmod 0755 "$wrapper_file"
     refresh_caches
@@ -145,7 +145,7 @@ remove_owned_mime_assignment() {
         "$config_home/mimeapps.list" \
         "$data_home/applications/mimeapps.list"; do
         [[ -f "$file" ]] || continue
-        temporary="$file.windows-terminal-dotnet.$$"
+        temporary="$file.devolutions-terminal.$$"
         awk -v key="$scheme" -v value="$app_id.desktop" '
             index($0, key "=") == 1 {
                 handlers = substr($0, length(key) + 2)
@@ -207,7 +207,7 @@ set_xdg_default_terminal() {
         fi
         printf '%s\n' "$list" > "$state_home/default-terminal.list-path"
     fi
-    local temporary="$list.windows-terminal-dotnet.$$"
+    local temporary="$list.devolutions-terminal.$$"
     if [[ ! -f "$state_home/default-terminal.was-present" ]]; then
         if [[ -f "$list" ]] && grep -Fxq "$app_id.desktop" "$list"; then
             printf 'yes\n' > "$state_home/default-terminal.was-present"
@@ -228,7 +228,7 @@ unset_xdg_default_terminal() {
     if [[ -f "$state_home/default-terminal.list-path" ]]; then
         list="$(cat "$state_home/default-terminal.list-path")"
     fi
-    local temporary="$list.windows-terminal-dotnet.$$"
+    local temporary="$list.devolutions-terminal.$$"
     local was_present="no"
     if [[ -f "$state_home/default-terminal.was-present" ]]; then
         was_present="$(cat "$state_home/default-terminal.was-present")"
@@ -248,7 +248,7 @@ set_alternatives_default_terminal() {
         { echo "The alternatives method must run as root." >&2; exit 77; }
     command -v update-alternatives >/dev/null 2>&1 ||
         { echo "update-alternatives is unavailable on this distribution." >&2; exit 69; }
-    local target="${prefix}/bin/windows-terminal-dotnet-x-terminal-emulator"
+    local target="${prefix}/bin/devolutions-terminal-x-terminal-emulator"
     [[ -x "$target" ]] ||
         { echo "Install the terminal wrapper at $target first." >&2; exit 66; }
     install -d "$state_home"
@@ -270,7 +270,7 @@ set_alternatives_default_terminal() {
 unset_alternatives_default_terminal() {
     [[ "$(id -u)" -eq 0 ]] ||
         { echo "The alternatives method must run as root." >&2; exit 77; }
-    local target="${prefix}/bin/windows-terminal-dotnet-x-terminal-emulator"
+    local target="${prefix}/bin/devolutions-terminal-x-terminal-emulator"
     local previous=""
     [[ -f "$state_home/alternatives.previous" ]] &&
         previous="$(<"$state_home/alternatives.previous")"

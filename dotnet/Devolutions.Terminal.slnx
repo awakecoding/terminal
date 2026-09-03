@@ -1,0 +1,35 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Devolutions.Terminal.Connection/Devolutions.Terminal.Connection.csproj" />
+    <Project Path="src/Devolutions.Terminal.Control/Devolutions.Terminal.Control.csproj" />
+    <Project Path="src/Devolutions.Terminal.Core/Devolutions.Terminal.Core.csproj" />
+    <Project Path="src/Devolutions.Terminal.Ghostty/Devolutions.Terminal.Ghostty.csproj" />
+    <Project Path="src/Devolutions.Terminal.Render/Devolutions.Terminal.Render.csproj" />
+    <Project Path="src/Devolutions.Terminal.Settings/Devolutions.Terminal.Settings.csproj" />
+    <Project Path="src/Devolutions.Terminal.Broker/Devolutions.Terminal.Broker.csproj" />
+    <Project Path="src/Devolutions.Terminal.Cli/Devolutions.Terminal.Cli.csproj" />
+    <Project Path="src/Devolutions.Terminal.App/Devolutions.Terminal.App.csproj" />
+    <Project Path="src/Devolutions.Terminal.Interop/Devolutions.Terminal.Interop.csproj" />
+    <Project Path="src/Devolutions.Terminal.Package/Devolutions.Terminal.Package.csproj" />
+    <Project Path="src/Devolutions.Terminal.Settings.Editor/Devolutions.Terminal.Settings.Editor.csproj" />
+    <Project Path="src/Devolutions.Terminal/Devolutions.Terminal.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Devolutions.Terminal.Connection.Tests/Devolutions.Terminal.Connection.Tests.csproj" />
+    <Project Path="tests/Devolutions.Terminal.Control.Tests/Devolutions.Terminal.Control.Tests.csproj" />
+    <Project Path="tests/Devolutions.Terminal.Core.Tests/Devolutions.Terminal.Core.Tests.csproj" />
+    <Project Path="tests/Devolutions.Terminal.Ghostty.Tests/Devolutions.Terminal.Ghostty.Tests.csproj" />
+    <Project Path="tests/Devolutions.Terminal.Render.Tests/Devolutions.Terminal.Render.Tests.csproj" />
+    <Project Path="tests/Devolutions.Terminal.Settings.Tests/Devolutions.Terminal.Settings.Tests.csproj" />
+    <Project Path="tests/Devolutions.Terminal.Broker.Tests/Devolutions.Terminal.Broker.Tests.csproj" />
+    <Project Path="tests/Devolutions.Terminal.Cli.Tests/Devolutions.Terminal.Cli.Tests.csproj" />
+    <Project Path="tests/Devolutions.Terminal.App.Tests/Devolutions.Terminal.App.Tests.csproj" />
+    <Project Path="tests/Devolutions.Terminal.Compatibility.Tests/Devolutions.Terminal.Compatibility.Tests.csproj" />
+    <Project Path="tests/Devolutions.Terminal.Settings.Editor.Tests/Devolutions.Terminal.Settings.Editor.Tests.csproj" />
+    <Project Path="tests/Devolutions.Terminal.Package.Tests/Devolutions.Terminal.Package.Tests.csproj" />
+    <Project Path="tests/Devolutions.Terminal.UI.Tests/Devolutions.Terminal.UI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Devolutions.Terminal.PortInventory/Devolutions.Terminal.PortInventory.csproj" />
+  </Folder>
+</Solution>

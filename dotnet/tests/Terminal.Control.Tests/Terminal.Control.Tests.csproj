@@ -1,8 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <ProjectReference Include="..\..\src\Terminal.Control\Terminal.Control.csproj" />
-  </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="Avalonia.Headless.XUnit" />
-  </ItemGroup>
-</Project>

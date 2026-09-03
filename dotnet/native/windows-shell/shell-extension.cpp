@@ -140,7 +140,7 @@ public:
         {
             return hr;
         }
-        path.replace_filename(L"WindowsTerminal.exe");
+        path.replace_filename(L"Devolutions.Terminal.exe");
         path += L",0";
         return duplicate_string(path.native(), icon);
     }
@@ -202,7 +202,7 @@ public:
         hr = module_path(executable);
         if (SUCCEEDED(hr))
         {
-            executable.replace_filename(L"WindowsTerminal.exe");
+            executable.replace_filename(L"Devolutions.Terminal.exe");
             std::wstring command;
             append_quoted(command, executable.native());
             command += L" -d ";
@@ -397,7 +397,7 @@ public:
         {
             return hr;
         }
-        executable.replace_filename(L"WindowsTerminal.exe");
+        executable.replace_filename(L"Devolutions.Terminal.exe");
         std::wstring command;
         append_quoted(command, executable.native());
         command.push_back(L' ');

@@ -17,14 +17,14 @@ try {
     }
 
     if ($process.HasExited) {
-        throw "WindowsTerminal exited during startup with code $($process.ExitCode)."
+        throw "Devolutions.Terminal exited during startup with code $($process.ExitCode)."
     }
 
     if ($process.MainWindowHandle -eq 0) {
-        throw "WindowsTerminal did not create a window within $StartupTimeoutSeconds seconds."
+        throw "Devolutions.Terminal did not create a window within $StartupTimeoutSeconds seconds."
     }
 
-    Write-Host "WindowsTerminal created window handle $($process.MainWindowHandle)."
+    Write-Host "Devolutions.Terminal created window handle $($process.MainWindowHandle)."
 }
 finally {
     if (-not $process.HasExited) {

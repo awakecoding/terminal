@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Devolutions.Terminal.Settings</RootNamespace>
+    <Description>JSON settings model compatible with a Windows Terminal subset.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Devolutions.Terminal.Core\Devolutions.Terminal.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Defaults\defaults.json" LogicalName="Devolutions.Terminal.Settings.defaults.json" />
+    <EmbeddedResource Include="Defaults\userDefaults.json" LogicalName="Devolutions.Terminal.Settings.userDefaults.json" />
+  </ItemGroup>
+</Project>

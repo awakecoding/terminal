@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Devolutions.Terminal.Interop</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Description>NativeAOT-safe Windows API interop owned by the application host.</Description>
+  </PropertyGroup>
+</Project>

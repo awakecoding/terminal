@@ -37,11 +37,11 @@ import sys
 import tarfile
 
 executables = {
-    "WindowsTerminal",
-    "wt",
-    "wt-pty-host",
+    "Devolutions.Terminal",
+    "dt",
+    "dt-pty-host",
     "Install-LinuxDesktopIntegration.sh",
-    "windows-terminal-dotnet-x-terminal-emulator",
+    "devolutions-terminal-x-terminal-emulator",
     "AppRun",
     "postinst",
     "postrm",
@@ -99,12 +99,12 @@ validate_rpm_metadata() {
     done
     local listing
     listing="$(rpm -qplv "$package")"
-    for executable in WindowsTerminal wt wt-pty-host; do
-        grep -E -- "^-rwxr-xr-x .* /opt/windows-terminal-dotnet/$executable$" \
+    for executable in Devolutions.Terminal dt dt-pty-host; do
+        grep -E -- "^-rwxr-xr-x .* /opt/devolutions-terminal/$executable$" \
             <<<"$listing" >/dev/null
     done
     for library in libSkiaSharp.so libHarfBuzzSharp.so libghostty-vt.so; do
-        grep -E -- "^-rw-r--r-- .* /opt/windows-terminal-dotnet/$library$" \
+        grep -E -- "^-rw-r--r-- .* /opt/devolutions-terminal/$library$" \
             <<<"$listing" >/dev/null
     done
 }
@@ -136,8 +136,8 @@ PY
         { echo "unsquashfs is required for architecture-independent AppImage validation (Ubuntu: sudo apt-get install squashfs-tools)." >&2; exit 69; }
     local listing="$work/appimage-listing"
     unsquashfs -lln -o "$(cat "$work/appimage-offset")" "$package" > "$listing" 2>/dev/null
-    grep -E -- '^-rwxr-xr-x .* squashfs-root/opt/windows-terminal-dotnet/(WindowsTerminal|wt|wt-pty-host)$' "$listing" >/dev/null
-    grep -E -- '^-rw-r--r-- .* squashfs-root/opt/windows-terminal-dotnet/lib(SkiaSharp|HarfBuzzSharp|ghostty-vt)\.so$' "$listing" >/dev/null
+    grep -E -- '^-rwxr-xr-x .* squashfs-root/opt/devolutions-terminal/(Devolutions.Terminal|dt|dt-pty-host)$' "$listing" >/dev/null
+    grep -E -- '^-rw-r--r-- .* squashfs-root/opt/devolutions-terminal/lib(SkiaSharp|HarfBuzzSharp|ghostty-vt)\.so$' "$listing" >/dev/null
     unsquashfs -no-progress -o "$(cat "$work/appimage-offset")" -d "$root" "$package" >/dev/null
     local runtime_size
     runtime_size="$(cat "$work/appimage-offset")"
@@ -243,9 +243,9 @@ for item in inventory["files"]:
     if item["type"] == "symlink":
         expected_mode = "0777"
     elif path.name in {
-        "WindowsTerminal", "wt", "wt-pty-host",
+        "Devolutions.Terminal", "dt", "dt-pty-host",
         "Install-LinuxDesktopIntegration.sh",
-        "windows-terminal-dotnet-x-terminal-emulator",
+        "devolutions-terminal-x-terminal-emulator",
         "AppRun",
     }:
         expected_mode = "0755"
@@ -272,7 +272,7 @@ validate_root() {
     local helper="$app/linux/Install-LinuxDesktopIntegration.sh"
 
     for path in \
-        "$app/WindowsTerminal" "$app/wt" "$app/wt-pty-host" \
+        "$app/Devolutions.Terminal" "$app/dt" "$app/dt-pty-host" \
         "$app/libghostty-vt.so" "$app/libSkiaSharp.so" "$app/libHarfBuzzSharp.so" \
         "$app/THIRD-PARTY-NOTICES-GHOSTTY.txt" \
         "$root/usr/share/doc/$PACKAGE_NAME/LICENSE" \
@@ -281,16 +281,16 @@ validate_root() {
         "$desktop" "$metainfo" "$helper"; do
         test -e "$path" || { echo "$(basename "$package") is missing ${path#"$root"}." >&2; exit 1; }
     done
-    test -L "$root/usr/bin/WindowsTerminal"
-    test "$(readlink "$root/usr/bin/WindowsTerminal")" = "../../${INSTALL_DIR#/}/WindowsTerminal"
-    test -L "$root/usr/bin/wt"
-    test "$(readlink "$root/usr/bin/wt")" = "../../${INSTALL_DIR#/}/wt"
+    test -L "$root/usr/bin/Devolutions.Terminal"
+    test "$(readlink "$root/usr/bin/Devolutions.Terminal")" = "../../${INSTALL_DIR#/}/Devolutions.Terminal"
+    test -L "$root/usr/bin/dt"
+    test "$(readlink "$root/usr/bin/dt")" = "../../${INSTALL_DIR#/}/dt"
     for size in 16 32 48 64 96 256; do
         test -f "$root/usr/share/icons/hicolor/${size}x${size}/apps/$APP_ID.png"
     done
 
-    grep -Fx "Exec=\"$INSTALL_DIR/WindowsTerminal\" %u" "$desktop" >/dev/null
-    grep -Fx "TryExec=$INSTALL_DIR/WindowsTerminal" "$desktop" >/dev/null
+    grep -Fx "Exec=\"$INSTALL_DIR/Devolutions.Terminal\" %u" "$desktop" >/dev/null
+    grep -Fx "TryExec=$INSTALL_DIR/Devolutions.Terminal" "$desktop" >/dev/null
     grep -Fx "MimeType=$DESKTOP_SCHEME;" "$desktop" >/dev/null
     grep -Fx 'X-TerminalArgExec=--' "$desktop" >/dev/null
     grep -F "<id>$APP_ID</id>" "$metainfo" >/dev/null
@@ -330,7 +330,7 @@ PY
             done < <(readelf -d "$path" 2>/dev/null |
                 sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p')
         elif [[ "$(basename "$path")" == "Install-LinuxDesktopIntegration.sh" ||
-                "$(basename "$path")" == "windows-terminal-dotnet-x-terminal-emulator" ||
+                "$(basename "$path")" == "devolutions-terminal-x-terminal-emulator" ||
                 "$(basename "$path")" == "AppRun" ]]; then
             head -c 2 "$path" | grep -F '#!' >/dev/null ||
                 { echo "${path#"$root"} is executable but is neither ELF nor a script." >&2; exit 1; }
@@ -369,7 +369,7 @@ PY
         uninstall --destdir "$lifecycle" --prefix /usr --app-dir "$INSTALL_DIR"
     test ! -e "$lifecycle/usr/share/applications/$APP_ID.desktop"
     test ! -e "$lifecycle/usr/share/metainfo/$APP_ID.metainfo.xml"
-    test -x "$lifecycle$INSTALL_DIR/WindowsTerminal"
+    test -x "$lifecycle$INSTALL_DIR/Devolutions.Terminal"
 }
 
 for package in "$@"; do

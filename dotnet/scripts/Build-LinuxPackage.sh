@@ -5,7 +5,7 @@ export LC_ALL=C
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 dotnet_root="$(cd -- "$script_dir/.." && pwd)"
 repo_root="$(cd -- "$dotnet_root/.." && pwd)"
-project="$dotnet_root/src/WindowsTerminal/WindowsTerminal.csproj"
+project="$dotnet_root/src/Devolutions.Terminal/Devolutions.Terminal.csproj"
 metadata="$dotnet_root/linux/package.env"
 
 rid="${1:-linux-x64}"
@@ -113,7 +113,7 @@ else
 fi
 
 find "$publish_dir" -type f \( -name '*.dbg' -o -name '*.pdb' \) -delete
-for artifact in WindowsTerminal wt wt-pty-host libghostty-vt.so libSkiaSharp.so libHarfBuzzSharp.so; do
+for artifact in Devolutions.Terminal dt dt-pty-host libghostty-vt.so libSkiaSharp.so libHarfBuzzSharp.so; do
     [[ -f "$publish_dir/$artifact" ]] ||
         { echo "Publish output is missing $artifact." >&2; exit 70; }
     if [[ "$artifact" == *.so || "$artifact" != "lib"* ]]; then
@@ -161,7 +161,7 @@ build_deb() {
 Package: $PACKAGE_NAME
 Version: $version
 Architecture: $deb_arch
-Maintainer: Awake Coding <packages@awakecoding.com>
+Maintainer: Devolutions Inc. <support@devolutions.net>
 Installed-Size: $installed_size
 Depends: $RUNTIME_DEPENDENCIES_DEB
 Section: utils
@@ -255,7 +255,7 @@ EOF
             printf '%s\n' "$relative"
         else
             case "$(basename "$path")" in
-                WindowsTerminal|wt|wt-pty-host|Install-LinuxDesktopIntegration.sh|windows-terminal-dotnet-x-terminal-emulator)
+                Devolutions.Terminal|dt|dt-pty-host|Install-LinuxDesktopIntegration.sh|devolutions-terminal-x-terminal-emulator)
                     printf '%%attr(0755,root,root) %s\n' "$relative" ;;
                 *) printf '%%attr(0644,root,root) %s\n' "$relative" ;;
             esac
@@ -282,8 +282,8 @@ build_appimage() {
     local appdir="$work/AppDir"
     cp -a "$package_root" "$appdir"
     sed \
-        -e "s|\"$INSTALL_DIR/WindowsTerminal\"|AppRun|g" \
-        -e "s|$INSTALL_DIR/WindowsTerminal|AppRun|g" \
+        -e "s|\"$INSTALL_DIR/Devolutions.Terminal\"|AppRun|g" \
+        -e "s|$INSTALL_DIR/Devolutions.Terminal|AppRun|g" \
         "$package_root/usr/share/applications/$APP_ID.desktop" \
         > "$appdir/$APP_ID.desktop"
     cp "$package_root/usr/share/icons/hicolor/256x256/apps/$APP_ID.png" \
@@ -294,7 +294,7 @@ build_appimage() {
 set -eu
 HERE=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
 export WT_DOTNET_INSTALL_DIR="\$HERE$INSTALL_DIR"
-exec "\$HERE$INSTALL_DIR/WindowsTerminal" "\$@"
+exec "\$HERE$INSTALL_DIR/Devolutions.Terminal" "\$@"
 EOF
     chmod 0755 "$appdir/AppRun"
     local appimage_doc="$appdir/usr/share/doc/$PACKAGE_NAME"
@@ -331,7 +331,7 @@ EOF
                 mode=0777
             else
                 case "$(basename "$path")" in
-                    WindowsTerminal|wt|wt-pty-host|Install-LinuxDesktopIntegration.sh|windows-terminal-dotnet-x-terminal-emulator|AppRun)
+                    Devolutions.Terminal|dt|dt-pty-host|Install-LinuxDesktopIntegration.sh|devolutions-terminal-x-terminal-emulator|AppRun)
                         mode=0755 ;;
                     *) mode=0644 ;;
                 esac

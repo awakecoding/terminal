@@ -92,32 +92,32 @@ smoke_wt() {
     local root="$1"
     local label="$2"
     local app="$root$INSTALL_DIR"
-    readelf -h "$app/wt" | grep -F "Machine:" | grep -F "AArch64" >/dev/null
-    file "$app/wt" | grep -E 'ARM aarch64|aarch64' >/dev/null
-    "$app/wt" --help | grep -F "wt - Windows Terminal" >/dev/null
+    readelf -h "$app/dt" | grep -F "Machine:" | grep -F "AArch64" >/dev/null
+    file "$app/dt" | grep -E 'ARM aarch64|aarch64' >/dev/null
+    "$app/dt" --help | grep -F "dt - Devolutions Terminal" >/dev/null
 
     local error="$work/parser-error"
-    if "$app/wt" --arm64-invalid-option >"$error" 2>&1; then
-        echo "$label wt accepted an invalid parser option." >&2
+    if "$app/dt" --arm64-invalid-option >"$error" 2>&1; then
+        echo "$label dt accepted an invalid parser option." >&2
         exit 1
     else
         local status=$?
         [[ "$status" == 2 ]] ||
-            { echo "$label wt returned $status instead of 2 for invalid input." >&2; exit 1; }
+            { echo "$label dt returned $status instead of 2 for invalid input." >&2; exit 1; }
     fi
     grep -F "Unknown command '--arm64-invalid-option'." "$error" >/dev/null
 
     local helper_error="$work/pty-helper-error"
-    if "$app/wt-pty-host" >"$helper_error" 2>&1; then
-        echo "$label wt-pty-host accepted missing launch arguments." >&2
+    if "$app/dt-pty-host" >"$helper_error" 2>&1; then
+        echo "$label dt-pty-host accepted missing launch arguments." >&2
         exit 1
     else
         local helper_status=$?
         [[ "$helper_status" == 64 ]] ||
-            { echo "$label wt-pty-host returned $helper_status instead of 64 for missing arguments." >&2; exit 1; }
+            { echo "$label dt-pty-host returned $helper_status instead of 64 for missing arguments." >&2; exit 1; }
     fi
-    grep -F "usage: wt-pty-host" "$helper_error" >/dev/null
-    echo "NativeAOT wt startup and parser passed for $label."
+    grep -F "usage: dt-pty-host" "$helper_error" >/dev/null
+    echo "NativeAOT dt startup and parser passed for $label."
 }
 
 for package in "${packages[@]}"; do
@@ -142,11 +142,11 @@ helper="$installed$INSTALL_DIR/linux/Install-LinuxDesktopIntegration.sh"
 "$helper" install --destdir "$installed" --prefix /usr --app-dir "$INSTALL_DIR"
 smoke_wt "$installed" "temporary-root install"
 
-expected_wt="$(sha256sum "$staged$INSTALL_DIR/wt" | awk '{print $1}')"
-printf 'damaged before upgrade\n' >"$installed$INSTALL_DIR/wt"
+expected_dt="$(sha256sum "$staged$INSTALL_DIR/dt" | awk '{print $1}')"
+printf 'damaged before upgrade\n' >"$installed$INSTALL_DIR/dt"
 cp -a "$upgraded/." "$installed/"
 "$helper" install --destdir "$installed" --prefix /usr --app-dir "$INSTALL_DIR"
-test "$(sha256sum "$installed$INSTALL_DIR/wt" | awk '{print $1}')" = "$expected_wt"
+test "$(sha256sum "$installed$INSTALL_DIR/dt" | awk '{print $1}')" = "$expected_dt"
 python3 - "$installed/usr/share/doc/$PACKAGE_NAME/inventory.json" <<'PY'
 import json
 import pathlib
@@ -161,7 +161,7 @@ smoke_wt "$installed" "temporary-root upgrade"
 test ! -e "$installed/usr/share/applications/$APP_ID.desktop"
 rm -rf -- "$installed$INSTALL_DIR" "$installed/usr/bin" \
     "$installed/usr/share/doc/$PACKAGE_NAME"
-test ! -e "$installed$INSTALL_DIR/wt"
+test ! -e "$installed$INSTALL_DIR/dt"
 echo "Temporary-root package stage/install/upgrade/uninstall passed."
 
 run_tests() {
@@ -192,19 +192,19 @@ run_packaged_native_tests() {
         --nologo --verbosity minimal --filter "$filter"
 }
 
-run_tests WindowsTerminal.Cli.Tests \
-    'FullyQualifiedName~WindowsTerminal.Cli.Tests.CliParserTests'
-run_tests Terminal.Core.Tests \
-    'FullyQualifiedName~Terminal.Core.Tests.VtParserTests'
-run_packaged_native_tests Terminal.Ghostty.Tests libghostty-vt.so \
+run_tests Devolutions.Terminal.Cli.Tests \
+    'FullyQualifiedName~Devolutions.Terminal.Cli.Tests.CliParserTests'
+run_tests Devolutions.Terminal.Core.Tests \
+    'FullyQualifiedName~Devolutions.Terminal.Core.Tests.VtParserTests'
+run_packaged_native_tests Devolutions.Terminal.Ghostty.Tests libghostty-vt.so \
     "$artifact_root$INSTALL_DIR/libghostty-vt.so" \
-    'FullyQualifiedName~Microsoft.Terminal.Ghostty.Tests.GhosttyTerminalEngineTests'
-run_packaged_native_tests Terminal.Connection.Tests wt-pty-host \
-    "$artifact_root$INSTALL_DIR/wt-pty-host" \
-    'FullyQualifiedName~Terminal.Connection.Tests.LinuxPtyConnectionTests'
-run_tests WindowsTerminal.Broker.Tests \
-    'FullyQualifiedName~WindowsTerminal.Broker.Tests.BrokerTests.ConcurrentClientsAreServedBySinglePrimary'
-run_tests Terminal.Settings.Tests \
-    'FullyQualifiedName~Terminal.Settings.Tests.DynamicProfileGeneratorTests.LinuxShellsUseShellAndPathExecutables|FullyQualifiedName~Terminal.Settings.Tests.LinuxRuntimeEnvironmentTests'
+    'FullyQualifiedName~Devolutions.Terminal.Ghostty.Tests.GhosttyTerminalEngineTests'
+run_packaged_native_tests Devolutions.Terminal.Connection.Tests dt-pty-host \
+    "$artifact_root$INSTALL_DIR/dt-pty-host" \
+    'FullyQualifiedName~Devolutions.Terminal.Connection.Tests.LinuxPtyConnectionTests'
+run_tests Devolutions.Terminal.Broker.Tests \
+    'FullyQualifiedName~Devolutions.Terminal.Broker.Tests.BrokerTests.ConcurrentClientsAreServedBySinglePrimary'
+run_tests Devolutions.Terminal.Settings.Tests \
+    'FullyQualifiedName~Devolutions.Terminal.Settings.Tests.DynamicProfileGeneratorTests.LinuxShellsUseShellAndPathExecutables|FullyQualifiedName~Devolutions.Terminal.Settings.Tests.LinuxRuntimeEnvironmentTests'
 
 echo "Native Linux ARM64 non-UI runtime validation passed on $(uname -m)."

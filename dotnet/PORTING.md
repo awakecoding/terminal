@@ -1,8 +1,8 @@
 # Complete .NET 10 / NativeAOT / Avalonia port
 
-This is the plan for turning the `dotnet/` prototype into a **behavior- and
-settings-compatible** Windows Terminal, hosted on .NET 10, NativeAOT, and
-Avalonia instead of C++/WinRT/WinUI.
+This is the historical plan for turning the prototype into **Devolutions
+Terminal**, a behavior- and settings-compatible Windows Terminal host on
+.NET 10, NativeAOT, and Avalonia instead of C++/WinRT/WinUI.
 
 It is **not** a line-for-line transcription of CppWinRT, MIDL, or XAML Islands.
 Those types do not exist in this stack. The bar is:
@@ -10,21 +10,23 @@ Those types do not exist in this stack. The bar is:
 1. A user can point the app at a real `settings.json` and get the same profiles,
    schemes, keybindings, and startup behavior for the supported subset.
 2. Modern shells, editors, and TUIs (`pwsh`, `cmd`, WSL, neovim, lazygit) work.
-3. NativeAOT publish of a single `WindowsTerminal.exe` stays green.
+3. NativeAOT publish of a single `Devolutions.Terminal.exe` stays green.
 
-The original C++ tree stays in place. All new work lives under `dotnet/`.
+The original C++ Windows Terminal tree is the compatibility oracle. This
+project is intended to become the root of
+https://github.com/Devolutions/devolutions-terminal.
 
 ## Current baseline (done)
 
 | Project | What it covers today |
 | --- | --- |
-| `Terminal.Core` | Circular scrollback/reflow, grapheme-aware cells, shell marks/search/export, complete daily-driver VT plus bounded DCS/Sixel/DRCS/macros/VT52/rectangular operations |
-| `Terminal.Render` | Immutable plans, HarfBuzz shaping, fallback fonts, bounded Skia text-blob and image caching, dirty-row contracts |
-| `Terminal.Connection` | Restartable NativeAOT-safe ConPTY, Linux PTY, and Azure Cloud Shell HTTP/WebSocket connections |
-| `Terminal.Settings` | Complete MTSM projection, tri-state inheritance, migrations, fragments, profile generators, state persistence, plus the 92-action inventory, typed action arguments, normalized key chords, current/legacy binding parsing, and source-generated NativeAOT-safe JSON |
-| `Terminal.Control` | Avalonia `TermControl`: Skia rendering, search, shell-region selection, clipboard/paste policy, mouse/touch/IME, accessibility, and event-driven output draining |
-| `WindowsTerminal.App` | Persistent tabs/panes, all-action dispatch, action/command-line/history/tab palettes, settings UI, Azure auth UI, scratchpad, and notifications |
-| `WindowsTerminal` | NativeAOT executable, authenticated single-instance broker, multi-window routing, and notification-area integration |
+| `Devolutions.Terminal.Core` | Circular scrollback/reflow, grapheme-aware cells, shell marks/search/export, complete daily-driver VT plus bounded DCS/Sixel/DRCS/macros/VT52/rectangular operations |
+| `Devolutions.Terminal.Render` | Immutable plans, HarfBuzz shaping, fallback fonts, bounded Skia text-blob and image caching, dirty-row contracts |
+| `Devolutions.Terminal.Connection` | Restartable NativeAOT-safe ConPTY, Linux PTY, and Azure Cloud Shell HTTP/WebSocket connections |
+| `Devolutions.Terminal.Settings` | Complete MTSM projection, tri-state inheritance, migrations, fragments, profile generators, state persistence, plus the 92-action inventory, typed action arguments, normalized key chords, current/legacy binding parsing, and source-generated NativeAOT-safe JSON |
+| `Devolutions.Terminal.Control` | Avalonia `TermControl`: Skia rendering, search, shell-region selection, clipboard/paste policy, mouse/touch/IME, accessibility, and event-driven output draining |
+| `Devolutions.Terminal.App` | Persistent tabs/panes, all-action dispatch, action/command-line/history/tab palettes, settings UI, Azure auth UI, scratchpad, and notifications |
+| `Devolutions.Terminal` | NativeAOT executable, authenticated single-instance broker, multi-window routing, and notification-area integration |
 
 The baseline also includes dedicated settings, connection, control, app,
 compatibility, and UI test projects; x64/ARM64 NativeAOT CI; architecture
@@ -85,15 +87,15 @@ Platform boundaries that remain intentionally external to the C# application:
 ```
 C++ / WinUI                         .NET / Avalonia
 ─────────────────────────────────   ──────────────────────────────────
-buffer/out + TerminalCore           Terminal.Core (buffer, engine)
-terminal/parser + adapter + input   Terminal.Core.Vt (parser, dispatch, input)
-renderer/atlas + base               Terminal.Render (Skia atlas)
-cascadia/TerminalConnection         Terminal.Connection
-cascadia/TerminalSettingsModel      Terminal.Settings
-cascadia/TerminalControl            Terminal.Control (TermControl + search)
-cascadia/TerminalApp                WindowsTerminal.App (tabs, panes, actions)
-cascadia/WindowsTerminal            WindowsTerminal (windowing host)
-cascadia/TerminalSettingsEditor     WindowsTerminal.Settings (Avalonia pages)
+buffer/out + TerminalCore           Devolutions.Terminal.Core (buffer, engine)
+terminal/parser + adapter + input   Devolutions.Terminal.Core.Vt (parser, dispatch, input)
+renderer/atlas + base               Devolutions.Terminal.Render (Skia atlas)
+cascadia/TerminalConnection         Devolutions.Terminal.Connection
+cascadia/TerminalSettingsModel      Devolutions.Terminal.Settings
+cascadia/TerminalControl            Devolutions.Terminal.Control (TermControl + search)
+cascadia/TerminalApp                Devolutions.Terminal.App (tabs, panes, actions)
+cascadia/Devolutions.Terminal            Devolutions.Terminal (windowing host)
+cascadia/TerminalSettingsEditor     Devolutions.Terminal.Settings.Editor (Avalonia pages)
 ```
 
 Layer rules:
@@ -117,7 +119,7 @@ Layer rules:
 ## Linux
 
 Linux uses the same Avalonia/Skia UI and built-in or Ghostty terminal engines as
-Windows. Local processes are hosted by `wt-pty-host`, a small bundled `forkpty`
+Windows. Local processes are hosted by `dt-pty-host`, a small bundled `forkpty`
 relay that preserves interactive shell, resize, signal, and process-group
 semantics. Dynamic profiles discover `$SHELL`, bash, zsh, fish, PowerShell, and
 `sh`; settings and state follow XDG directory conventions.
@@ -131,7 +133,7 @@ dotnet/scripts/Build-LinuxPackage.sh linux-arm64 0.1.0 artifacts/packages all
 
 ARM64 cross-publish from x64 requires the GNU AArch64 linker/binutils packages.
 The resulting tar, DEB, RPM, and AppImage preserve executable permissions for
-`WindowsTerminal`, `wt`, and `wt-pty-host`. All four consume one canonical
+`Devolutions.Terminal`, `wt`, and `dt-pty-host`. All four consume one canonical
 install root containing validated freedesktop metadata, hicolor icons,
 architecture-correct native libraries, licenses, deterministic inventory/SPDX
 SBOM, and a DESTDIR-aware install/uninstall helper.
@@ -140,7 +142,7 @@ the freedesktop portal is preferred, with `xdg-open` and `notify-send`
 fallbacks. Protocol and default-terminal selection are separate explicit,
 reversible helper actions; installation never overwrites those user choices.
 
-Do not take a C++/CLI or C++/WinRT interop dependency on `Microsoft.Terminal.*`
+Do not take a C++/CLI or C++/WinRT interop dependency on `Devolutions.Terminal.*`
 DLLs. That reintroduces the runtime we are leaving.
 
 ## Renderer strategy
@@ -149,7 +151,7 @@ AtlasEngine (`src/renderer/atlas`) is a DWrite + D2D/D3D glyph atlas. Avalonia
 already uses Skia. Porting Atlas 1:1 would mean a second graphics stack and
 break NativeAOT simplicity.
 
-**Decision: C# Skia glyph atlas inside `Terminal.Control` / `Terminal.Render`.**
+**Decision: C# Skia glyph atlas inside `Devolutions.Terminal.Control` / `Devolutions.Terminal.Render`.**
 
 Match Atlas *behavior*:
 
@@ -214,7 +216,7 @@ do not hand-code key chords in the window.
 
 `ITermDispatch` is ~160 methods. The port implements the daily-driver and
 advanced bounded subsets; engine-specific limits are recorded in
-`doc/parity-status.md`.
+`docs/parity-status.md`.
 
 | Bucket | Sequences / features | Phase |
 | --- | --- | --- |
@@ -233,7 +235,7 @@ main/alternate state (cursor, margins, attributes, tab stops), reflows logical
 wrapped lines on resize, repairs wide-cell boundaries, retains combining marks
 and hyperlink metadata, and exposes detached read-only snapshots. Existing
 `GetRow`, cursor, selection, and scroll-offset APIs remain compatible with
-`Terminal.Control`.
+`Devolutions.Terminal.Control`.
 
 Buffer work beyond the current parity slice:
 
@@ -274,7 +276,7 @@ P2:
 
 ## Application shell
 
-Reimplement `TerminalApp` + `WindowsTerminal` EXE as Avalonia, following the
+Reimplement `TerminalApp` + `Devolutions.Terminal` EXE as Avalonia, following the
 same object graph:
 
 ```
@@ -354,11 +356,11 @@ from settings.
 
 ## NativeAOT and packaging
 
-- `PublishAot=true` on `WindowsTerminal` only; tests stay JIT
+- `PublishAot=true` on `Devolutions.Terminal` only; tests stay JIT
 - `LibraryImport` + `partial` for all kernel32/user32
 - Source-generated JSON and regex
 - Cascadia fonts as `AvaloniaResource`
-- Trimmer roots: `WindowsTerminal`, `Avalonia.Themes.Fluent`, settings
+- Trimmer roots: `Devolutions.Terminal`, `Avalonia.Themes.Fluent`, settings
   context
 - COM (shell extension, WSL query, VS setup) isolated behind feature
   switches; prefer subprocess/`vswhere` over in-proc COM in P1
@@ -440,19 +442,19 @@ without hand edits; neovim and lazygit look correct.
 
 ```
 dotnet/
-  Terminal.slnx
+  Devolutions.Terminal.slnx
   src/
-    Terminal.Core/          # buffer, VT, input encoding
-    Terminal.Render/        # HarfBuzz shaping, Skia text-blob cache, render plans
-    Terminal.Connection/    # ConPTY, Linux PTY, Azure Cloud Shell
-    Terminal.Settings/      # CascadiaSettings, ActionMap, generators
-    Terminal.Control/       # TermControl, search, scrollbar
-    WindowsTerminal/        # app host, tabs, panes, palette, CLI
-    WindowsTerminal.Settings/  # P1 settings pages
+    Devolutions.Terminal.Core/          # buffer, VT, input encoding
+    Devolutions.Terminal.Render/        # HarfBuzz shaping, Skia text-blob cache, render plans
+    Devolutions.Terminal.Connection/    # ConPTY, Linux PTY, Azure Cloud Shell
+    Devolutions.Terminal.Settings/      # CascadiaSettings, ActionMap, generators
+    Devolutions.Terminal.Control/       # TermControl, search, scrollbar
+    Devolutions.Terminal/        # app host, tabs, panes, palette, CLI
+    Devolutions.Terminal.Settings.Editor/  # P1 settings pages
   tests/
-    Terminal.Core.Tests/
-    Terminal.Settings.Tests/
-    Terminal.Control.Tests/
+    Devolutions.Terminal.Core.Tests/
+    Devolutions.Terminal.Settings.Tests/
+    Devolutions.Terminal.Control.Tests/
   PORTING.md
   README.md
 ```

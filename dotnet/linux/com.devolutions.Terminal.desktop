@@ -1,0 +1,24 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Devolutions Terminal
+GenericName=Terminal Emulator
+Comment=Open tabs, panes, and command-line applications
+Icon=com.devolutions.Terminal
+Exec="/opt/devolutions-terminal/Devolutions.Terminal" %u
+TryExec=/opt/devolutions-terminal/Devolutions.Terminal
+Terminal=false
+X-TerminalArgExec=--
+StartupNotify=true
+Categories=System;TerminalEmulator;
+Keywords=shell;prompt;command;cmd;powershell;wsl;
+MimeType=x-scheme-handler/dterm;
+Actions=NewWindow;NewTab;
+
+[Desktop Action NewWindow]
+Name=New Window
+Exec="/opt/devolutions-terminal/Devolutions.Terminal" -w new
+
+[Desktop Action NewTab]
+Name=New Tab
+Exec="/opt/devolutions-terminal/Devolutions.Terminal" -w use-any

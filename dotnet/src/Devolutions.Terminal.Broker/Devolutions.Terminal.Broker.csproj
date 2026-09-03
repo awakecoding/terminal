@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Devolutions.Terminal.Broker</RootNamespace>
+    <AssemblyName>Devolutions.Terminal.Broker</AssemblyName>
+    <Description>Versioned, current-user Windows Terminal activation broker.</Description>
+  </PropertyGroup>
+</Project>

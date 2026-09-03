@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Devolutions.Terminal.Package</RootNamespace>
+    <AssemblyName>Devolutions.Terminal.Package</AssemblyName>
+    <Description>MSIX identity metadata and NativeAOT-safe Windows shell helper boundaries.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Devolutions.Terminal.Interop\Devolutions.Terminal.Interop.csproj" />
+  </ItemGroup>
+</Project>

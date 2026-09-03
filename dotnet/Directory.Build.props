@@ -8,7 +8,10 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <VersionPrefix>0.1.0</VersionPrefix>
-    <RepositoryUrl>https://github.com/awakecoding/terminal</RepositoryUrl>
+    <Authors>Devolutions Inc.</Authors>
+    <Company>Devolutions Inc.</Company>
+    <Product>Devolutions Terminal</Product>
+    <RepositoryUrl>https://github.com/Devolutions/devolutions-terminal</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <IsAotCompatible>true</IsAotCompatible>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>

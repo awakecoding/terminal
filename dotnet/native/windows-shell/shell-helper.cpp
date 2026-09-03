@@ -402,7 +402,7 @@ static HRESULT publish_toast(const request& source)
         document.LoadXml(winrt::hstring{ xml });
         ToastNotification toast{ document };
         toast.Tag(winrt::hstring{ tag.substr(0, (std::min)(tag.size(), size_t{ 16 })) });
-        toast.Group(L"WindowsTerminal.NET");
+        toast.Group(L"Devolutions.Terminal.NET");
         ToastNotificationManager::CreateToastNotifier(winrt::hstring{ app_id }).Show(toast);
         return S_OK;
     }

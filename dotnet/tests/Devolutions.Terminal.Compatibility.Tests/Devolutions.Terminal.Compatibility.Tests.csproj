@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\tools\Devolutions.Terminal.PortInventory\Devolutions.Terminal.PortInventory.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\compat\windows-terminal.json" Link="windows-terminal.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

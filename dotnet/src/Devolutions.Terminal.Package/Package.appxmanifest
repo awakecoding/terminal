@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap3 uap10 com desktop desktop4 desktop5 rescap">
+
+  <Identity
+    Name="Devolutions.Terminal"
+    Publisher="CN=Devolutions Inc."
+    Version="0.1.0.0" />
+
+  <Properties>
+    <DisplayName>Devolutions Terminal</DisplayName>
+    <PublisherDisplayName>Devolutions</PublisherDisplayName>
+    <Description>NativeAOT Avalonia terminal emulator.</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <uap10:PackageIntegrity>
+      <uap10:Content Enforcement="on" />
+    </uap10:PackageIntegrity>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily
+      Name="Windows.Desktop"
+      MinVersion="10.0.19041.0"
+      MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application
+      Id="Terminal"
+      Executable="Devolutions.Terminal.exe"
+      uap10:RuntimeBehavior="packagedClassicApp"
+      uap10:TrustLevel="mediumIL">
+      <uap:VisualElements
+        DisplayName="Devolutions Terminal"
+        Description="NativeAOT Avalonia terminal emulator."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile
+          Wide310x150Logo="Assets\Wide310x150Logo.png"
+          Square71x71Logo="Assets\SmallTile.png"
+          Square310x310Logo="Assets\LargeTile.png"
+          ShortName="Devolutions Terminal" />
+      </uap:VisualElements>
+      <Extensions>
+        <uap3:Extension
+          Category="windows.appExecutionAlias"
+          Executable="dt.exe"
+          EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="dt.exe" />
+            <desktop:ExecutionAlias Alias="Devolutions.Terminal.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+        <uap3:Extension
+          Category="windows.protocol"
+          Executable="Devolutions.Terminal.exe"
+          EntryPoint="Windows.FullTrustApplication">
+          <uap3:Protocol Name="dterm" Parameters="&quot;%1&quot;" />
+        </uap3:Extension>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="Devolutions Terminal Explorer command">
+              <com:Class
+                Id="f4a5f6ac-02b1-46bd-939d-535d391be151"
+                Path="Devolutions.Terminal.ShellExt.dll"
+                ThreadingModel="STA" />
+              <com:Class
+                Id="a3aeb121-45d9-4cd9-a278-4b43d19b95b1"
+                Path="Devolutions.Terminal.ShellExt.dll"
+                ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type="Directory">
+              <desktop5:Verb
+                Id="OpenDevolutionsTerminalHere"
+                Clsid="f4a5f6ac-02b1-46bd-939d-535d391be151" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type="Directory\Background">
+              <desktop5:Verb
+                Id="OpenDevolutionsTerminalHere"
+                Clsid="f4a5f6ac-02b1-46bd-939d-535d391be151" />
+            </desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+        <desktop:Extension Category="windows.toastNotificationActivation">
+          <desktop:ToastNotificationActivation
+            ToastActivatorCLSID="a3aeb121-45d9-4cd9-a278-4b43d19b95b1" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

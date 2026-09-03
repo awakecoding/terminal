@@ -21,15 +21,15 @@ $targets = @{
     "linux-arm64" = "aarch64-linux-gnu.2.31"
 }
 foreach ($rid in $targets.Keys) {
-    $output = Join-Path $nativeRoot "$rid\wt-pty-host"
+    $output = Join-Path $nativeRoot "$rid\dt-pty-host"
     New-Item -ItemType Directory -Force (Split-Path -Parent $output) | Out-Null
     & $ZigPath cc `
         "-target" $targets[$rid] `
         -O2 `
-        (Join-Path $nativeRoot "wt-pty-host.c") `
+        (Join-Path $nativeRoot "dt-pty-host.c") `
         -lutil `
         -o $output
     if ($LASTEXITCODE -ne 0) {
-        throw "Failed to build wt-pty-host for $rid."
+        throw "Failed to build dt-pty-host for $rid."
     }
 }

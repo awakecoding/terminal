@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Devolutions.Terminal.Connection</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Description>ConPTY and Azure Cloud Shell connections for the .NET Windows Terminal port.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Devolutions.Terminal.Core\Devolutions.Terminal.Core.csproj" />
+  </ItemGroup>
+</Project>

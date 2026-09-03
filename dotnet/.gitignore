@@ -1,0 +1,26 @@
+## Build outputs
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+artifacts/
+TestResults/
+*.binlog
+*.user
+*.suo
+*.userosscache
+.vs/
+.vscode/
+
+## Generated packages
+*.msix
+*.msixbundle
+*.appx
+*.appxbundle
+
+## Local secrets / certs
+*.pfx
+!**/devcert.pfx
+
+## OS
+Thumbs.db
+.DS_Store

@@ -1,7 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <RootNamespace>WindowsTerminal.Interop</RootNamespace>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Description>NativeAOT-safe Windows API interop owned by the application host.</Description>
-  </PropertyGroup>
-</Project>

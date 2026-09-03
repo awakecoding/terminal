@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Devolutions.Terminal.Package\Devolutions.Terminal.Package.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\src\Devolutions.Terminal.Package\Package.appxmanifest"
+          Link="Package.appxmanifest"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

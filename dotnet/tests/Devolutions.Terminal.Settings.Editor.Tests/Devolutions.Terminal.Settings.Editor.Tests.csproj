@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Headless.XUnit" />
+    <ProjectReference Include="..\..\src\Devolutions.Terminal.Settings.Editor\Devolutions.Terminal.Settings.Editor.csproj" />
+  </ItemGroup>
+</Project>

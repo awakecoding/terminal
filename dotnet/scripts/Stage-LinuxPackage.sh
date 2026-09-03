@@ -38,9 +38,9 @@ command -v "$strip_tool" >/dev/null 2>&1 ||
     { echo "$strip_tool is required to remove debug data from $rid package payloads." >&2; exit 69; }
 
 required=(
-    WindowsTerminal
-    wt
-    wt-pty-host
+    Devolutions.Terminal
+    dt
+    dt-pty-host
     libghostty-vt.so
     libSkiaSharp.so
     libHarfBuzzSharp.so
@@ -68,8 +68,8 @@ install -d "$package_root$INSTALL_DIR/linux"
 cp -a \
     "$dotnet_root/linux/Install-LinuxDesktopIntegration.sh" \
     "$dotnet_root/linux/package.env" \
-    "$dotnet_root/linux/com.awakecoding.WindowsTerminalDotNet.desktop" \
-    "$dotnet_root/linux/com.awakecoding.WindowsTerminalDotNet.metainfo.xml" \
+    "$dotnet_root/linux/com.devolutions.Terminal.desktop" \
+    "$dotnet_root/linux/com.devolutions.Terminal.metainfo.xml" \
     "$dotnet_root/linux/icons" \
     "$package_root$INSTALL_DIR/linux/"
 
@@ -77,8 +77,8 @@ DESTDIR="$package_root" bash "$dotnet_root/linux/Install-LinuxDesktopIntegration
     install --prefix /usr --app-dir "$INSTALL_DIR"
 
 install -d "$package_root/usr/bin" "$package_root/usr/share/doc/$PACKAGE_NAME"
-ln -s "../../${INSTALL_DIR#/}/WindowsTerminal" "$package_root/usr/bin/WindowsTerminal"
-ln -s "../../${INSTALL_DIR#/}/wt" "$package_root/usr/bin/wt"
+ln -s "../../${INSTALL_DIR#/}/Devolutions.Terminal" "$package_root/usr/bin/Devolutions.Terminal"
+ln -s "../../${INSTALL_DIR#/}/dt" "$package_root/usr/bin/dt"
 install -m 0644 "$repo_root/LICENSE" "$package_root/usr/share/doc/$PACKAGE_NAME/LICENSE"
 install -m 0644 "$publish_dir/THIRD-PARTY-NOTICES-GHOSTTY.txt" \
     "$package_root/usr/share/doc/$PACKAGE_NAME/THIRD-PARTY-NOTICES-GHOSTTY.txt"
@@ -86,11 +86,11 @@ install -m 0644 "$publish_dir/THIRD-PARTY-NOTICES-GHOSTTY.txt" \
 find "$package_root" -type d -exec chmod 0755 {} +
 find "$package_root" -type f -exec chmod 0644 {} +
 chmod 0755 \
-    "$package_root$INSTALL_DIR/WindowsTerminal" \
-    "$package_root$INSTALL_DIR/wt" \
-    "$package_root$INSTALL_DIR/wt-pty-host" \
+    "$package_root$INSTALL_DIR/Devolutions.Terminal" \
+    "$package_root$INSTALL_DIR/dt" \
+    "$package_root$INSTALL_DIR/dt-pty-host" \
     "$package_root$INSTALL_DIR/linux/Install-LinuxDesktopIntegration.sh" \
-    "$package_root/usr/bin/windows-terminal-dotnet-x-terminal-emulator"
+    "$package_root/usr/bin/devolutions-terminal-x-terminal-emulator"
 
 source_date_epoch="${SOURCE_DATE_EPOCH:-}"
 if [[ -z "$source_date_epoch" ]]; then

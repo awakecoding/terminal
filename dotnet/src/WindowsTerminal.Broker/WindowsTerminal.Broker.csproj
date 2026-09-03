@@ -1,7 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <RootNamespace>WindowsTerminal.Broker</RootNamespace>
-    <AssemblyName>WindowsTerminal.Broker</AssemblyName>
-    <Description>Versioned, current-user Windows Terminal activation broker.</Description>
-  </PropertyGroup>
-</Project>

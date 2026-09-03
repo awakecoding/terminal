@@ -1,0 +1,210 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Devolutions.Terminal.App.Views.MainWindow"
+        x:CompileBindings="True"
+        Title=""
+        Width="1100"
+        Height="700"
+        MinWidth="480"
+        MinHeight="320"
+        Background="#0C0C0C"
+        TransparencyLevelHint="Mica,AcrylicBlur,None"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaTitleBarHeightHint="40"
+        SizeChanged="MainWindow_OnSizeChanged">
+  <DockPanel>
+    <Border x:Name="TitleBar"
+            DockPanel.Dock="Top"
+            Height="40"
+            Background="#202020"
+            PointerPressed="TitleBar_OnPointerPressed">
+      <Grid x:Name="TitleBarLayout"
+            ColumnDefinitions="Auto,*"
+            Margin="8,0,138,0">
+        <StackPanel Grid.Column="0" Orientation="Horizontal">
+          <ScrollViewer x:Name="TabScrollViewer"
+                       MaxWidth="720"
+                       HorizontalScrollBarVisibility="Hidden"
+                       VerticalScrollBarVisibility="Disabled">
+            <StackPanel x:Name="TabStrip"
+                       Orientation="Horizontal"
+                       Spacing="0" />
+          </ScrollViewer>
+          <Button Classes="icon"
+                 Width="31"
+                 Height="24"
+                 Margin="0,4"
+                 VerticalAlignment="Center"
+                 Click="NewTab_OnClick"
+                 AutomationProperties.Name="New tab"
+                 ToolTip.Tip="New tab (Ctrl+Shift+T)">
+            <Path Data="M 0,5 L 10,5 M 5,0 L 5,10"
+                  Width="10"
+                  Height="10"
+                  Stretch="Uniform"
+                  Stroke="#F2F2F2"
+                  StrokeThickness="1" />
+          </Button>
+          <Button x:Name="MenuButton"
+                 Classes="icon"
+                 Width="31"
+                 Height="24"
+                 Margin="0,4"
+                 VerticalAlignment="Center"
+                 Click="Menu_OnClick"
+                 AutomationProperties.Name="New tab menu"
+                 ToolTip.Tip="New tab menu">
+            <Path Data="M 0,1 L 4,5 L 8,1"
+                  Width="8"
+                  Height="5"
+                  Stretch="Uniform"
+                  Stroke="#F2F2F2"
+                  StrokeThickness="1" />
+          </Button>
+        </StackPanel>
+        <Button x:Name="ExitFullscreenButton"
+                Grid.Column="1"
+                Classes="icon"
+                Width="45"
+                Height="30"
+                IsVisible="False"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Click="ExitFullscreen_OnClick"
+                AutomationProperties.Name="Exit full screen"
+                ToolTip.Tip="Exit full screen (F11)">
+          <Path Data="M 0,0 L 4,4 M 4,0 L 4,4 L 0,4 M 10,10 L 6,6 M 6,10 L 6,6 L 10,6"
+                Width="10"
+                Height="10"
+                Stretch="Uniform"
+                Stroke="#F2F2F2"
+                StrokeThickness="1" />
+        </Button>
+      </Grid>
+    </Border>
+    <Grid>
+      <Panel x:Name="TerminalHost" Background="#0C0C0C" />
+      <Border x:Name="FindBar"
+              IsVisible="False"
+              HorizontalAlignment="Right"
+              VerticalAlignment="Top"
+              Margin="12"
+              Padding="8"
+              CornerRadius="4"
+              Background="#F02B2B2B">
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBox x:Name="FindBox"
+                   Width="260"
+                   PlaceholderText="Find"
+                   KeyDown="FindBox_OnKeyDown" />
+          <Button Content="Previous" Click="FindPrevious_OnClick" />
+          <Button Content="Next" Click="FindNext_OnClick" />
+          <Button Content="Close" Click="CloseFind_OnClick" />
+        </StackPanel>
+      </Border>
+      <Border x:Name="CommandPalette"
+              IsVisible="False"
+              Width="520"
+              MaxHeight="440"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Top"
+              Margin="0,56,0,0"
+              Padding="12"
+              CornerRadius="6"
+              Background="#F02B2B2B">
+        <Grid RowDefinitions="Auto,*" RowSpacing="8">
+          <TextBox x:Name="CommandPaletteQuery"
+                   PlaceholderText="Search actions"
+                   TextChanged="CommandPaletteQuery_OnTextChanged"
+                   KeyDown="CommandPaletteQuery_OnKeyDown" />
+          <ListBox x:Name="CommandPaletteList"
+                   Grid.Row="1"
+                   DoubleTapped="CommandPaletteList_OnDoubleTapped" />
+        </Grid>
+      </Border>
+      <Border x:Name="AboutOverlay"
+              IsVisible="False"
+              Background="#99000000"
+              HorizontalAlignment="Stretch"
+              VerticalAlignment="Stretch">
+        <Border Width="320"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Padding="24"
+                CornerRadius="8"
+                Background="#FF2C2C2C"
+                BorderBrush="#26FFFFFF"
+                BorderThickness="1"
+                BoxShadow="0 8 32 0 #59000000">
+          <StackPanel Spacing="12">
+            <TextBlock Text="About" FontSize="20" FontWeight="SemiBold" />
+            <TextBlock Text="Devolutions Terminal&#x0a;Built with .NET 10 NativeAOT, Avalonia, Skia, and HarfBuzz."
+                       TextWrapping="Wrap" />
+            <TextBlock x:Name="AboutVersion" />
+            <Button Content="Source code"
+                    Tag="https://github.com/Devolutions/devolutions-terminal"
+                    HorizontalAlignment="Left"
+                    Padding="0"
+                    BorderThickness="0"
+                    Background="Transparent"
+                    Foreground="#A6D4FF"
+                    Click="AboutLink_OnClick" />
+            <Button Content="Documentation"
+                    Tag="https://github.com/Devolutions/devolutions-terminal/tree/main/docs"
+                    HorizontalAlignment="Left"
+                    Padding="0"
+                    BorderThickness="0"
+                    Background="Transparent"
+                    Foreground="#A6D4FF"
+                    Click="AboutLink_OnClick" />
+            <Button Content="Release notes"
+                    Tag="https://github.com/Devolutions/devolutions-terminal/releases"
+                    HorizontalAlignment="Left"
+                    Padding="0"
+                    BorderThickness="0"
+                    Background="Transparent"
+                    Foreground="#A6D4FF"
+                    Click="AboutLink_OnClick" />
+            <Button Content="Third-party notices"
+                    Tag="https://github.com/Devolutions/devolutions-terminal/blob/main/NOTICE.md"
+                    HorizontalAlignment="Left"
+                    Padding="0"
+                    BorderThickness="0"
+                    Background="Transparent"
+                    Foreground="#A6D4FF"
+                    Click="AboutLink_OnClick" />
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="8" Margin="0,12,0,0">
+              <Button x:Name="AboutFeedbackButton"
+                      Content="Send feedback"
+                      Click="AboutFeedback_OnClick" />
+              <Button x:Name="AboutOkButton"
+                      Grid.Column="1"
+                      Classes="accent"
+                      Content="OK"
+                      Click="AboutClose_OnClick" />
+            </Grid>
+          </StackPanel>
+        </Border>
+      </Border>
+      <Border x:Name="NotificationToast"
+              IsVisible="False"
+              MaxWidth="420"
+              HorizontalAlignment="Right"
+              VerticalAlignment="Bottom"
+              Margin="16"
+              Padding="14"
+              CornerRadius="6"
+              Background="#F03A3A3A"
+              AutomationProperties.LiveSetting="Polite">
+        <StackPanel Spacing="4">
+          <TextBlock x:Name="NotificationTitle"
+                     FontWeight="SemiBold"
+                     TextWrapping="Wrap" />
+          <TextBlock x:Name="NotificationBody"
+                     AutomationProperties.LiveSetting="Polite"
+                     TextWrapping="Wrap" />
+        </StackPanel>
+      </Border>
+    </Grid>
+  </DockPanel>
+</Window>

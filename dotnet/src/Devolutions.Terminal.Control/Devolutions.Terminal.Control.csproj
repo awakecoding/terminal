@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Devolutions.Terminal</RootNamespace>
+    <Description>Avalonia terminal control that renders Devolutions.Terminal.Core.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Skia" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Devolutions.Terminal.Core\Devolutions.Terminal.Core.csproj" />
+    <ProjectReference Include="..\Devolutions.Terminal.Render\Devolutions.Terminal.Render.csproj" />
+    <ProjectReference Include="..\Devolutions.Terminal.Connection\Devolutions.Terminal.Connection.csproj" />
+    <ProjectReference Include="..\Devolutions.Terminal.Settings\Devolutions.Terminal.Settings.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="..\..\assets\fonts\CascadiaMono.ttf"
+                      Link="Assets\Fonts\CascadiaMono.ttf" />
+    <AvaloniaResource Include="..\..\assets\fonts\CascadiaMonoItalic.ttf"
+                      Link="Assets\Fonts\CascadiaMonoItalic.ttf" />
+    <AvaloniaResource Include="..\..\native\noto-emoji\NotoColorEmoji.ttf"
+                      Link="Assets\Fonts\NotoColorEmoji.ttf" />
+  </ItemGroup>
+</Project>

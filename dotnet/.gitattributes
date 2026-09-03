@@ -1,0 +1,8 @@
+* text=auto
+
+scripts/*.sh text eol=lf
+scripts/*.py text eol=lf
+linux/*.sh text eol=lf
+linux/*.env text eol=lf
+linux/*.desktop text eol=lf
+linux/*.xml text eol=lf

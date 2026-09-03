@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <GhosttyTestRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</GhosttyTestRid>
+    <GhosttyTestRid Condition="'$(GhosttyTestRid)' == ''">$(NETCoreSdkPortableRuntimeIdentifier)</GhosttyTestRid>
+    <GhosttyNativeName Condition="$([System.String]::Copy('$(GhosttyTestRid)').StartsWith('linux-'))">libghostty-vt.so</GhosttyNativeName>
+    <GhosttyNativeName Condition="'$(GhosttyNativeName)' == ''">ghostty-vt.dll</GhosttyNativeName>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="..\..\native\ghostty\$(GhosttyTestRid)\$(GhosttyNativeName)"
+          Link="$(GhosttyNativeName)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="..\..\src\Devolutions.Terminal.App\Devolutions.Terminal.App.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\linux\**\*"
+          Link="linux\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

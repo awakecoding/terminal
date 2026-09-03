@@ -12,11 +12,11 @@ root = Path(sys.argv[1])
 output = Path(sys.argv[2])
 epoch = int(sys.argv[3])
 executables = {
-    "WindowsTerminal",
-    "wt",
-    "wt-pty-host",
+    "Devolutions.Terminal",
+    "dt",
+    "dt-pty-host",
     "Install-LinuxDesktopIntegration.sh",
-    "windows-terminal-dotnet-x-terminal-emulator",
+    "devolutions-terminal-x-terminal-emulator",
     "AppRun",
     "postinst",
     "postrm",

@@ -1,6 +1,6 @@
-Windows Terminal .NET shell integration helpers
+Devolutions Terminal shell integration helpers
 
-Copyright (c) awakecoding and contributors.
+Copyright (c) Devolutions Inc.
 Licensed under the repository MIT license. See LICENSE at the repository root.
 
 The implementation uses Windows SDK interfaces and contains no bundled

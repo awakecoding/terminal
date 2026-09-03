@@ -1,0 +1,66 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Devolutions.Terminal.TerminalApp"
+             RequestedThemeVariant="Dark">
+  <TrayIcon.Icons>
+    <TrayIcons>
+      <TrayIcon Icon="/Assets/terminal.ico"
+                ToolTipText="Devolutions Terminal"
+                IsVisible="False">
+        <TrayIcon.Menu>
+          <NativeMenu>
+            <NativeMenuItem Header="Show windows" Click="ShowWindows_OnClick" />
+            <NativeMenuItemSeparator />
+            <NativeMenuItem Header="Exit" Click="Exit_OnClick" />
+          </NativeMenu>
+        </TrayIcon.Menu>
+      </TrayIcon>
+    </TrayIcons>
+  </TrayIcon.Icons>
+  <Application.Styles>
+    <FluentTheme />
+    <Style Selector="Button.tab">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#F2F2F2" />
+      <Setter Property="Padding" Value="10,0" />
+      <Setter Property="Margin" Value="0,4,2,0" />
+      <Setter Property="Height" Value="36" />
+      <Setter Property="MinWidth" Value="120" />
+      <Setter Property="MaxWidth" Value="240" />
+      <Setter Property="CornerRadius" Value="7,7,0,0" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="Button.tab:pointerover">
+      <Setter Property="Background" Value="#333333" />
+    </Style>
+    <Style Selector="Button.tab.active">
+      <Setter Property="Background" Value="#0C0C0C" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="Button.icon">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#F2F2F2" />
+      <Setter Property="Width" Value="32" />
+      <Setter Property="Height" Value="32" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="Button.icon:pointerover">
+      <Setter Property="Background" Value="#3A3A3A" />
+    </Style>
+    <Style Selector="ContextMenu">
+      <Setter Property="Background" Value="#FF2C2C2C" />
+      <Setter Property="BorderBrush" Value="#26FFFFFF" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Padding" Value="0,4" />
+      <Setter Property="CornerRadius" Value="8" />
+    </Style>
+    <Style Selector="MenuItem">
+      <Setter Property="MinHeight" Value="32" />
+      <Setter Property="Margin" Value="4,0" />
+      <Setter Property="Padding" Value="8,4" />
+      <Setter Property="CornerRadius" Value="4" />
+    </Style>
+  </Application.Styles>
+</Application>
