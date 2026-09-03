@@ -284,6 +284,8 @@ public static class GlobalHotkeyBackend
             ? new WindowsGlobalHotkeyBackend()
             : new UnsupportedGlobalHotkeyBackend(
                 OperatingSystem.IsLinux()
-                    ? "The freedesktop GlobalShortcuts portal requires an interactive permission session; no reflection-free portal session provider is bundled. Configure a desktop shortcut to invoke 'wt -w <name>' or invoke globalSummon through the broker."
-                    : "Global hotkeys are unavailable on this platform; summon remains available through the broker.");
+                    ? "The freedesktop GlobalShortcuts portal requires an interactive permission session; no reflection-free portal session provider is bundled. Configure a desktop shortcut to invoke 'dt -w <name>' or invoke globalSummon through the broker."
+                    : OperatingSystem.IsMacOS()
+                        ? "macOS global hotkeys are not registered yet; summon remains available through the broker or 'dt -w <name>'."
+                        : "Global hotkeys are unavailable on this platform; summon remains available through the broker.");
 }

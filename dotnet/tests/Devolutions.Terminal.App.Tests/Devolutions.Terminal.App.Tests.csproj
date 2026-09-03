@@ -3,11 +3,13 @@
     <GhosttyTestRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</GhosttyTestRid>
     <GhosttyTestRid Condition="'$(GhosttyTestRid)' == ''">$(NETCoreSdkPortableRuntimeIdentifier)</GhosttyTestRid>
     <GhosttyNativeName Condition="$([System.String]::Copy('$(GhosttyTestRid)').StartsWith('linux-'))">libghostty-vt.so</GhosttyNativeName>
+    <GhosttyNativeName Condition="$([System.String]::Copy('$(GhosttyTestRid)').StartsWith('osx-'))">libghostty-vt.dylib</GhosttyNativeName>
     <GhosttyNativeName Condition="'$(GhosttyNativeName)' == ''">ghostty-vt.dll</GhosttyNativeName>
   </PropertyGroup>
   <ItemGroup>
     <None Include="..\..\native\ghostty\$(GhosttyTestRid)\$(GhosttyNativeName)"
           Link="$(GhosttyNativeName)"
+          Condition="Exists('..\..\native\ghostty\$(GhosttyTestRid)\$(GhosttyNativeName)')"
           CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\..\src\Devolutions.Terminal.App\Devolutions.Terminal.App.csproj" />
   </ItemGroup>

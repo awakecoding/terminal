@@ -1,13 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsTestProject>true</IsTestProject>
-    <LinuxPtyTestRid Condition="$([System.String]::Copy('$(NETCoreSdkPortableRuntimeIdentifier)').StartsWith('linux-'))">$(NETCoreSdkPortableRuntimeIdentifier)</LinuxPtyTestRid>
+    <UnixPtyTestRid Condition="$([System.String]::Copy('$(NETCoreSdkPortableRuntimeIdentifier)').StartsWith('linux-')) or $([System.String]::Copy('$(NETCoreSdkPortableRuntimeIdentifier)').StartsWith('osx-'))">$(NETCoreSdkPortableRuntimeIdentifier)</UnixPtyTestRid>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Devolutions.Terminal.Connection\Devolutions.Terminal.Connection.csproj" />
-    <None Include="..\..\native\linux-pty\$(LinuxPtyTestRid)\dt-pty-host"
+    <None Include="..\..\native\linux-pty\$(UnixPtyTestRid)\dt-pty-host"
           Link="dt-pty-host"
-          Condition="'$(LinuxPtyTestRid)' != ''"
+          Condition="'$(UnixPtyTestRid)' != '' and Exists('..\..\native\linux-pty\$(UnixPtyTestRid)\dt-pty-host')"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

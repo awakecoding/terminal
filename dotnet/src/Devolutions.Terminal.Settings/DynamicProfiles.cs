@@ -11,6 +11,7 @@ public static class DynamicProfileSource
     public const string VisualStudio = "Windows.Terminal.VisualStudio";
     public const string Azure = "Windows.Terminal.Azure";
     public const string Linux = "Windows.Terminal.Linux";
+    public const string MacOS = "Devolutions.Terminal.macOS";
 }
 
 public interface IDynamicProfileGenerator
@@ -173,6 +174,11 @@ public sealed class DynamicProfileManager
             ? new List<IDynamicProfileGenerator>
             {
                 new LinuxShellProfileGenerator(environment),
+            }
+            : environment.IsMacOS
+            ? new List<IDynamicProfileGenerator>
+            {
+                new LinuxShellProfileGenerator(environment, DynamicProfileSource.MacOS),
             }
             : new List<IDynamicProfileGenerator>
             {

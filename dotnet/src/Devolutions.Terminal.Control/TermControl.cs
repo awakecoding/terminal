@@ -211,12 +211,7 @@ public sealed class TermControl : Avalonia.Controls.Control
     private async Task StartConnectionAsync(ProfileSettings profile, int columns, int rows)
     {
         var connection = ConnectionFactory?.Invoke(profile) ??
-            (OperatingSystem.IsWindows()
-                ? new ConPtyConnection()
-                : OperatingSystem.IsLinux()
-                    ? new LinuxPtyConnection()
-                    : throw new PlatformNotSupportedException(
-                        "No local PTY implementation is available for this platform."));
+            CreateDefaultConnection();
         connection.OutputReceived += OnOutput;
         connection.SessionExited += OnSessionExited;
         _connection = connection;
@@ -253,6 +248,31 @@ public sealed class TermControl : Avalonia.Controls.Control
             throw;
         }
     }
+
+    private static IRestartableTerminalConnection CreateDefaultConnection()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return new ConPtyConnection();
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return CreateUnixPtyConnection();
+        }
+
+        if (OperatingSystem.IsMacOS())
+        {
+            return CreateUnixPtyConnection();
+        }
+
+        throw new PlatformNotSupportedException(
+            "No local PTY implementation is available for this platform.");
+    }
+
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("macos")]
+    private static LinuxPtyConnection CreateUnixPtyConnection() => new();
 
     public async Task RestartAsync(CancellationToken cancellationToken = default)
     {

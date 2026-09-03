@@ -30,6 +30,26 @@ public sealed class DynamicProfileGeneratorTests
     }
 
     [Fact]
+    public async Task MacOsShellsUseMacOsSourceAndZsh()
+    {
+        using var fixture = new DirectoryFixture();
+        var zsh = fixture.Touch("path", "zsh");
+        fixture.Touch("path", "bash");
+        var environment = fixture.Environment(isMacOS: true, shell: zsh);
+
+        var result = await new LinuxShellProfileGenerator(
+            environment,
+            DynamicProfileSource.MacOS).GenerateAsync(default);
+
+        Assert.All(result.Profiles, profile =>
+            Assert.Equal(DynamicProfileSource.MacOS, profile.Source));
+        Assert.Contains(result.Profiles, profile => profile.Name == "Zsh");
+        Assert.Equal("macOS shells", new LinuxShellProfileGenerator(
+            environment,
+            DynamicProfileSource.MacOS).DisplayName);
+    }
+
+    [Fact]
     public async Task PowerShellProfilesAreStableAndBestVersionGetsLegacyGuid()
     {
         using var fixture = new DirectoryFixture();
@@ -507,10 +527,12 @@ public sealed class DynamicProfileGeneratorTests
             Architecture architecture = Architecture.X64,
             bool enableSshProfiles = false,
             bool isLinux = false,
+            bool isMacOS = false,
             string? shell = null) => new()
         {
-            IsWindows = !isLinux,
+            IsWindows = !isLinux && !isMacOS,
             IsLinux = isLinux,
+            IsMacOS = isMacOS,
             Shell = shell,
             ProgramFiles = PathOf("ProgramFiles"),
             ProgramFilesX86 = PathOf("ProgramFilesX86"),

@@ -1,0 +1,97 @@
+name: Build Ghostty
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "native/ghostty/**"
+      - ".github/workflows/build-ghostty.yml"
+      - "!native/ghostty/**/*.dll"
+      - "!native/ghostty/**/*.so"
+      - "!native/ghostty/**/*.dylib"
+      - "!native/ghostty/**/*.sha256"
+  pull_request:
+    paths:
+      - "native/ghostty/**"
+      - ".github/workflows/build-ghostty.yml"
+      - "!native/ghostty/**/*.dll"
+      - "!native/ghostty/**/*.so"
+      - "!native/ghostty/**/*.dylib"
+      - "!native/ghostty/**/*.sha256"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ghostty-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: libghostty-vt ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+          - rid: win-arm64
+            os: windows-latest
+          - rid: linux-x64
+            os: ubuntu-24.04
+          - rid: linux-arm64
+            os: ubuntu-24.04
+          - rid: osx-arm64
+            os: macos-14
+          - rid: osx-x64
+            os: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install llvm-strip
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends llvm
+
+      - name: Build libghostty-vt
+        shell: pwsh
+        run: >
+          ./native/ghostty/Build-Ghostty.ps1
+          -Rid ${{ matrix.rid }}
+          -InstallZig
+          -SkipHashCheck
+
+      - name: Upload ${{ matrix.rid }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: libghostty-vt-${{ matrix.rid }}
+          path: native/ghostty/${{ matrix.rid }}
+          if-no-files-found: error
+
+  package:
+    name: Collect libghostty-vt artifacts
+    needs: native
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download RID artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: libghostty-vt-*
+          path: artifacts/libghostty-vt
+          merge-multiple: false
+
+      - name: Write SHA-256 manifest
+        run: |
+          find artifacts/libghostty-vt -type f ! -name '*.sha256' -print0 |
+            sort -z |
+            xargs -0 sha256sum > artifacts/libghostty-vt/SHA256SUMS
+
+      - name: Upload combined natives
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: libghostty-vt
+          path: artifacts/libghostty-vt
+          if-no-files-found: error

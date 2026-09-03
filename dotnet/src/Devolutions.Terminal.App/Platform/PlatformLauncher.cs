@@ -96,6 +96,12 @@ public sealed class PlatformLauncher : IPlatformLauncher
             var result = _windowsShell.PublishToast(new(title, body));
             return new DesktopNotificationResult(true, result.Succeeded, result.Diagnostic);
         }
+
+        if (_platform == DesktopPlatform.MacOS)
+        {
+            return ShowMacOsNotification(title, body);
+        }
+
         return new DesktopNotificationResult(false, false, "System notifications are unavailable on this platform.");
     }
 
@@ -135,7 +141,10 @@ public sealed class PlatformLauncher : IPlatformLauncher
             DesktopPlatform.MacOS =>
                 "Desktop platform: macOS\n" +
                 "Open URI/file/directory: available through open(1)\n" +
-                "System notifications: unsupported",
+                "System notifications: available through osascript display notification\n" +
+                "Global summon hotkeys: unsupported; use the broker or dt -w\n" +
+                "Unix PTY: dt-pty-host (forkpty)\n" +
+                "Ghostty engine: not bundled yet",
             _ => "Desktop platform: unsupported\nOpen and notification integrations are unavailable.",
         };
     }
@@ -180,6 +189,30 @@ public sealed class PlatformLauncher : IPlatformLauncher
             UseShellExecute = true,
         };
     }
+
+    private DesktopNotificationResult ShowMacOsNotification(string title, string body)
+    {
+        var startInfo = CreateDirectStartInfo("osascript");
+        startInfo.ArgumentList.Add("-e");
+        startInfo.ArgumentList.Add(
+            $"display notification \"{EscapeAppleScript(body)}\" with title \"{EscapeAppleScript(title)}\"");
+        try
+        {
+            var result = _commandRunner.Run(startInfo, TimeSpan.FromSeconds(3));
+            return new DesktopNotificationResult(
+                true,
+                result.Succeeded,
+                result.Succeeded ? null : result.Diagnostic);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return new DesktopNotificationResult(true, false, ex.Message);
+        }
+    }
+
+    private static string EscapeAppleScript(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
 
     private static ProcessStartInfo CreateDirectStartInfo(string fileName) => new()
     {

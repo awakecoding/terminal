@@ -1,9 +1,6 @@
 # Build, migration, and release guide
 
-Commands are relative to this project directory (the future
-[Devolutions Terminal](https://github.com/Devolutions/devolutions-terminal)
-repository root). While the tree still lives under `dotnet/` in the Windows
-Terminal fork, `cd` there first.
+Commands are relative to the repository root.
 
 ## Prerequisites
 
@@ -17,6 +14,13 @@ Terminal fork, `cd` there first.
 Windows local sessions use ConPTY. Linux local sessions use the bundled
 `forkpty` relay. The Avalonia shell, settings, renderer, and terminal engines
 are shared.
+
+CI workflows:
+
+- `build-ghostty.yml` — compile `libghostty-vt` for win/linux/macOS RIDs and
+  upload artifacts. Pin hashes from a green run before dropping
+  `-SkipHashCheck`.
+- `build-terminal.yml` — restore, test, NativeAOT, Linux packages, MSIX.
 
 ## Developer build
 
@@ -59,7 +63,7 @@ scripts/Build-LinuxPackage.sh linux-arm64 0.1.0 artifacts/packages all
 
 These commands publish NativeAOT executables and create reproducible tar, DEB,
 RPM, and AppImage artifacts plus a SHA-256 manifest. Every format is staged from
-one canonical filesystem root and includes `Devolutions.Terminal`, `wt`,
+one canonical filesystem root and includes `Devolutions.Terminal`, `dt`,
 `dt-pty-host`, Ghostty, Skia, HarfBuzz, licenses, freedesktop metadata, icons,
 the reversible integration helper, a sorted inventory, and an SPDX 2.3 SBOM.
 Set `SOURCE_DATE_EPOCH` for release reproducibility. To reuse a separately
@@ -90,7 +94,7 @@ uninstall removes every owned file. When installed, `desktop-file-validate` and
 
 `Test-LinuxArm64Runtime.sh` must run on native Linux ARM64 (`uname -m` equal to
 `aarch64` or `arm64`) and deliberately rejects x64 and QEMU-based
-cross-execution. It runs only non-UI gates: NativeAOT `wt` startup/parser,
+cross-execution. It runs only non-UI gates: NativeAOT `dt` startup/parser,
 Ghostty ABI and feed, the built-in engine, real `forkpty` lifecycle, broker
 concurrency, Linux profile/XDG discovery, and package lifecycle under a
 disposable root. CI uses the exact GitHub-hosted runner label
@@ -100,7 +104,7 @@ only `runs-on`; do not fall back to emulation because the script's architecture
 guard is part of the release gate.
 
 AppImage validation checks its ARM64 runtime, extracts its SquashFS payload
-without mounting/FUSE, and executes the embedded `wt`. `AppRun` starts the GUI
+without mounting/FUSE, and executes the embedded `dt`. `AppRun` starts the GUI
 host and is intentionally not executed in display-free CI; live AppImage UI
 startup remains deferred to the final UI gate.
 

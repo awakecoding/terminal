@@ -2,9 +2,9 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-dotnet_root="$(cd -- "$script_dir/.." && pwd)"
-repo_root="$(cd -- "$dotnet_root/.." && pwd)"
-metadata="$dotnet_root/linux/package.env"
+repo_root="$(cd -- "$script_dir/.." && pwd)"
+dotnet_root="$repo_root"
+metadata="$repo_root/linux/package.env"
 
 if (($# != 4)); then
     echo "Usage: $0 <publish-directory> <package-root> <version> <linux-x64|linux-arm64>" >&2

@@ -197,7 +197,7 @@ public static class SettingsService
 
     private static void ApplyPlatformProfiles(AppSettings settings)
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
         {
             return;
         }
@@ -209,12 +209,15 @@ public static class SettingsService
             profile.Hidden = true;
         }
 
+        var unixSource = OperatingSystem.IsMacOS()
+            ? DynamicProfileSource.MacOS
+            : DynamicProfileSource.Linux;
         if (settings.GetDefaultProfile().Hidden &&
-            settings.Profiles.FirstOrDefault(static profile =>
+            settings.Profiles.FirstOrDefault(profile =>
                 !profile.Hidden &&
-                profile.Source == DynamicProfileSource.Linux) is { } linuxDefault)
+                profile.Source == unixSource) is { } unixDefault)
         {
-            settings.DefaultProfile = linuxDefault.Guid;
+            settings.DefaultProfile = unixDefault.Guid;
         }
     }
 

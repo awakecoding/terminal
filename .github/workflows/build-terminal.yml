@@ -1,4 +1,4 @@
-name: .NET Terminal
+name: Build Terminal
 
 on:
   push:
@@ -6,17 +6,21 @@ on:
       - "**"
     paths:
       - "dotnet/**"
-      - ".github/workflows/dotnet-terminal.yml"
+      - ".github/workflows/build-terminal.yml"
+      - "!dotnet/native/ghostty/**"
+      - "!dotnet/.github/workflows/build-ghostty.yml"
   pull_request:
     paths:
       - "dotnet/**"
-      - ".github/workflows/dotnet-terminal.yml"
+      - ".github/workflows/build-terminal.yml"
+      - "!dotnet/native/ghostty/**"
+      - "!dotnet/.github/workflows/build-ghostty.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: dotnet-terminal-${{ github.ref }}
+  group: build-terminal-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

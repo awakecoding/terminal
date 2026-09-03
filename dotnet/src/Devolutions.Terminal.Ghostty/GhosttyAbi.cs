@@ -25,12 +25,16 @@ public static class GhosttyAbi
                 "46AC64A83F91542D38D60BC0DC169157E9475958566349D7D0B4EEE621C5F929",
             (false, Architecture.Arm64) when OperatingSystem.IsLinux() =>
                 "0D2CB6B391592CF772A166D9393DA859884C46614B219B64E3792B4BC989DADC",
+            _ when OperatingSystem.IsMacOS() => throw new PlatformNotSupportedException(
+                "The Ghostty engine is not bundled for macOS yet; use the built-in engine or add libghostty-vt.dylib."),
             _ => throw new PlatformNotSupportedException(
-                $"The Ghostty engine does not support {RuntimeInformation.ProcessArchitecture}."),
+                $"The Ghostty engine does not support {RuntimeInformation.OSDescription} {RuntimeInformation.ProcessArchitecture}."),
         };
         var libraryName = OperatingSystem.IsWindows()
             ? "ghostty-vt.dll"
-            : "libghostty-vt.so";
+            : OperatingSystem.IsMacOS()
+                ? "libghostty-vt.dylib"
+                : "libghostty-vt.so";
         var libraryPath = Path.Combine(AppContext.BaseDirectory, libraryName);
         using (var stream = File.OpenRead(libraryPath))
         {
@@ -57,8 +61,16 @@ public static class GhosttyAbi
         var expectedTarget = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
             ? "aarch64"
             : "x86_64";
-        var expectedOs = OperatingSystem.IsWindows() ? "windows" : "linux";
-        var expectedEnvironment = OperatingSystem.IsWindows() ? "msvc" : "gnu";
+        var expectedOs = OperatingSystem.IsWindows()
+            ? "windows"
+            : OperatingSystem.IsMacOS()
+                ? "macos"
+                : "linux";
+        var expectedEnvironment = OperatingSystem.IsWindows()
+            ? "msvc"
+            : OperatingSystem.IsMacOS()
+                ? "none"
+                : "gnu";
         if (abi.GetProperty("target").GetString() != expectedTarget ||
             abi.GetProperty("os").GetString() != expectedOs ||
             abi.GetProperty("environment").GetString() != expectedEnvironment ||

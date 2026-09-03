@@ -6,14 +6,15 @@ using Xunit;
 namespace Devolutions.Terminal.Connection.Tests;
 
 [SupportedOSPlatform("linux")]
+[SupportedOSPlatform("macos")]
 public sealed class LinuxPtyConnectionTests
 {
-    public static bool IsLinux => OperatingSystem.IsLinux();
+    public static bool IsUnix => OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
 
     [Fact]
     public async Task RealPtySupportsInputResizeAndExit()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!IsUnix)
         {
             return;
         }
@@ -67,7 +68,7 @@ public sealed class LinuxPtyConnectionTests
         }
     }
 
-    [Fact(Skip = "Linux PTY is Linux-only.", SkipUnless = nameof(IsLinux))]
+    [Fact(Skip = "Unix PTY host is Linux/macOS-only.", SkipUnless = nameof(IsUnix))]
     public async Task ReportsExitCodeAndRestartsWithNewSession()
     {
         await using var connection = new LinuxPtyConnection();
@@ -117,7 +118,7 @@ public sealed class LinuxPtyConnectionTests
         Assert.Equal(40, connection.Rows);
     }
 
-    [Fact(Skip = "Linux PTY is Linux-only.", SkipUnless = nameof(IsLinux))]
+    [Fact(Skip = "Unix PTY host is Linux/macOS-only.", SkipUnless = nameof(IsUnix))]
     public async Task LaunchCancellationTerminatesProcessTree()
     {
         using var cancellation = new CancellationTokenSource();
@@ -142,7 +143,7 @@ public sealed class LinuxPtyConnectionTests
         Assert.Equal(TerminalConnectionState.Closed, connection.State);
     }
 
-    [Theory(Skip = "Linux PTY is Linux-only.", SkipUnless = nameof(IsLinux))]
+    [Theory(Skip = "Unix PTY host is Linux/macOS-only.", SkipUnless = nameof(IsUnix))]
     [InlineData(0, 24)]
     [InlineData(80, 0)]
     [InlineData(65536, 24)]

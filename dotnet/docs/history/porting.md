@@ -1,8 +1,11 @@
-# Complete .NET 10 / NativeAOT / Avalonia port
+# Historical porting plan
 
-This is the historical plan for turning the prototype into **Devolutions
-Terminal**, a behavior- and settings-compatible Windows Terminal host on
-.NET 10, NativeAOT, and Avalonia instead of C++/WinRT/WinUI.
+Archived notes from the C#/Avalonia reimplementation. Current product docs
+start at [README.md](../../README.md) and [parity-status.md](../parity-status.md).
+
+This was the plan for turning the prototype into **Devolutions Terminal**, a
+behavior- and settings-compatible Windows Terminal host on .NET 10, NativeAOT,
+and Avalonia instead of C++/WinRT/WinUI.
 
 It is **not** a line-for-line transcription of CppWinRT, MIDL, or XAML Islands.
 Those types do not exist in this stack. The bar is:
@@ -12,9 +15,7 @@ Those types do not exist in this stack. The bar is:
 2. Modern shells, editors, and TUIs (`pwsh`, `cmd`, WSL, neovim, lazygit) work.
 3. NativeAOT publish of a single `Devolutions.Terminal.exe` stays green.
 
-The original C++ Windows Terminal tree is the compatibility oracle. This
-project is intended to become the root of
-https://github.com/Devolutions/devolutions-terminal.
+The original C++ Windows Terminal tree is the compatibility oracle.
 
 ## Current baseline (done)
 
@@ -216,7 +217,7 @@ do not hand-code key chords in the window.
 
 `ITermDispatch` is ~160 methods. The port implements the daily-driver and
 advanced bounded subsets; engine-specific limits are recorded in
-`docs/parity-status.md`.
+[parity-status.md](../parity-status.md).
 
 | Bucket | Sequences / features | Phase |
 | --- | --- | --- |

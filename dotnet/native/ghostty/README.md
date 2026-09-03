@@ -1,6 +1,7 @@
 # libghostty-vt native assets
 
-The optional Ghostty terminal engine uses `libghostty-vt` built from:
+The optional Ghostty terminal engine uses `libghostty-vt` built from
+[`ghostty-upstream.json`](ghostty-upstream.json):
 
 - repository: `https://github.com/ghostty-org/ghostty`
 - commit: `3c1ef5b32fc5ea6b93d28493fabf193f595139cf`
@@ -8,7 +9,11 @@ The optional Ghostty terminal engine uses `libghostty-vt` built from:
 - configuration: `ReleaseFast`, SIMD enabled
 - license: MIT (see `LICENSE`)
 
-Pinned SHA-256 hashes:
+CI (`build-ghostty.yml`) is the producer. It builds every RID, uploads
+`libghostty-vt-<rid>` artifacts plus a combined `libghostty-vt` bundle, and
+prints SHA-256 sums. Tracked `win-*` / `linux-*` binaries in this folder are a
+cache so `dotnet test` works offline; replace them from a green Ghostty workflow
+run when bumping the pin. macOS dylibs are not tracked.
 
 | RID | SHA-256 |
 | --- | --- |
@@ -16,7 +21,29 @@ Pinned SHA-256 hashes:
 | `win-arm64` | `691A331E92D0CE17B8407DD370D26394090B14AB8A7C398DF497442293D4ED72` |
 | `linux-x64` | `46AC64A83F91542D38D60BC0DC169157E9475958566349D7D0B4EEE621C5F929` |
 | `linux-arm64` | `0D2CB6B391592CF772A166D9393DA859884C46614B219B64E3792B4BC989DADC` |
+| `osx-arm64` | *(CI artifact; pin after the first green macOS build)* |
+| `osx-x64` | *(CI artifact; pin after the first green macOS build)* |
 
-Rebuild both binaries with `Build-Ghostty.ps1`. The script checks out the
-pinned commit in an ignored artifacts directory and verifies the resulting
-hashes before replacing the tracked runtime assets.
+## Rebuild locally
+
+```powershell
+# One RID, download Zig if needed, skip hash check while iterating
+./native/ghostty/Build-Ghostty.ps1 -Rid win-x64 -InstallZig -SkipHashCheck
+
+# All RIDs the current host can target (needs Zig 0.16.0 on PATH)
+./native/ghostty/Build-Ghostty.ps1
+```
+
+The script clones the pinned commit into `artifacts/ghostty-src` and copies
+libraries into `native/ghostty/<rid>/`. Linux hashes require `llvm-strip`.
+
+## Restore CI artifacts
+
+Download the `libghostty-vt` artifact from a `build-ghostty` run, then:
+
+```powershell
+./native/ghostty/Restore-GhosttyNative.ps1 -SourceDirectory artifacts/libghostty-vt
+```
+
+After a CI hash is stable, copy it into `ghostty-upstream.json` and
+`GhosttyAbi.cs`, then drop `-SkipHashCheck`.

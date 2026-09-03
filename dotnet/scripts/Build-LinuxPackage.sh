@@ -3,10 +3,10 @@ set -euo pipefail
 export LC_ALL=C
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-dotnet_root="$(cd -- "$script_dir/.." && pwd)"
-repo_root="$(cd -- "$dotnet_root/.." && pwd)"
-project="$dotnet_root/src/Devolutions.Terminal/Devolutions.Terminal.csproj"
-metadata="$dotnet_root/linux/package.env"
+repo_root="$(cd -- "$script_dir/.." && pwd)"
+dotnet_root="$repo_root"
+project="$repo_root/src/Devolutions.Terminal/Devolutions.Terminal.csproj"
+metadata="$repo_root/linux/package.env"
 
 rid="${1:-linux-x64}"
 version="${2:-0.1.0}"

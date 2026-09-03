@@ -5,6 +5,7 @@ using System.Text;
 namespace Devolutions.Terminal.Connection;
 
 [SupportedOSPlatform("linux")]
+[SupportedOSPlatform("macos")]
 public sealed class LinuxPtyConnection : IRestartableTerminalConnection
 {
     private readonly object _stateLock = new();
@@ -70,7 +71,7 @@ public sealed class LinuxPtyConnection : IRestartableTerminalConnection
             if (_hasStarted)
             {
                 throw new InvalidOperationException(
-                    "The Linux PTY connection has already been started. Use RestartAsync.");
+                    "The Unix PTY connection has already been started. Use RestartAsync.");
             }
 
             StartCore(options, cancellationToken);
@@ -90,7 +91,7 @@ public sealed class LinuxPtyConnection : IRestartableTerminalConnection
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var restartOptions = options ?? _lastOptions
-                ?? throw new InvalidOperationException("No Linux PTY launch options are available.");
+                ?? throw new InvalidOperationException("No Unix PTY launch options are available.");
             ValidateOptions(restartOptions, cancellationToken);
             await StopCoreAsync(TerminalExitReason.Closed, cancellationToken).ConfigureAwait(false);
             StartCore(restartOptions, cancellationToken);
@@ -209,7 +210,7 @@ public sealed class LinuxPtyConnection : IRestartableTerminalConnection
         var helper = Path.Combine(AppContext.BaseDirectory, "dt-pty-host");
         if (!File.Exists(helper))
         {
-            var error = new FileNotFoundException("The Linux PTY host is missing.", helper);
+            var error = new FileNotFoundException("The Unix PTY host is missing.", helper);
             RecordStartupFailure(error);
             throw error;
         }
@@ -223,7 +224,7 @@ public sealed class LinuxPtyConnection : IRestartableTerminalConnection
         {
             if (!process.Start())
             {
-                throw new InvalidOperationException("Failed to start the Linux PTY host.");
+                throw new InvalidOperationException("Failed to start the Unix PTY host.");
             }
         }
         catch (Exception exception)

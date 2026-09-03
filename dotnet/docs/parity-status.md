@@ -1,7 +1,7 @@
 # Post-port parity status
 
 This document is the authoritative measured parity record for the .NET 10,
-NativeAOT, and Avalonia port. `PORTING.md` records the historical roadmap;
+NativeAOT, and Avalonia port. [history/porting.md](history/porting.md) records the historical roadmap;
 this file records measured behavior after the Windows, Ghostty, and Linux
 milestones.
 
@@ -14,9 +14,10 @@ and NativeAOT gates completed before the final live UI matrix.
 | --- | --- |
 | Windows process transport | ConPTY with input, resize, cancellation, restart, exit metadata, and x64/ARM64 NativeAOT |
 | Linux process transport | Bundled `forkpty` relay with input, resize, cancellation, restart, exit metadata, and x64/ARM64 NativeAOT |
-| Terminal engines | Selectable built-in and pinned Ghostty engines on Windows and Linux |
+| macOS process transport | Same Unix `forkpty` host (`osx-arm64`/`osx-x64` Zig targets); binaries and live NativeAOT UI not produced in this tree |
+| Terminal engines | Selectable built-in and pinned Ghostty engines on Windows and Linux; Ghostty dylib not bundled on macOS |
 | Application shell | Multi-window broker, tabs, panes, settings editor, palettes, tray behavior, accessibility, clipboard, and notifications |
-| Settings | Layering, dynamic profiles, fragments, source-generated JSON, Windows paths, XDG paths, and state persistence |
+| Settings | Layering, dynamic profiles, fragments, source-generated JSON, Windows paths, XDG paths, macOS Application Support, and state persistence |
 | Distribution | Windows x64/ARM64 MSIX and bundle; reproducible Linux x64/ARM64 tar, DEB, RPM, and AppImage packages with canonical freedesktop assets, licenses, checksums, inventory/SPDX SBOM, and DESTDIR-aware helpers |
 
 ## Actions

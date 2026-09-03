@@ -24,3 +24,8 @@ TestResults/
 ## OS
 Thumbs.db
 .DS_Store
+
+## Unpinned Ghostty rebuilds (win/linux binaries stay tracked until CI artifacts replace them)
+native/ghostty/osx-arm64/
+native/ghostty/osx-x64/
+native/ghostty/**/*.sha256

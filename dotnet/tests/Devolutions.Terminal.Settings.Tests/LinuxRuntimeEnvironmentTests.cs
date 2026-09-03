@@ -32,6 +32,21 @@ public sealed class LinuxRuntimeEnvironmentTests
     }
 
     [Fact]
+    public void SettingsPathsUseMacOsApplicationSupport()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
+        var root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        Assert.Equal(
+            Path.Combine(root, "Devolutions", "Terminal"),
+            SettingsService.SettingsDirectory);
+        Assert.Equal(SettingsService.SettingsDirectory, SettingsService.StateDirectory);
+    }
+
+    [Fact]
     public async Task NativeLinuxProfileDiscoveryFindsExecutableShells()
     {
         if (!OperatingSystem.IsLinux())

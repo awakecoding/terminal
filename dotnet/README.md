@@ -3,18 +3,14 @@
 A cross-platform terminal emulator implemented in C# on **.NET 10**, published
 with **NativeAOT**, and rendered with **Avalonia 12** / Skia:
 
-- **ConPTY** on Windows and a real **forkpty** transport on Linux
+- **ConPTY** on Windows and a real **forkpty** transport on Linux and macOS
 - Azure Cloud Shell for remote Azure sessions
 - selectable built-in or **Ghostty** VT engine
 - Windows Terminal-compatible `settings.json`, actions, keybindings, and `dt` CLI
 
-This directory is the Devolutions Terminal project. It is intended to become the
-root of [Devolutions/devolutions-terminal](https://github.com/Devolutions/devolutions-terminal).
-While it still lives under `dotnet/` in the Windows Terminal fork, run commands
-from this directory.
-
-Projects, namespaces, and the GUI host use `Devolutions.Terminal.*`. The CLI
-executable is `dt`.
+This is the [Devolutions Terminal](https://github.com/Devolutions/devolutions-terminal)
+source tree. Projects, namespaces, and the GUI host use `Devolutions.Terminal.*`.
+The CLI executable is `dt`.
 
 ## Build and run
 
@@ -106,20 +102,10 @@ Build and release gates are documented in [docs/release.md](docs/release.md).
 
 The port tracks Windows Terminal settings, actions, VT dispatch, command line,
 and settings-page surfaces in
-[`compat/windows-terminal.json`](compat/windows-terminal.json). When the C++
-oracle tree is present, regenerate it with:
+[`compat/windows-terminal.json`](compat/windows-terminal.json). Tests use that
+checked-in snapshot. Regenerating it requires a separate Microsoft Windows
+Terminal C++ checkout:
 
 ```powershell
-dotnet run --project tools/Devolutions.Terminal.PortInventory -- .. compat/windows-terminal.json
+dotnet run --project tools/Devolutions.Terminal.PortInventory -- <windows-terminal-checkout> compat/windows-terminal.json
 ```
-
-Standalone checkouts keep the checked-in inventory and skip C++ regeneration.
-
-## Extracting this tree
-
-Copy the contents of this directory to the root of
-https://github.com/Devolutions/devolutions-terminal. After extraction:
-
-- `README.md`, `LICENSE`, `NOTICE.md`, and `.gitignore` are the repository files
-- CI lives in `.github/workflows/ci.yml` (root-relative paths)
-- Fonts, profile icons, and the app icon are vendored under `assets/`

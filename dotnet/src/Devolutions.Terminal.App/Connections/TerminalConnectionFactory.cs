@@ -32,12 +32,7 @@ public sealed class TerminalConnectionFactory
         if (!Guid.TryParse(profile.ConnectionType, out var connectionType) ||
             connectionType != AzureCloudShellConnection.ConnectionTypeGuid)
         {
-            return OperatingSystem.IsWindows()
-                ? new ConPtyConnection()
-                : OperatingSystem.IsLinux()
-                    ? new LinuxPtyConnection()
-                    : throw new PlatformNotSupportedException(
-                        "Local terminal sessions require Windows ConPTY or a Linux PTY.");
+            return CreateLocalConnection();
         }
 
         var clientIdValue = Environment.GetEnvironmentVariable(AzureClientIdEnvironmentVariable);
@@ -65,4 +60,29 @@ public sealed class TerminalConnectionFactory
             _azureCallbacks,
             options);
     }
+
+    private static IRestartableTerminalConnection CreateLocalConnection()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return new ConPtyConnection();
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return CreateUnixPtyConnection();
+        }
+
+        if (OperatingSystem.IsMacOS())
+        {
+            return CreateUnixPtyConnection();
+        }
+
+        throw new PlatformNotSupportedException(
+            "Local terminal sessions require Windows ConPTY or a Unix PTY host.");
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    private static LinuxPtyConnection CreateUnixPtyConnection() => new();
 }

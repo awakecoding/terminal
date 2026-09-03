@@ -19,6 +19,8 @@ if (-not (Test-Path -LiteralPath $ZigPath)) {
 $targets = @{
     "linux-x64" = "x86_64-linux-gnu.2.31"
     "linux-arm64" = "aarch64-linux-gnu.2.31"
+    "osx-x64" = "x86_64-macos"
+    "osx-arm64" = "aarch64-macos"
 }
 foreach ($rid in $targets.Keys) {
     $output = Join-Path $nativeRoot "$rid\dt-pty-host"

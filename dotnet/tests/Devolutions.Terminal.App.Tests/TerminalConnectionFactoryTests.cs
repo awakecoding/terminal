@@ -25,7 +25,7 @@ public sealed class TerminalConnectionFactoryTests
         {
             Assert.IsType<ConPtyConnection>(connection);
         }
-        else if (OperatingSystem.IsLinux())
+        else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
         {
             Assert.IsType<LinuxPtyConnection>(connection);
         }

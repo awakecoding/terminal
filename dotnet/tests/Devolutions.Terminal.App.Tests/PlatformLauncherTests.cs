@@ -267,6 +267,21 @@ public sealed class PlatformLauncherTests
         Assert.Contains("Unsupported dterm URI activation", error);
     }
 
+    [Fact]
+    public void MacOsNotificationsUseOsascript()
+    {
+        var runner = new RecordingRunner(DesktopCommandResult.Success());
+        var launcher = new PlatformLauncher(DesktopPlatform.MacOS, commandRunner: runner);
+
+        var result = launcher.ShowNotification("Build", "Complete");
+
+        Assert.True(result.Succeeded);
+        var command = Assert.Single(runner.Commands);
+        Assert.Equal("osascript", command.FileName);
+        Assert.Equal(["-e", "display notification \"Complete\" with title \"Build\""], command.ArgumentList);
+        Assert.Contains("osascript", launcher.GetCapabilityReport(), StringComparison.Ordinal);
+    }
+
     private static LinuxDesktopCapabilities Capabilities(
         LinuxDesktopCapability available) =>
         new(available, "test", []);

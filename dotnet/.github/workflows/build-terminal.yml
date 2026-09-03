@@ -1,16 +1,22 @@
-name: Devolutions Terminal
+name: Build Terminal
 
 on:
   push:
     branches:
       - "**"
+    paths-ignore:
+      - "native/ghostty/**"
+      - ".github/workflows/build-ghostty.yml"
   pull_request:
+    paths-ignore:
+      - "native/ghostty/**"
+      - ".github/workflows/build-ghostty.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: devolutions-terminal-${{ github.ref }}
+  group: build-terminal-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

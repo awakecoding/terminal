@@ -1,0 +1,38 @@
+{
+  "repository": "https://github.com/ghostty-org/ghostty.git",
+  "commit": "3c1ef5b32fc5ea6b93d28493fabf193f595139cf",
+  "zig": "0.16.0",
+  "optimize": "ReleaseFast",
+  "simd": true,
+  "strip": true,
+  "targets": {
+    "win-x64": {
+      "zigTarget": "x86_64-windows-msvc",
+      "file": "ghostty-vt.dll",
+      "sha256": "DCB3274F9D8C945AC765A11903614C5DA4BC0CC2EF4EBC23E8CD70C130B7B458"
+    },
+    "win-arm64": {
+      "zigTarget": "aarch64-windows-msvc",
+      "file": "ghostty-vt.dll",
+      "sha256": "691A331E92D0CE17B8407DD370D26394090B14AB8A7C398DF497442293D4ED72"
+    },
+    "linux-x64": {
+      "zigTarget": "x86_64-linux-gnu.2.31",
+      "file": "libghostty-vt.so",
+      "sha256": "46AC64A83F91542D38D60BC0DC169157E9475958566349D7D0B4EEE621C5F929"
+    },
+    "linux-arm64": {
+      "zigTarget": "aarch64-linux-gnu.2.31",
+      "file": "libghostty-vt.so",
+      "sha256": "0D2CB6B391592CF772A166D9393DA859884C46614B219B64E3792B4BC989DADC"
+    },
+    "osx-arm64": {
+      "zigTarget": "aarch64-macos",
+      "file": "libghostty-vt.dylib"
+    },
+    "osx-x64": {
+      "zigTarget": "x86_64-macos",
+      "file": "libghostty-vt.dylib"
+    }
+  }
+}

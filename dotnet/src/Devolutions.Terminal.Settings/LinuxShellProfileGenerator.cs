@@ -1,10 +1,17 @@
 namespace Devolutions.Terminal.Settings;
 
-public sealed class LinuxShellProfileGenerator(DynamicProfileEnvironment environment)
+public sealed class LinuxShellProfileGenerator(
+    DynamicProfileEnvironment environment,
+    string? source = null)
     : IDynamicProfileGenerator
 {
-    public string Source => DynamicProfileSource.Linux;
-    public string DisplayName => "Linux shells";
+    public string Source { get; } = string.IsNullOrWhiteSpace(source)
+        ? DynamicProfileSource.Linux
+        : source;
+    public string DisplayName =>
+        string.Equals(Source, DynamicProfileSource.MacOS, StringComparison.Ordinal)
+            ? "macOS shells"
+            : "Linux shells";
     public string Icon => "ms-appx:///ProfileIcons/terminal.png";
 
     public ValueTask<DynamicProfileGeneratorResult> GenerateAsync(
@@ -13,9 +20,16 @@ public sealed class LinuxShellProfileGenerator(DynamicProfileEnvironment environ
         cancellationToken.ThrowIfCancellationRequested();
         var candidates = new List<string>();
         Add(environment.Shell);
-        foreach (var shell in new[] { "bash", "zsh", "fish", "pwsh", "sh" })
+        foreach (var shell in new[] { "zsh", "bash", "fish", "pwsh", "sh" })
         {
             Add(environment.ResolveExecutable(shell));
+        }
+
+        if (environment.IsMacOS)
+        {
+            Add("/bin/zsh");
+            Add("/bin/bash");
+            Add("/bin/sh");
         }
 
         var profiles = candidates

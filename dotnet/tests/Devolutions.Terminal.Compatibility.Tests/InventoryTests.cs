@@ -54,13 +54,7 @@ public sealed class InventoryTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            var settingsModel = Path.Combine(
-                directory.FullName,
-                "src",
-                "cascadia",
-                "TerminalSettingsModel",
-                "MTSMSettings.h");
-            if (File.Exists(settingsModel))
+            if (InventoryGenerator.LooksLikeWindowsTerminalOracle(directory.FullName))
             {
                 repositoryRoot = directory.FullName;
                 return true;

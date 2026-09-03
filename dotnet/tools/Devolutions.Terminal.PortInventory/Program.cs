@@ -14,9 +14,22 @@ public sealed record CompatibilityInventory(
 
 public static partial class InventoryGenerator
 {
+    public static bool LooksLikeWindowsTerminalOracle(string repositoryRoot) =>
+        File.Exists(Path.Combine(
+            repositoryRoot,
+            "src",
+            "cascadia",
+            "TerminalSettingsModel",
+            "MTSMSettings.h"));
+
     public static CompatibilityInventory Generate(string repositoryRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
+        if (!LooksLikeWindowsTerminalOracle(repositoryRoot))
+        {
+            throw new DirectoryNotFoundException(
+                "Expected a Microsoft Windows Terminal C++ checkout containing src/cascadia/TerminalSettingsModel/MTSMSettings.h.");
+        }
 
         var settingsModel = Path.Combine(repositoryRoot, "src", "cascadia", "TerminalSettingsModel");
         var terminalApp = Path.Combine(repositoryRoot, "src", "cascadia", "TerminalApp");
@@ -114,11 +127,19 @@ internal static class Program
     {
         if (args.Length != 2)
         {
-            Console.Error.WriteLine("Usage: Devolutions.Terminal.PortInventory <repository-root> <output-json>");
+            Console.Error.WriteLine("Usage: Devolutions.Terminal.PortInventory <windows-terminal-checkout> <output-json>");
             return 2;
         }
 
-        InventoryGenerator.Write(Path.GetFullPath(args[0]), Path.GetFullPath(args[1]));
+        var oracleRoot = Path.GetFullPath(args[0]);
+        if (!InventoryGenerator.LooksLikeWindowsTerminalOracle(oracleRoot))
+        {
+            Console.Error.WriteLine(
+                "The first argument must be a Microsoft Windows Terminal C++ checkout with src/cascadia/TerminalSettingsModel/MTSMSettings.h.");
+            return 2;
+        }
+
+        InventoryGenerator.Write(oracleRoot, Path.GetFullPath(args[1]));
         return 0;
     }
 }

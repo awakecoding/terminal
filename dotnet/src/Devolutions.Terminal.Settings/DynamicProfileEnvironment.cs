@@ -6,6 +6,7 @@ public sealed class DynamicProfileEnvironment
 {
     public bool IsWindows { get; init; } = OperatingSystem.IsWindows();
     public bool IsLinux { get; init; } = OperatingSystem.IsLinux();
+    public bool IsMacOS { get; init; } = OperatingSystem.IsMacOS();
     public string? Shell { get; init; } = Environment.GetEnvironmentVariable("SHELL");
     public Func<string, bool> FileExists { get; init; } = File.Exists;
     public Func<string, IEnumerable<string>> EnumerateDirectories { get; init; } =
